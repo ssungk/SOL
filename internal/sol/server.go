@@ -2,25 +2,34 @@ package sol
 
 import (
 	"log/slog"
+	"sol/pkg/rtmp"
 	"time"
 )
 
 type Server struct {
 	ticker  *time.Ticker
+	rtmp    *rtmp.Server
 	channel chan interface{}
 }
 
 func NewServer() *Server {
 	InitLogger()
 
-	rtmp := &Server{
+	sol := &Server{
 		channel: make(chan interface{}, 10),
-		ticker:  time.NewTicker(10 * time.Second),
+		rtmp:    rtmp.NewServer(),
+		ticker:  time.NewTicker(1000 * time.Second),
 	}
-	return rtmp
+	return sol
 }
 
 func (s *Server) Start() {
+	slog.Info("Start Server")
+	err := s.rtmp.Start()
+	if err != nil {
+		return
+	}
+
 	s.eventLoop()
 }
 
