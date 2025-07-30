@@ -72,18 +72,15 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		payloadLength, ok := ms.payloadLengths[chunkStreamId]
 		if !ok {
 			continue
-			return nil, fmt.Errorf("no payload length for chunkStreamId: %d", chunkStreamId)
 		}
 
 		payload, ok := ms.payloads[chunkStreamId]
 		if !ok {
 			continue
-			return nil, fmt.Errorf("no payload found for chunkStreamId: %d", chunkStreamId)
 		}
 
 		if payloadLength != messageHeader.length {
 			continue
-			return nil, fmt.Errorf("incomplete message for chunkStreamId: %d (got %d, want %d)", chunkStreamId, payloadLength, messageHeader.length)
 		}
 
 		msg := NewMessage(messageHeader, payload)
@@ -92,7 +89,7 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		return msg, nil
 
 	}
-	return nil, fmt.Errorf("asfafafasfasfasf")
+	return nil, fmt.Errorf("no complete message available")
 }
 
 func NewBufferPool(size uint32) *sync.Pool {

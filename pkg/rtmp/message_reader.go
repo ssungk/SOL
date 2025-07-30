@@ -77,7 +77,7 @@ func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		slog.Info("read chunk", "chunk", chunk)
+		slog.Info("read chunk", "chunk.messageHeader", chunk.messageHeader)
 
 		message, err := ms.readerContext.popMessageIfPossible()
 		if err == nil {
@@ -98,9 +98,8 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 		return nil, err
 	}
 
-	if ms.readerContext.isInitialChunk(basicHeader.chunkStreamID) {
-		ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, messageHeader)
-	}
+	// 모든 경우에 헤더를 업데이트 (Fmt1/2/3의 경우 상속받은 완전한 헤더로 업데이트)
+	ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, messageHeader)
 
 	payload, err := readPayload(r, ms.readerContext.bufferPool, ms.readerContext.nextChunkSize(basicHeader.chunkStreamID))
 	if err != nil {
@@ -203,7 +202,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	return newMessageHeader(timestampDelta, length, typeId, 0), nil // streamId는 이전 헤더에서 유지
+	return newMessageHeader(timestampDelta, length, typeId, header.streamId), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -221,12 +220,12 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	return newMessageHeader(timestampDelta, 0, 0, 0), nil // 길이, typeId, streamId는 이전 헤더 유지
+	return newMessageHeader(timestampDelta, header.length, header.typeId, header.streamId), nil
 }
 
 func readFmt3MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
 	// FMT3은 이전 메시지의 헤더와 동일. 여기선 아무것도 읽지 않음
-	return newMessageHeader(0, 0, 0, 0), nil
+	return newMessageHeader(header.Timestamp, header.length, header.typeId, header.streamId), nil
 }
 
 func readExtendedTimestamp(r io.Reader) (uint32, error) {
