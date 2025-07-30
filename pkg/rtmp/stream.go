@@ -7,10 +7,10 @@ import (
 
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
-	name         string
-	publisherID  string                 // publisher session ID
-	playerIDs    map[string]struct{}    // player session IDs
-	mu           sync.RWMutex
+	name        string
+	publisherID string              // publisher session ID
+	playerIDs   map[string]struct{} // player session IDs
+	mu          sync.RWMutex
 
 	// 메타데이터 캐시
 	lastMetadata map[string]any
@@ -35,8 +35,6 @@ func NewStream(name string) *Stream {
 		gopCache:  make([]CachedFrame, 0),
 	}
 }
-
-
 
 // SetPublisher는 스트림의 발행자를 설정
 func (s *Stream) SetPublisher(sessionID string) {
@@ -67,8 +65,6 @@ func (s *Stream) GetPublisherID() string {
 
 	return s.publisherID
 }
-
-
 
 // AddPlayer는 플레이어를 추가
 func (s *Stream) AddPlayer(sessionID string) {
@@ -170,14 +166,10 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 	return cache
 }
 
-
-
 // GetName은 스트림 이름을 반환
 func (s *Stream) GetName() string {
 	return s.name
 }
-
-
 
 // IsActive는 스트림이 활성 상태인지 확인 (발행자 또는 플레이어가 있는 경우)
 func (s *Stream) IsActive() bool {
@@ -186,5 +178,3 @@ func (s *Stream) IsActive() bool {
 
 	return s.publisherID != "" || len(s.playerIDs) > 0
 }
-
-
