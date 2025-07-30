@@ -17,13 +17,14 @@ type Server struct {
 }
 
 func NewServer() *Server {
-	rtmp := &Server{
-		sessions:      make(map[*session]struct{}),
-		port:          1935,
-		channel:       make(chan interface{}, 100), // 이벤트 채널 초기화
-		streamManager: NewStreamManager(),           // 스트림 매니저 초기화
+	server := &Server{
+		sessions: make(map[*session]struct{}),
+		port:     1935,
+		channel:  make(chan interface{}, 100), // 이벤트 채널 초기화
 	}
-	return rtmp
+	// StreamManager 생성 시 findSessionById 콜백 전달
+	server.streamManager = NewStreamManager(server.findSessionById)
+	return server
 }
 
 func (s *Server) Start() error {
@@ -110,7 +111,7 @@ func (s *Server) handlePublishStarted(event PublishStarted) {
 
 	// 스트림 생성 또는 가져오기
 	stream := s.streamManager.GetOrCreateStream(event.StreamName)
-	stream.SetPublisher(publisher)
+	stream.SetPublisher(event.SessionId) // sessionID 사용
 
 	slog.Info("Publisher registered", "streamName", event.StreamName, "sessionId", event.SessionId)
 }
@@ -142,7 +143,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 
 	// 스트림 생성 또는 가져오기
 	stream := s.streamManager.GetOrCreateStream(event.StreamName)
-	stream.AddPlayer(player)
+	stream.AddPlayer(event.SessionId) // sessionID 사용
 
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
@@ -157,12 +158,7 @@ func (s *Server) handlePlayStopped(event PlayStopped) {
 		return
 	}
 
-	player := s.findSessionById(event.SessionId)
-	if player == nil {
-		return
-	}
-
-	stream.RemovePlayer(player)
+	stream.RemovePlayer(event.SessionId) // sessionID 사용
 	slog.Info("Player unregistered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
 	// 스트림이 비활성 상태면 제거
@@ -179,7 +175,7 @@ func (s *Server) handleAudioData(event AudioData) {
 	}
 
 	// 모든 플레이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
+	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendAudioToPlayer(player, event)
 	})
 }
@@ -195,7 +191,7 @@ func (s *Server) handleVideoData(event VideoData) {
 	stream.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
 
 	// 모든 플래이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
+	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendVideoToPlayer(player, event)
 	})
 }
@@ -211,7 +207,7 @@ func (s *Server) handleMetaData(event MetaData) {
 	stream.SetMetadata(event.Metadata)
 
 	// 모든 플레이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
+	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendMetaDataToPlayer(player, event)
 	})
 }
@@ -230,9 +226,9 @@ func (s *Server) findSessionById(sessionId string) *session {
 func (s *Server) sendCachedDataToPlayer(player *session, stream *Stream) {
 	// publisher가 없으면 캐시된 데이터만 전송
 	publisherSessionId := "unknown"
-	publisher := stream.GetPublisher()
-	if publisher != nil {
-		publisherSessionId = publisher.sessionId
+	publisherID := stream.GetPublisherID()
+	if publisherID != "" {
+		publisherSessionId = publisherID
 	}
 
 	// 1. 메타데이터 전송

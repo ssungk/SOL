@@ -9,14 +9,17 @@ import (
 type StreamManager struct {
 	streams map[string]*Stream // 스트림명 -> 스트림 정보
 	mu      sync.RWMutex
+
+	// session 조회를 위한 콜백
+	findSessionFunc func(string) *session
 }
 
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
-	name      string
-	publisher *session
-	players   map[*session]struct{}
-	mu        sync.RWMutex
+	name         string
+	publisherID  string                 // publisher session ID
+	playerIDs    map[string]struct{}    // player session IDs
+	mu           sync.RWMutex
 
 	// 메타데이터 캐시
 	lastMetadata map[string]any
@@ -34,18 +37,19 @@ type CachedFrame struct {
 }
 
 // NewStreamManager는 새로운 스트림 매니저를 생성
-func NewStreamManager() *StreamManager {
+func NewStreamManager(findSessionFunc func(string) *session) *StreamManager {
 	return &StreamManager{
-		streams: make(map[string]*Stream),
+		streams:         make(map[string]*Stream),
+		findSessionFunc: findSessionFunc,
 	}
 }
 
 // NewStream은 새로운 스트림을 생성
 func NewStream(name string) *Stream {
 	return &Stream{
-		name:     name,
-		players:  make(map[*session]struct{}),
-		gopCache: make([]CachedFrame, 0),
+		name:      name,
+		playerIDs: make(map[string]struct{}),
+		gopCache:  make([]CachedFrame, 0),
 	}
 }
 
@@ -101,13 +105,28 @@ func (sm *StreamManager) GetStreamCount() int {
 	return len(sm.streams)
 }
 
+// BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
+func (sm *StreamManager) BroadcastToStreamPlayers(streamName string, callback func(*session)) {
+	stream := sm.GetStream(streamName)
+	if stream == nil {
+		return
+	}
+
+	playerIDs := stream.GetPlayerIDs()
+	for _, playerID := range playerIDs {
+		if session := sm.findSessionFunc(playerID); session != nil {
+			go callback(session)
+		}
+	}
+}
+
 // SetPublisher는 스트림의 발행자를 설정
-func (s *Stream) SetPublisher(publisher *session) {
+func (s *Stream) SetPublisher(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.publisher = publisher
-	slog.Info("Publisher set", "streamName", s.name, "sessionId", publisher.sessionId)
+	s.publisherID = sessionID
+	slog.Info("Publisher set", "streamName", s.name, "sessionId", sessionID)
 }
 
 // RemovePublisher는 스트림의 발행자를 제거
@@ -115,20 +134,20 @@ func (s *Stream) RemovePublisher() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.publisher != nil {
-		slog.Info("Publisher removed", "streamName", s.name, "sessionId", s.publisher.sessionId)
-		s.publisher = nil
+	if s.publisherID != "" {
+		slog.Info("Publisher removed", "streamName", s.name, "sessionId", s.publisherID)
+		s.publisherID = ""
 		s.gopCache = nil // 캐시 청소
 		s.lastMetadata = nil
 	}
 }
 
-// GetPublisher는 스트림의 발행자를 반환
-func (s *Stream) GetPublisher() *session {
+// GetPublisherID는 스트림의 발행자 ID를 반환
+func (s *Stream) GetPublisherID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.publisher
+	return s.publisherID
 }
 
 // HasPublisher는 발행자가 있는지 확인
@@ -136,37 +155,37 @@ func (s *Stream) HasPublisher() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.publisher != nil
+	return s.publisherID != ""
 }
 
 // AddPlayer는 플레이어를 추가
-func (s *Stream) AddPlayer(player *session) {
+func (s *Stream) AddPlayer(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.players[player] = struct{}{}
-	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
+	s.playerIDs[sessionID] = struct{}{}
+	slog.Info("Player added", "streamName", s.name, "sessionId", sessionID, "playerCount", len(s.playerIDs))
 }
 
 // RemovePlayer는 플레이어를 제거
-func (s *Stream) RemovePlayer(player *session) {
+func (s *Stream) RemovePlayer(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.players, player)
-	slog.Info("Player removed", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
+	delete(s.playerIDs, sessionID)
+	slog.Info("Player removed", "streamName", s.name, "sessionId", sessionID, "playerCount", len(s.playerIDs))
 }
 
-// GetPlayers는 모든 플레이어를 반환
-func (s *Stream) GetPlayers() []*session {
+// GetPlayerIDs는 모든 플레이어 ID를 반환
+func (s *Stream) GetPlayerIDs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	players := make([]*session, 0, len(s.players))
-	for player := range s.players {
-		players = append(players, player)
+	playerIDs := make([]string, 0, len(s.playerIDs))
+	for playerID := range s.playerIDs {
+		playerIDs = append(playerIDs, playerID)
 	}
-	return players
+	return playerIDs
 }
 
 // GetPlayerCount는 플레이어 수를 반환
@@ -174,7 +193,7 @@ func (s *Stream) GetPlayerCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return len(s.players)
+	return len(s.playerIDs)
 }
 
 // SetMetadata는 메타데이터를 설정 및 캐시
@@ -239,11 +258,11 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 	return cache
 }
 
-// BroadcastToPlayers는 모든 플레이어에게 데이터를 브로드캐스트
-func (s *Stream) BroadcastToPlayers(broadcastFunc func(*session)) {
-	players := s.GetPlayers()
-	for _, player := range players {
-		go broadcastFunc(player)
+// BroadcastToPlayerIDs는 모든 플레이어 ID들을 반환하여 브로드캐스트에 사용
+func (s *Stream) BroadcastToPlayerIDs(callback func(string)) {
+	playerIDs := s.GetPlayerIDs()
+	for _, playerID := range playerIDs {
+		go callback(playerID)
 	}
 }
 
@@ -257,7 +276,7 @@ func (s *Stream) GetInfo() (name string, hasPublisher bool, playerCount int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.name, s.publisher != nil, len(s.players)
+	return s.name, s.publisherID != "", len(s.playerIDs)
 }
 
 // IsActive는 스트림이 활성 상태인지 확인 (발행자 또는 플레이어가 있는 경우)
@@ -265,7 +284,7 @@ func (s *Stream) IsActive() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.publisher != nil || len(s.players) > 0
+	return s.publisherID != "" || len(s.playerIDs) > 0
 }
 
 // ClearCache는 모든 캐시를 청소
