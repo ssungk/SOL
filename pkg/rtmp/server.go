@@ -373,25 +373,7 @@ func (s *Server) RemoveStream(streamName string) {
 	slog.Info("Removed stream", "streamName", streamName)
 }
 
-// ListStreams는 모든 스트림 목록을 반환
-func (s *Server) ListStreams() []string {
-	s.streamsMutex.RLock()
-	defer s.streamsMutex.RUnlock()
 
-	streams := make([]string, 0, len(s.streams))
-	for name := range s.streams {
-		streams = append(streams, name)
-	}
-	return streams
-}
-
-// GetStreamCount는 스트림 개수를 반환
-func (s *Server) GetStreamCount() int {
-	s.streamsMutex.RLock()
-	defer s.streamsMutex.RUnlock()
-
-	return len(s.streams)
-}
 
 // BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
 func (s *Server) BroadcastToStreamPlayers(streamName string, callback func(*session)) {

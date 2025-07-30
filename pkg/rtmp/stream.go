@@ -68,13 +68,7 @@ func (s *Stream) GetPublisherID() string {
 	return s.publisherID
 }
 
-// HasPublisher는 발행자가 있는지 확인
-func (s *Stream) HasPublisher() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	return s.publisherID != ""
-}
 
 // AddPlayer는 플레이어를 추가
 func (s *Stream) AddPlayer(sessionID string) {
@@ -176,26 +170,14 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 	return cache
 }
 
-// BroadcastToPlayerIDs는 모든 플레이어 ID들을 반환하여 브로드캐스트에 사용
-func (s *Stream) BroadcastToPlayerIDs(callback func(string)) {
-	playerIDs := s.GetPlayerIDs()
-	for _, playerID := range playerIDs {
-		go callback(playerID)
-	}
-}
+
 
 // GetName은 스트림 이름을 반환
 func (s *Stream) GetName() string {
 	return s.name
 }
 
-// GetInfo는 스트림 정보를 반환
-func (s *Stream) GetInfo() (name string, hasPublisher bool, playerCount int) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	return s.name, s.publisherID != "", len(s.playerIDs)
-}
 
 // IsActive는 스트림이 활성 상태인지 확인 (발행자 또는 플레이어가 있는 경우)
 func (s *Stream) IsActive() bool {
@@ -205,12 +187,4 @@ func (s *Stream) IsActive() bool {
 	return s.publisherID != "" || len(s.playerIDs) > 0
 }
 
-// ClearCache는 모든 캐시를 청소
-func (s *Stream) ClearCache() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	s.gopCache = nil
-	s.lastMetadata = nil
-	slog.Debug("Cache cleared", "streamName", s.name)
-}
