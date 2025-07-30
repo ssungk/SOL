@@ -48,12 +48,6 @@ func (s *session) handleCreateStream(values []any) {
 	// 새로운 스트림 ID 생성 (1부터 시작)
 	s.streamID = 1
 
-	// 스트림 생성 이벤트 전송
-	s.sendEvent(StreamCreated{
-		SessionId: s.sessionId,
-		StreamId:  s.streamID,
-	})
-
 	// _result 응답 전송
 	sequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, float64(s.streamID))
 	if err != nil {
@@ -308,15 +302,6 @@ func (s *session) handleFCUnpublish(values []any) {
 		slog.Error("FCUnpublish: invalid stream name", "type", fmt.Sprintf("%T", values[3]))
 		return
 	}
-
-	slog.Info("FCUnpublish request", "streamName", streamName, "transactionID", transactionID)
-
-	// FCUnpublish 이벤트 전송
-	s.sendEvent(FCUnpublishReceived{
-		SessionId:  s.sessionId,
-		StreamName: streamName,
-		StreamId:   s.streamID,
-	})
 
 	// FCUnpublish 는 publish 종료를 예고하는 명령어이므로 별도 처리가 필요할 수 있음
 	fullStreamPath := s.GetFullStreamPath()
@@ -676,12 +661,6 @@ func (s *session) cleanup() {
 		})
 	}
 
-	// 연결 종료 이벤트 전송
-	s.sendEvent(ConnectionClosed{
-		SessionId: s.sessionId,
-		Reason:    "session_ended",
-	})
-
 	s.isPublishing = false
 	s.isPlaying = false
 	s.streamID = 0
@@ -736,20 +715,9 @@ func (s *session) handleRead() {
 		s.cleanup()
 		closeWithLog(s.conn)
 	}()
-
-	// 연결 설정 이벤트 전송
-	s.sendEvent(ConnectionEstablished{
-		SessionId:  s.sessionId,
-		RemoteAddr: s.conn.RemoteAddr().String(),
-	})
-
+	
 	if err := handshake(s.conn); err != nil {
 		slog.Info("Handshake failed:", "err", err)
-		s.sendEvent(ErrorOccurred{
-			SessionId: s.sessionId,
-			Error:     err,
-			Context:   "handshake",
-		})
 		return
 	}
 

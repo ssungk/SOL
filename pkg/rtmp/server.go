@@ -59,10 +59,6 @@ func (s *Server) channelHandler(data interface{}) {
 	switch v := data.(type) {
 	case Terminated:
 		s.TerminatedEventHandler(v.Id)
-	case ConnectionEstablished:
-		slog.Info("New connection established", "sessionId", v.SessionId, "remoteAddr", v.RemoteAddr)
-	case ConnectionClosed:
-		slog.Info("Connection closed", "sessionId", v.SessionId, "reason", v.Reason)
 	case PublishStarted:
 		slog.Info("Publish started", "sessionId", v.SessionId, "streamName", v.StreamName, "streamId", v.StreamId)
 		s.handlePublishStarted(v)
@@ -75,8 +71,6 @@ func (s *Server) channelHandler(data interface{}) {
 	case PlayStopped:
 		slog.Info("Play stopped", "sessionId", v.SessionId, "streamName", v.StreamName, "streamId", v.StreamId)
 		s.handlePlayStopped(v)
-	case StreamCreated:
-		slog.Info("Stream created", "sessionId", v.SessionId, "streamId", v.StreamId)
 	case AudioData:
 		slog.Debug("Audio data received", "sessionId", v.SessionId, "streamName", v.StreamName, "timestamp", v.Timestamp, "dataSize", len(v.Data))
 		s.handleAudioData(v)
@@ -86,11 +80,6 @@ func (s *Server) channelHandler(data interface{}) {
 	case MetaData:
 		slog.Info("Metadata received", "sessionId", v.SessionId, "streamName", v.StreamName, "metadata", v.Metadata)
 		s.handleMetaData(v)
-	case ErrorOccurred:
-		slog.Error("Error occurred", "sessionId", v.SessionId, "context", v.Context, "error", v.Error)
-	case FCUnpublishReceived:
-		slog.Info("FCUnpublish received", "sessionId", v.SessionId, "streamName", v.StreamName, "streamId", v.StreamId)
-		// FCUnpublish는 보통 publish 종료를 예고하는 명령어이므로 별도 처리가 필요할 수 있음
 	default:
 		slog.Warn("Unknown event type", "eventType", fmt.Sprintf("%T", v))
 	}
