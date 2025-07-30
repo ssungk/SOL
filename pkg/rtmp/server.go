@@ -11,18 +11,19 @@ import (
 )
 
 type Server struct {
-	sessions     map[*session]struct{}
-	port         int
-	channel      chan interface{}
-	streams      map[string]*Stream // 스트림 직접 관리
-	streamsMutex sync.RWMutex      // 스트림 동시성 제어
+	sessions      map[string]*session // sessionId를 키로 사용
+	port          int
+	channel       chan interface{}
+	streams       map[string]*Stream // 스트림 직접 관리
+	streamsMutex  sync.RWMutex       // 스트림 동시성 제어
+	sessionsMutex sync.RWMutex       // 세션 동시성 제어
 }
 
 func NewServer() *Server {
 	server := &Server{
-		sessions: make(map[*session]struct{}),
+		sessions: make(map[string]*session),    // sessionId를 키로 사용
 		port:     1935,
-		channel:  make(chan interface{}, 100), // 이벤트 채널 초기화
+		channel:  make(chan interface{}, 100),
 		streams:  make(map[string]*Stream),     // 스트림 맵 초기화
 	}
 	return server
@@ -36,7 +37,7 @@ func (s *Server) Start() error {
 
 	// 이벤트 루프 시작
 	go s.eventLoop()
-	
+
 	// 연결 수락 시작
 	go s.acceptConnections(ln)
 
@@ -87,7 +88,11 @@ func (s *Server) channelHandler(data interface{}) {
 }
 
 func (s *Server) TerminatedEventHandler(id string) {
-
+	// 세션 제거
+	s.sessionsMutex.Lock()
+	delete(s.sessions, id)
+	s.sessionsMutex.Unlock()
+	slog.Info("Session terminated", "sessionId", id)
 }
 
 // Publish 시작 처리
@@ -204,12 +209,9 @@ func (s *Server) handleMetaData(event MetaData) {
 
 // 세션 ID로 세션 찾기
 func (s *Server) findSessionById(sessionId string) *session {
-	for session := range s.sessions {
-		if session.sessionId == sessionId {
-			return session
-		}
-	}
-	return nil
+	s.sessionsMutex.RLock()
+	defer s.sessionsMutex.RUnlock()
+	return s.sessions[sessionId]
 }
 
 // 플레이어에게 캐시된 데이터 전송
@@ -296,10 +298,14 @@ func (s *Server) acceptConnections(ln net.Listener) {
 			// TODO: 종료 로직 필요
 			return
 		}
-		
+
 		// 세션 생성 시 서버의 이벤트 채널을 전달
 		session := s.newSessionWithChannel(conn)
-		s.sessions[session] = struct{}{}
+		
+		// sessionId를 키로 사용해서 세션 저장
+		s.sessionsMutex.Lock()
+		s.sessions[session.sessionId] = session
+		s.sessionsMutex.Unlock()
 	}
 }
 
@@ -307,7 +313,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 func (s *Server) newSessionWithChannel(conn net.Conn) *session {
 	// UUID 생성
 	sessionId := s.generateSessionId()
-	
+
 	session := &session{
 		reader:          newMessageReader(),
 		writer:          newMessageWriter(),
