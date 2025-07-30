@@ -18,10 +18,10 @@ type Server struct {
 
 func NewServer() *Server {
 	server := &Server{
-		sessions: make(map[string]*session),    // sessionId를 키로 사용
+		sessions: make(map[string]*session), // sessionId를 키로 사용
 		port:     1935,
 		channel:  make(chan interface{}, 100),
-		streams:  make(map[string]*Stream),     // 스트림 맵 초기화
+		streams:  make(map[string]*Stream), // 스트림 맵 초기화
 	}
 	return server
 }
@@ -209,36 +209,29 @@ func (s *Server) findSessionById(sessionId string) *session {
 
 // 플레이어에게 캐시된 데이터 전송
 func (s *Server) sendCachedDataToPlayer(player *session, stream *Stream) {
-	// publisher가 없으면 캐시된 데이터만 전송
-	publisherSessionId := "unknown"
-	publisherID := stream.GetPublisherID()
-	if publisherID != "" {
-		publisherSessionId = publisherID
-	}
-
-	// 1. 메타데이터 전송
+	// 메타데이터 전송
 	metadata := stream.GetMetadata()
 	if metadata != nil {
 		go s.sendMetaDataToPlayer(player, MetaData{
-			SessionId:  publisherSessionId,
+			SessionId:  "cache", // 캐시된 데이터는 cache로 표시
 			StreamName: stream.GetName(),
 			Metadata:   metadata,
 		})
 	}
 
-	// 2. GOP 캐시 전송
+	// GOP 캐시 전송
 	gopCache := stream.GetGOPCache()
 	for _, frame := range gopCache {
 		if frame.msgType == 8 { // audio
 			go s.sendAudioToPlayer(player, AudioData{
-				SessionId:  publisherSessionId,
+				SessionId:  "cache",
 				StreamName: stream.GetName(),
 				Timestamp:  frame.timestamp,
 				Data:       frame.data,
 			})
 		} else if frame.msgType == 9 { // video
 			go s.sendVideoToPlayer(player, VideoData{
-				SessionId:  publisherSessionId,
+				SessionId:  "cache",
 				StreamName: stream.GetName(),
 				Timestamp:  frame.timestamp,
 				FrameType:  frame.frameType,
@@ -294,7 +287,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 
 		// 세션 생성 시 서버의 이벤트 채널을 전달
 		session := s.newSessionWithChannel(conn)
-		
+
 		// sessionId를 키로 사용해서 세션 저장
 		s.sessions[session.sessionId] = session
 	}
@@ -354,8 +347,6 @@ func (s *Server) RemoveStream(streamName string) {
 	delete(s.streams, streamName)
 	slog.Info("Removed stream", "streamName", streamName)
 }
-
-
 
 // BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
 func (s *Server) BroadcastToStreamPlayers(streamName string, callback func(*session)) {
