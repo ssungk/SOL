@@ -5,15 +5,6 @@ import (
 	"sync"
 )
 
-// StreamManager는 모든 스트림을 관리하는 매니저
-type StreamManager struct {
-	streams map[string]*Stream // 스트림명 -> 스트림 정보
-	mu      sync.RWMutex
-
-	// session 조회를 위한 콜백
-	findSessionFunc func(string) *session
-}
-
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
 	name         string
@@ -36,14 +27,6 @@ type CachedFrame struct {
 	msgType   uint8 // 8=audio, 9=video
 }
 
-// NewStreamManager는 새로운 스트림 매니저를 생성
-func NewStreamManager(findSessionFunc func(string) *session) *StreamManager {
-	return &StreamManager{
-		streams:         make(map[string]*Stream),
-		findSessionFunc: findSessionFunc,
-	}
-}
-
 // NewStream은 새로운 스트림을 생성
 func NewStream(name string) *Stream {
 	return &Stream{
@@ -53,72 +36,7 @@ func NewStream(name string) *Stream {
 	}
 }
 
-// GetOrCreateStream은 스트림을 가져오거나 생성
-func (sm *StreamManager) GetOrCreateStream(streamName string) *Stream {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
-	stream, exists := sm.streams[streamName]
-	if !exists {
-		stream = NewStream(streamName)
-		sm.streams[streamName] = stream
-		slog.Info("Created new stream", "streamName", streamName)
-	}
-
-	return stream
-}
-
-// GetStream은 스트림을 가져옴 (없으면 nil 반환)
-func (sm *StreamManager) GetStream(streamName string) *Stream {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	return sm.streams[streamName]
-}
-
-// RemoveStream은 스트림을 제거
-func (sm *StreamManager) RemoveStream(streamName string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	delete(sm.streams, streamName)
-	slog.Info("Removed stream", "streamName", streamName)
-}
-
-// ListStreams는 모든 스트림 목록을 반환
-func (sm *StreamManager) ListStreams() []string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	streams := make([]string, 0, len(sm.streams))
-	for name := range sm.streams {
-		streams = append(streams, name)
-	}
-	return streams
-}
-
-// GetStreamCount는 스트림 개수를 반환
-func (sm *StreamManager) GetStreamCount() int {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	return len(sm.streams)
-}
-
-// BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
-func (sm *StreamManager) BroadcastToStreamPlayers(streamName string, callback func(*session)) {
-	stream := sm.GetStream(streamName)
-	if stream == nil {
-		return
-	}
-
-	playerIDs := stream.GetPlayerIDs()
-	for _, playerID := range playerIDs {
-		if session := sm.findSessionFunc(playerID); session != nil {
-			go callback(session)
-		}
-	}
-}
 
 // SetPublisher는 스트림의 발행자를 설정
 func (s *Stream) SetPublisher(sessionID string) {

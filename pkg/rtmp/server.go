@@ -7,13 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 )
 
 type Server struct {
-	sessions      map[*session]struct{}
-	port          int
-	channel       chan interface{}
-	streamManager *StreamManager // 스트림 관리자
+	sessions     map[*session]struct{}
+	port         int
+	channel      chan interface{}
+	streams      map[string]*Stream // 스트림 직접 관리
+	streamsMutex sync.RWMutex      // 스트림 동시성 제어
 }
 
 func NewServer() *Server {
@@ -21,9 +23,8 @@ func NewServer() *Server {
 		sessions: make(map[*session]struct{}),
 		port:     1935,
 		channel:  make(chan interface{}, 100), // 이벤트 채널 초기화
+		streams:  make(map[string]*Stream),     // 스트림 맵 초기화
 	}
-	// StreamManager 생성 시 findSessionById 콜백 전달
-	server.streamManager = NewStreamManager(server.findSessionById)
 	return server
 }
 
@@ -99,7 +100,7 @@ func (s *Server) handlePublishStarted(event PublishStarted) {
 	}
 
 	// 스트림 생성 또는 가져오기
-	stream := s.streamManager.GetOrCreateStream(event.StreamName)
+	stream := s.GetOrCreateStream(event.StreamName)
 	stream.SetPublisher(event.SessionId) // sessionID 사용
 
 	slog.Info("Publisher registered", "streamName", event.StreamName, "sessionId", event.SessionId)
@@ -107,7 +108,7 @@ func (s *Server) handlePublishStarted(event PublishStarted) {
 
 // Publish 종료 처리
 func (s *Server) handlePublishStopped(event PublishStopped) {
-	stream := s.streamManager.GetStream(event.StreamName)
+	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
@@ -117,7 +118,7 @@ func (s *Server) handlePublishStopped(event PublishStopped) {
 
 	// 스트림이 비활성 상태면 제거
 	if !stream.IsActive() {
-		s.streamManager.RemoveStream(event.StreamName)
+		s.RemoveStream(event.StreamName)
 	}
 }
 
@@ -131,7 +132,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 	}
 
 	// 스트림 생성 또는 가져오기
-	stream := s.streamManager.GetOrCreateStream(event.StreamName)
+	stream := s.GetOrCreateStream(event.StreamName)
 	stream.AddPlayer(event.SessionId) // sessionID 사용
 
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
@@ -142,7 +143,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 
 // Play 종료 처리
 func (s *Server) handlePlayStopped(event PlayStopped) {
-	stream := s.streamManager.GetStream(event.StreamName)
+	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
@@ -152,26 +153,26 @@ func (s *Server) handlePlayStopped(event PlayStopped) {
 
 	// 스트림이 비활성 상태면 제거
 	if !stream.IsActive() {
-		s.streamManager.RemoveStream(event.StreamName)
+		s.RemoveStream(event.StreamName)
 	}
 }
 
 // 오디오 데이터 처리
 func (s *Server) handleAudioData(event AudioData) {
-	stream := s.streamManager.GetStream(event.StreamName)
+	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
 
 	// 모든 플레이어에게 전송
-	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendAudioToPlayer(player, event)
 	})
 }
 
 // 비디오 데이터 처리
 func (s *Server) handleVideoData(event VideoData) {
-	stream := s.streamManager.GetStream(event.StreamName)
+	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
@@ -180,14 +181,14 @@ func (s *Server) handleVideoData(event VideoData) {
 	stream.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
 
 	// 모든 플래이어에게 전송
-	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendVideoToPlayer(player, event)
 	})
 }
 
 // 메타데이터 처리
 func (s *Server) handleMetaData(event MetaData) {
-	stream := s.streamManager.GetStream(event.StreamName)
+	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
@@ -196,7 +197,7 @@ func (s *Server) handleMetaData(event MetaData) {
 	stream.SetMetadata(event.Metadata)
 
 	// 모든 플레이어에게 전송
-	s.streamManager.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
 		s.sendMetaDataToPlayer(player, event)
 	})
 }
@@ -330,6 +331,75 @@ func (s *Server) generateSessionId() string {
 		return "unknown"
 	}
 	return hex.EncodeToString(bytes)[:8] // 8자리로 단축
+}
+
+// 스트림 관리 메서드들
+
+// GetOrCreateStream은 스트림을 가져오거나 생성
+func (s *Server) GetOrCreateStream(streamName string) *Stream {
+	s.streamsMutex.Lock()
+	defer s.streamsMutex.Unlock()
+
+	stream, exists := s.streams[streamName]
+	if !exists {
+		stream = NewStream(streamName)
+		s.streams[streamName] = stream
+		slog.Info("Created new stream", "streamName", streamName)
+	}
+
+	return stream
+}
+
+// GetStream은 스트림을 가져옴 (없으면 nil 반환)
+func (s *Server) GetStream(streamName string) *Stream {
+	s.streamsMutex.RLock()
+	defer s.streamsMutex.RUnlock()
+
+	return s.streams[streamName]
+}
+
+// RemoveStream은 스트림을 제거
+func (s *Server) RemoveStream(streamName string) {
+	s.streamsMutex.Lock()
+	defer s.streamsMutex.Unlock()
+
+	delete(s.streams, streamName)
+	slog.Info("Removed stream", "streamName", streamName)
+}
+
+// ListStreams는 모든 스트림 목록을 반환
+func (s *Server) ListStreams() []string {
+	s.streamsMutex.RLock()
+	defer s.streamsMutex.RUnlock()
+
+	streams := make([]string, 0, len(s.streams))
+	for name := range s.streams {
+		streams = append(streams, name)
+	}
+	return streams
+}
+
+// GetStreamCount는 스트림 개수를 반환
+func (s *Server) GetStreamCount() int {
+	s.streamsMutex.RLock()
+	defer s.streamsMutex.RUnlock()
+
+	return len(s.streams)
+}
+
+// BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
+func (s *Server) BroadcastToStreamPlayers(streamName string, callback func(*session)) {
+	stream := s.GetStream(streamName)
+	if stream == nil {
+		return
+	}
+
+	playerIDs := stream.GetPlayerIDs()
+	for _, playerID := range playerIDs {
+		if session := s.findSessionById(playerID); session != nil {
+			go callback(session)
+		}
+	}
 }
 
 func closeWithLog(c io.Closer) {
