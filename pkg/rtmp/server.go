@@ -11,12 +11,11 @@ import (
 )
 
 type Server struct {
-	sessions      map[string]*session // sessionId를 키로 사용
-	port          int
-	channel       chan interface{}
-	streams       map[string]*Stream // 스트림 직접 관리
-	streamsMutex  sync.RWMutex       // 스트림 동시성 제어
-	sessionsMutex sync.RWMutex       // 세션 동시성 제어
+	sessions     map[string]*session // sessionId를 키로 사용
+	port         int
+	channel      chan interface{}
+	streams      map[string]*Stream // 스트림 직접 관리
+	streamsMutex sync.RWMutex       // 스트림 동시성 제어
 }
 
 func NewServer() *Server {
@@ -89,9 +88,7 @@ func (s *Server) channelHandler(data interface{}) {
 
 func (s *Server) TerminatedEventHandler(id string) {
 	// 세션 제거
-	s.sessionsMutex.Lock()
 	delete(s.sessions, id)
-	s.sessionsMutex.Unlock()
 	slog.Info("Session terminated", "sessionId", id)
 }
 
@@ -209,8 +206,6 @@ func (s *Server) handleMetaData(event MetaData) {
 
 // 세션 ID로 세션 찾기
 func (s *Server) findSessionById(sessionId string) *session {
-	s.sessionsMutex.RLock()
-	defer s.sessionsMutex.RUnlock()
 	return s.sessions[sessionId]
 }
 
@@ -303,9 +298,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 		session := s.newSessionWithChannel(conn)
 		
 		// sessionId를 키로 사용해서 세션 저장
-		s.sessionsMutex.Lock()
 		s.sessions[session.sessionId] = session
-		s.sessionsMutex.Unlock()
 	}
 }
 
