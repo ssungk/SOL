@@ -7,15 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 )
 
 type Server struct {
-	sessions     map[string]*session // sessionId를 키로 사용
-	port         int
-	channel      chan interface{}
-	streams      map[string]*Stream // 스트림 직접 관리
-	streamsMutex sync.RWMutex       // 스트림 동시성 제어
+	sessions map[string]*session // sessionId를 키로 사용
+	port     int
+	channel  chan interface{}
+	streams  map[string]*Stream // 스트림 직접 관리
 }
 
 func NewServer() *Server {
@@ -336,9 +334,6 @@ func (s *Server) generateSessionId() string {
 
 // GetOrCreateStream은 스트림을 가져오거나 생성
 func (s *Server) GetOrCreateStream(streamName string) *Stream {
-	s.streamsMutex.Lock()
-	defer s.streamsMutex.Unlock()
-
 	stream, exists := s.streams[streamName]
 	if !exists {
 		stream = NewStream(streamName)
@@ -351,17 +346,11 @@ func (s *Server) GetOrCreateStream(streamName string) *Stream {
 
 // GetStream은 스트림을 가져옴 (없으면 nil 반환)
 func (s *Server) GetStream(streamName string) *Stream {
-	s.streamsMutex.RLock()
-	defer s.streamsMutex.RUnlock()
-
 	return s.streams[streamName]
 }
 
 // RemoveStream은 스트림을 제거
 func (s *Server) RemoveStream(streamName string) {
-	s.streamsMutex.Lock()
-	defer s.streamsMutex.Unlock()
-
 	delete(s.streams, streamName)
 	slog.Info("Removed stream", "streamName", streamName)
 }
