@@ -8,16 +8,16 @@ import (
 )
 
 type Server struct {
-	sessions map[string]*session   // sessionId를 키로 사용
-	streams  map[string]*Stream    // 스트림 직접 관리
+	sessions map[string]*session // sessionId를 키로 사용
+	streams  map[string]*Stream  // 스트림 직접 관리
 	port     int
 	channel  chan interface{}
 }
 
 func NewServer() *Server {
 	server := &Server{
-		sessions: make(map[string]*session),  // sessionId를 키로 사용
-		streams:  make(map[string]*Stream),   // 스트림 맵 초기화
+		sessions: make(map[string]*session), // sessionId를 키로 사용
+		streams:  make(map[string]*Stream),  // 스트림 맵 초기화
 		port:     1935,
 		channel:  make(chan interface{}, 100),
 	}
@@ -157,7 +157,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
 	// 캐시된 데이터 전송 (메타데이터 + GOP)
-	s.sendCachedDataToPlayer(player, stream)
+	stream.SendCachedDataToPlayer(player, s.sendAudioToPlayer, s.sendVideoToPlayer, s.sendMetaDataToPlayer)
 }
 
 // Play 종료 처리
@@ -190,10 +190,8 @@ func (s *Server) handleAudioData(event AudioData) {
 		return
 	}
 
-	// 모든 플레이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
-		s.sendAudioToPlayer(player, event)
-	})
+	// Stream에서 직접 처리 및 전송
+	stream.ProcessAudioData(event, s.sendAudioToPlayer)
 }
 
 // 비디오 데이터 처리
@@ -203,13 +201,8 @@ func (s *Server) handleVideoData(event VideoData) {
 		return
 	}
 
-	// GOP 캐시 업데이트
-	stream.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
-
-	// 모든 플레이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
-		s.sendVideoToPlayer(player, event)
-	})
+	// Stream에서 직접 처리 및 전송 (GOP 캐시 업데이트 포함)
+	stream.ProcessVideoData(event, s.sendVideoToPlayer)
 }
 
 // 메타데이터 처리
@@ -219,16 +212,11 @@ func (s *Server) handleMetaData(event MetaData) {
 		return
 	}
 
-	// 메타데이터 캐시
-	stream.SetMetadata(event.Metadata)
-
-	// 모든 플레이어에게 전송
-	stream.BroadcastToPlayers(func(player *session) {
-		s.sendMetaDataToPlayer(player, event)
-	})
+	// Stream에서 직접 처리 및 전송 (메타데이터 캐시 포함)
+	stream.ProcessMetaData(event, s.sendMetaDataToPlayer)
 }
 
-// 세션 ID로 세션 찾기 (O(1) 성능)
+// 세션 ID로 세션 찾기
 func (s *Server) findSessionById(sessionId string) *session {
 	return s.sessions[sessionId] // nil이 자동으로 반환됨
 }
@@ -255,39 +243,7 @@ func (s *Server) RemoveStream(streamName string) {
 	slog.Info("Removed stream", "streamName", streamName)
 }
 
-// 플레이어에게 캐시된 데이터 전송
-func (s *Server) sendCachedDataToPlayer(player *session, stream *Stream) {
-	// 메타데이터 전송
-	metadata := stream.GetMetadata()
-	if metadata != nil {
-		go s.sendMetaDataToPlayer(player, MetaData{
-			SessionId:  "cache", // 캐시된 데이터는 cache로 표시
-			StreamName: stream.GetName(),
-			Metadata:   metadata,
-		})
-	}
 
-	// GOP 캐시 전송
-	gopCache := stream.GetGOPCache()
-	for _, frame := range gopCache {
-		if frame.msgType == 8 { // audio
-			go s.sendAudioToPlayer(player, AudioData{
-				SessionId:  "cache",
-				StreamName: stream.GetName(),
-				Timestamp:  frame.timestamp,
-				Data:       frame.data,
-			})
-		} else if frame.msgType == 9 { // video
-			go s.sendVideoToPlayer(player, VideoData{
-				SessionId:  "cache",
-				StreamName: stream.GetName(),
-				Timestamp:  frame.timestamp,
-				FrameType:  frame.frameType,
-				Data:       frame.data,
-			})
-		}
-	}
-}
 
 // 플레이어에게 오디오 데이터 전송
 func (s *Server) sendAudioToPlayer(player *session, event AudioData) {

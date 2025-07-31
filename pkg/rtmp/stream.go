@@ -6,12 +6,12 @@ import (
 
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
-	name      string
-	players   map[*session]struct{}    // player sessions 직접 참조
-	
+	name    string
+	players map[*session]struct{} // player sessions 직접 참조
+
 	// 메타데이터 캐시
 	lastMetadata map[string]any
-	
+
 	// GOP 캐시 (키프레임 및 직후 프레임들)
 	gopCache []CachedFrame
 }
@@ -33,6 +33,36 @@ func NewStream(name string) *Stream {
 	}
 }
 
+// ProcessAudioData는 오디오 데이터를 받아서 모든 플레이어에게 전송
+func (s *Stream) ProcessAudioData(event AudioData, writerFunc func(*session, AudioData)) {
+	// 모든 플레이어에게 비동기 전송
+	for player := range s.players {
+		go writerFunc(player, event)
+	}
+}
+
+// ProcessVideoData는 비디오 데이터를 받아서 GOP 캐시 업데이트 후 모든 플레이어에게 전송
+func (s *Stream) ProcessVideoData(event VideoData, writerFunc func(*session, VideoData)) {
+	// GOP 캐시 업데이트
+	s.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
+	
+	// 모든 플레이어에게 비동기 전송
+	for player := range s.players {
+		go writerFunc(player, event)
+	}
+}
+
+// ProcessMetaData는 메타데이터를 받아서 캐시 업데이트 후 모든 플레이어에게 전송
+func (s *Stream) ProcessMetaData(event MetaData, writerFunc func(*session, MetaData)) {
+	// 메타데이터 캐시
+	s.SetMetadata(event.Metadata)
+	
+	// 모든 플레이어에게 비동기 전송
+	for player := range s.players {
+		go writerFunc(player, event)
+	}
+}
+
 // SetPublisher는 스트림의 발행자를 설정 (로깅만 수행)
 func (s *Stream) SetPublisher(publisher *session) {
 	slog.Info("Publisher set", "streamName", s.name, "sessionId", publisher.sessionId)
@@ -45,8 +75,6 @@ func (s *Stream) RemovePublisher() {
 	s.lastMetadata = nil
 	slog.Info("Publisher removed and cache cleared", "streamName", s.name)
 }
-
-
 
 // AddPlayer는 플레이어를 추가
 func (s *Stream) AddPlayer(player *session) {
@@ -124,13 +152,7 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 	return cache
 }
 
-// BroadcastToPlayers는 모든 플레이어에게 데이터를 브로드캐스트
-func (s *Stream) BroadcastToPlayers(broadcastFunc func(*session)) {
-	players := s.GetPlayers()
-	for _, player := range players {
-		go broadcastFunc(player)
-	}
-}
+
 
 // GetName은 스트림 이름을 반환
 func (s *Stream) GetName() string {
@@ -149,6 +171,38 @@ func (s *Stream) CleanupSession(session *session) {
 		delete(s.players, session)
 		slog.Info("Cleaned up player from stream", "streamName", s.name, "sessionId", session.sessionId, "playerCount", len(s.players))
 	}
-	
+
 	// 발행자가 종료되면 캐시 청소 (이는 서버에서 PublishStopped 이벤트로 처리됨)
+}
+
+// SendCachedDataToPlayer는 새로 입장하는 플레이어에게 캐시된 데이터를 전송
+func (s *Stream) SendCachedDataToPlayer(player *session, audioWriter func(*session, AudioData), videoWriter func(*session, VideoData), metaWriter func(*session, MetaData)) {
+	// 메타데이터 전송
+	if s.lastMetadata != nil {
+		go metaWriter(player, MetaData{
+			SessionId:  "cache", // 캐시된 데이터는 cache로 표시
+			StreamName: s.name,
+			Metadata:   s.lastMetadata,
+		})
+	}
+
+	// GOP 캐시 전송
+	for _, frame := range s.gopCache {
+		if frame.msgType == 8 { // audio
+			go audioWriter(player, AudioData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  frame.timestamp,
+				Data:       frame.data,
+			})
+		} else if frame.msgType == 9 { // video
+			go videoWriter(player, VideoData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  frame.timestamp,
+				FrameType:  frame.frameType,
+				Data:       frame.data,
+			})
+		}
+	}
 }
