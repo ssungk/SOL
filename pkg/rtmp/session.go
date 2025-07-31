@@ -261,19 +261,32 @@ func (s *session) handleFCPublish(values []any) {
 
 	slog.Info("FCPublish request", "streamName", streamName, "transactionID", transactionID)
 
-	// onFCPublish 이벤트 전송
-	statusObj := map[string]any{
+	// 1. _result 응답 전송
+	resultSequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, nil)
+	if err != nil {
+		slog.Error("FCPublish: failed to encode _result", "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, resultSequence)
+	if err != nil {
+		slog.Error("FCPublish: failed to write _result", "err", err)
+		return
+	}
+
+	// 2. onFCPublish 이벤트 전송
+	fcPublishObj := map[string]any{
 		"code":        "NetStream.Publish.Start",
 		"description": fmt.Sprintf("FCPublish to stream %s", streamName),
 	}
 
-	statusSequence, err := amf.EncodeAMF0Sequence("onFCPublish", 0.0, nil, statusObj)
+	onFCPublishSequence, err := amf.EncodeAMF0Sequence("onFCPublish", 0.0, nil, fcPublishObj)
 	if err != nil {
 		slog.Error("FCPublish: failed to encode onFCPublish", "err", err)
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, statusSequence)
+	err = s.writer.writeCommand(s.conn, onFCPublishSequence)
 	if err != nil {
 		slog.Error("FCPublish: failed to write onFCPublish", "err", err)
 		return
@@ -303,6 +316,21 @@ func (s *session) handleFCUnpublish(values []any) {
 		return
 	}
 
+	slog.Info("FCUnpublish request", "streamName", streamName, "transactionID", transactionID)
+
+	// 1. _result 응답 전송 (SRS 스타일)
+	resultSequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, nil)
+	if err != nil {
+		slog.Error("FCUnpublish: failed to encode _result", "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, resultSequence)
+	if err != nil {
+		slog.Error("FCUnpublish: failed to write _result", "err", err)
+		return
+	}
+
 	// FCUnpublish 는 publish 종료를 예고하는 명령어이므로 별도 처리가 필요할 수 있음
 	fullStreamPath := s.GetFullStreamPath()
 	// Publish 종료 이벤트 전송 (FCUnpublish는 publish 종료를 의미)
@@ -315,19 +343,19 @@ func (s *session) handleFCUnpublish(values []any) {
 		s.isPublishing = false
 	}
 
-	// onFCUnpublish 이벤트 전송
-	statusObj := map[string]any{
+	// 2. onFCUnpublish 이벤트 전송
+	fcUnpublishObj := map[string]any{
 		"code":        "NetStream.Unpublish.Success",
 		"description": fmt.Sprintf("FCUnpublish to stream %s", streamName),
 	}
 
-	statusSequence, err := amf.EncodeAMF0Sequence("onFCUnpublish", 0.0, nil, statusObj)
+	onFCUnpublishSequence, err := amf.EncodeAMF0Sequence("onFCUnpublish", 0.0, nil, fcUnpublishObj)
 	if err != nil {
 		slog.Error("FCUnpublish: failed to encode onFCUnpublish", "err", err)
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, statusSequence)
+	err = s.writer.writeCommand(s.conn, onFCUnpublishSequence)
 	if err != nil {
 		slog.Error("FCUnpublish: failed to write onFCUnpublish", "err", err)
 		return
@@ -715,7 +743,7 @@ func (s *session) handleRead() {
 		s.cleanup()
 		closeWithLog(s.conn)
 	}()
-	
+
 	if err := handshake(s.conn); err != nil {
 		slog.Info("Handshake failed:", "err", err)
 		return
