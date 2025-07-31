@@ -2,9 +2,7 @@ package rtmp
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +17,9 @@ type session struct {
 	externalChannel chan<- interface{}
 	messageChannel  chan *Message
 
+	// Session 식별자 - 포인터 주소값 기반
+	sessionId string
+
 	// Stream 관리
 	streamID     uint32
 	streamName   string // streamkey
@@ -27,9 +28,9 @@ type session struct {
 	isPlaying    bool
 }
 
-// GetID는 세션의 포인터 주소값을 문자열로 반환
+// GetID는 세션의 ID를 반환 (sessionId 필드)
 func (s *session) GetID() string {
-	return fmt.Sprintf("%p", s)
+	return s.sessionId
 }
 
 // createStream 명령어 처리
@@ -701,17 +702,16 @@ func (s *session) cleanup() {
 }
 
 func newSession(conn net.Conn) *session {
-	// 이 함수는 레거시 지원용으로 유지 (테스트 등에서 사용 가능)
-	sessionId := "legacy-" + generateSessionId()
-
 	s := &session{
 		reader:          newMessageReader(),
 		writer:          newMessageWriter(),
 		conn:            conn,
 		externalChannel: make(chan interface{}, 10),
 		messageChannel:  make(chan *Message, 10),
-		sessionId:       sessionId,
 	}
+
+	// 포인터 주소값을 sessionId로 사용
+	s.sessionId = fmt.Sprintf("%p", s)
 
 	go s.handleRead()
 	go s.handleEvent()
@@ -730,15 +730,7 @@ func (s *session) sendEvent(event interface{}) {
 	}
 }
 
-// 세션 ID 생성 (간단한 UUID 형태)
-func generateSessionId() string {
-	bytes := make([]byte, 16)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "unknown"
-	}
-	return hex.EncodeToString(bytes)[:8] // 8자리로 단축
-}
+
 
 func (s *session) handleRead() {
 	defer func() {

@@ -1,8 +1,6 @@
 package rtmp
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -356,17 +354,16 @@ func (s *Server) acceptConnections(ln net.Listener) {
 
 // 채널을 연결한 세션 생성
 func (s *Server) newSessionWithChannel(conn net.Conn) *session {
-	// UUID 생성
-	sessionId := s.generateSessionId()
-
 	session := &session{
 		reader:          newMessageReader(),
 		writer:          newMessageWriter(),
 		conn:            conn,
 		externalChannel: s.channel, // 서버의 이벤트 채널 연결
 		messageChannel:  make(chan *Message, 10),
-		sessionId:       sessionId,
 	}
+
+	// 포인터 주소값을 sessionId로 사용
+	session.sessionId = fmt.Sprintf("%p", session)
 
 	go session.handleRead()
 	go session.handleEvent()
@@ -374,15 +371,7 @@ func (s *Server) newSessionWithChannel(conn net.Conn) *session {
 	return session
 }
 
-// 세션 ID 생성 (간단한 UUID 형태)
-func (s *Server) generateSessionId() string {
-	bytes := make([]byte, 16)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "unknown"
-	}
-	return hex.EncodeToString(bytes)[:8] // 8자리로 단축
-}
+
 
 func closeWithLog(c io.Closer) {
 	if err := c.Close(); err != nil {
