@@ -17,7 +17,7 @@ func newMessageWriter() *messageWriter {
 }
 
 func (mw *messageWriter) write(w io.Writer, payload []byte) error {
-	//?????
+	// 향후 확장용
 	return nil
 }
 
@@ -47,12 +47,8 @@ func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
 		return err
 	}
 
-	// === Payload ===
-	if _, err := w.Write(payload); err != nil {
-		return err
-	}
-
-	return nil
+	// === Payload (청킹 적용) ===
+	return mw.writeChunkedData(w, payload, chunkStreamID)
 }
 
 func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
@@ -85,6 +81,9 @@ func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error 
 		return err
 	}
 
+	mw.chunkSize = chunkSize
+
+	// Set Chunk Size는 작은 메시지이므로 청킹 불필요
 	return nil
 }
 
@@ -103,6 +102,12 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 		messageStreamID = 0 // stream ID (일관성 위해 0으로 통일)
 	)
 
+	// 임시로 확장 타임스탬프 비활성화 (24비트로 제한)
+	headerTimestamp := timestamp
+	if timestamp >= 0xFFFFFF {
+		headerTimestamp = 0xFFFFFF - 1 // 임시 방안
+	}
+
 	// Basic Header
 	basicHeader := []byte{(fmtType << 6) | byte(chunkStreamID)}
 	if _, err := w.Write(basicHeader); err != nil {
@@ -111,7 +116,7 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 
 	// Message Header
 	header := make([]byte, 11)
-	PutUint24(header[0:], timestamp)                           // 3 bytes timestamp
+	PutUint24(header[0:], headerTimestamp)                     // 3 bytes timestamp
 	PutUint24(header[3:], uint32(len(audioData)))              // 3 bytes message length
 	header[6] = messageTypeID                                  // 1 byte type ID
 	binary.LittleEndian.PutUint32(header[7:], messageStreamID) // 4 bytes message stream ID
@@ -133,6 +138,12 @@ func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp
 		messageStreamID = 0 // stream ID (일관성 위해 0으로 통일)
 	)
 
+	// 임시로 확장 타임스탬프 비활성화 (24비트로 제한)
+	headerTimestamp := timestamp
+	if timestamp >= 0xFFFFFF {
+		headerTimestamp = 0xFFFFFF - 1 // 임시 방안
+	}
+
 	// Basic Header
 	basicHeader := []byte{(fmtType << 6) | byte(chunkStreamID)}
 	if _, err := w.Write(basicHeader); err != nil {
@@ -141,7 +152,7 @@ func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp
 
 	// Message Header
 	header := make([]byte, 11)
-	PutUint24(header[0:], timestamp)                           // 3 bytes timestamp
+	PutUint24(header[0:], headerTimestamp)                     // 3 bytes timestamp
 	PutUint24(header[3:], uint32(len(videoData)))              // 3 bytes message length
 	header[6] = messageTypeID                                  // 1 byte type ID
 	binary.LittleEndian.PutUint32(header[7:], messageStreamID) // 4 bytes message stream ID
@@ -178,9 +189,9 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 
 	// Message Header
 	header := make([]byte, 11)
-	PutUint24(header[0:], timestamp)                      // 3 bytes timestamp
-	PutUint24(header[3:], uint32(len(payload)))           // 3 bytes message length
-	header[6] = messageTypeID                             // 1 byte type ID
+	PutUint24(header[0:], timestamp)                           // 3 bytes timestamp
+	PutUint24(header[3:], uint32(len(payload)))                // 3 bytes message length
+	header[6] = messageTypeID                                  // 1 byte type ID
 	binary.LittleEndian.PutUint32(header[7:], messageStreamID) // 4 bytes message stream ID
 
 	if _, err := w.Write(header); err != nil {
@@ -191,11 +202,19 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	return mw.writeChunkedData(w, payload, chunkStreamID)
 }
 
-// 데이터를 청크 단위로 전송
+// 데이터를 청크 단위로 전송 (RTMP 표준에 따라)
 func (mw *messageWriter) writeChunkedData(w io.Writer, data []byte, chunkStreamID byte) error {
-	bytesRemaining := len(data)
+	dataLength := len(data)
+
+	// 데이터가 청크 크기보다 작거나 같으면 한 번에 전송
+	if dataLength <= int(mw.chunkSize) {
+		_, err := w.Write(data)
+		return err
+	}
+
+	// 데이터가 청크 크기보다 크면 여러 청크로 분할
+	bytesRemaining := dataLength
 	offset := 0
-	firstChunk := true
 
 	for bytesRemaining > 0 {
 		chunkSize := int(mw.chunkSize)
@@ -203,9 +222,9 @@ func (mw *messageWriter) writeChunkedData(w io.Writer, data []byte, chunkStreamI
 			chunkSize = bytesRemaining
 		}
 
-		// 첫 번째 청크가 아니면 Type 3 헤더 (데이터만)
-		if !firstChunk {
-			// Type 3: 데이터만, 헤더 없음 (fmt=3, csid=chunkStreamID)
+		// 첫 번째 청크는 이미 헤더가 전송됨, 두 번째부터 Type 3 헤더 필요
+		if offset > 0 {
+			// Type 3: 연속 청크 헤더 (fmt=3, csid=chunkStreamID)
 			type3Header := []byte{(3 << 6) | chunkStreamID}
 			if _, err := w.Write(type3Header); err != nil {
 				return err
@@ -213,13 +232,12 @@ func (mw *messageWriter) writeChunkedData(w io.Writer, data []byte, chunkStreamI
 		}
 
 		// 청크 데이터 전송
-		if _, err := w.Write(data[offset:offset+chunkSize]); err != nil {
+		if _, err := w.Write(data[offset : offset+chunkSize]); err != nil {
 			return err
 		}
 
 		offset += chunkSize
 		bytesRemaining -= chunkSize
-		firstChunk = false
 	}
 
 	return nil

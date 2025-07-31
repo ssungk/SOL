@@ -35,7 +35,52 @@ func NewStream(name string) *Stream {
 
 // addAudioSample은 오디오 샘플을 캐시에 추가 (최근 5개만 유지)
 func (s *Stream) addAudioSample(timestamp uint32, data []byte) {
-	// 오디오 프레임을 GOP 캐시에 추가
+	// AAC sequence header 특수 처리
+	if len(data) > 1 && ((data[0] >> 4) & 0x0F) == 10 && data[1] == 0 {
+		// AAC sequence header는 별도 처리 - 기존 sequence header 제거 후 새로 추가
+		newCache := make([]CachedFrame, 0)
+		for _, frame := range s.gopCache {
+			if !(len(frame.data) > 1 && ((frame.data[0] >> 4) & 0x0F) == 10 && frame.data[1] == 0) {
+				newCache = append(newCache, frame)
+			}
+		}
+		
+		// AAC sequence header를 오디오 프레임 중 맨 앞에 추가
+		aacSequenceFrame := CachedFrame{
+			frameType: "audio",
+			timestamp: timestamp,
+			data:      data,
+			msgType:   8, // audio
+		}
+		
+		// AVC sequence header 다음, 다른 오디오 프레임 앞에 삽입
+		finalCache := make([]CachedFrame, 0)
+		aacSequenceAdded := false
+		
+		for _, frame := range newCache {
+			if frame.frameType == "AVC sequence header" {
+				finalCache = append(finalCache, frame)
+			} else if frame.msgType == 8 && !aacSequenceAdded {
+				// 첫 번째 일반 오디오 프레임 앞에 AAC sequence header 삽입
+				finalCache = append(finalCache, aacSequenceFrame)
+				finalCache = append(finalCache, frame)
+				aacSequenceAdded = true
+			} else {
+				finalCache = append(finalCache, frame)
+			}
+		}
+		
+		// AAC sequence header가 아직 추가되지 않았다면 끝에 추가
+		if !aacSequenceAdded {
+			finalCache = append(finalCache, aacSequenceFrame)
+		}
+		
+		s.gopCache = finalCache
+		slog.Debug("AAC sequence header cached", "streamName", s.name, "timestamp", timestamp)
+		return
+	}
+	
+	// 일반 오디오 프레임을 GOP 캐시에 추가
 	audioFrame := CachedFrame{
 		frameType: "audio",
 		timestamp: timestamp,
@@ -140,29 +185,70 @@ func (s *Stream) GetMetadata() map[string]any {
 
 // AddVideoFrame은 비디오 프레임을 GOP 캐시에 추가
 func (s *Stream) AddVideoFrame(frameType string, timestamp uint32, data []byte) {
-	if frameType == "key frame" {
-		// 새 GOP 시작 - 비디오 프레임만 청소하고 오디오는 유지
+	// H.264 AVC sequence header는 별도 처리
+	if frameType == "AVC sequence header" {
+		// 기존 sequence header 제거 후 새로 추가
 		newCache := make([]CachedFrame, 0)
-		
-		// 기존 오디오 프레임들 유지 (최근 10개만)
-		audioCount := 0
-		for i := len(s.gopCache) - 1; i >= 0 && audioCount < 10; i-- {
-			if s.gopCache[i].msgType == 8 { // audio
-				newCache = append([]CachedFrame{s.gopCache[i]}, newCache...)
-				audioCount++
+		for _, frame := range s.gopCache {
+			if frame.frameType != "AVC sequence header" {
+				newCache = append(newCache, frame)
 			}
 		}
 		
-		// 새 키프레임 추가
-		newCache = append(newCache, CachedFrame{
+		// sequence header를 맨 앞에 추가
+		sequenceFrame := CachedFrame{
 			frameType: frameType,
 			timestamp: timestamp,
 			data:      data,
 			msgType:   9, // video
-		})
+		}
+		s.gopCache = append([]CachedFrame{sequenceFrame}, newCache...)
 		
-		s.gopCache = newCache
-		slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp, "audioFramesKept", audioCount)
+		slog.Debug("AVC sequence header cached", "streamName", s.name, "timestamp", timestamp)
+		return
+	}
+	
+	if frameType == "key frame" || frameType == "AVC NALU" {
+		// 실제 key frame인 경우에만 새 GOP 시작
+		if frameType == "key frame" {
+			// 새 GOP 시작 - 비디오 프레임만 청소하고 오디오는 유지
+			newCache := make([]CachedFrame, 0)
+			
+			// AVC sequence header 유지
+			for _, frame := range s.gopCache {
+				if frame.frameType == "AVC sequence header" {
+					newCache = append(newCache, frame)
+				}
+			}
+			
+			// 기존 오디오 프레임들 유지 (최근 10개만)
+			audioCount := 0
+			for i := len(s.gopCache) - 1; i >= 0 && audioCount < 10; i-- {
+				if s.gopCache[i].msgType == 8 { // audio
+					newCache = append([]CachedFrame{s.gopCache[i]}, newCache...)
+					audioCount++
+				}
+			}
+			
+			// 새 키프레임 추가
+			newCache = append(newCache, CachedFrame{
+				frameType: frameType,
+				timestamp: timestamp,
+				data:      data,
+				msgType:   9, // video
+			})
+			
+			s.gopCache = newCache
+			slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp, "audioFramesKept", audioCount)
+		} else {
+			// AVC NALU (데이터 프레임) 추가
+			s.gopCache = append(s.gopCache, CachedFrame{
+				frameType: frameType,
+				timestamp: timestamp,
+				data:      data,
+				msgType:   9, // video
+			})
+		}
 	} else if frameType == "inter frame" {
 		// 키프레임 이후 프레임들 캐시에 추가
 		if len(s.gopCache) > 0 { // 키프레임이 있는 경우만

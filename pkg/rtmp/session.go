@@ -172,32 +172,52 @@ func (s *session) handlePlay(values []any) {
 
 	slog.Info("play request", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 
-	// Play 시작 이벤트 전송
-	s.sendEvent(PlayStarted{
-		SessionId:  s.sessionId,
-		StreamName: fullStreamPath, // full path 사용
-		StreamId:   s.streamID,
-	})
+	// 1. NetStream.Play.Reset 전송
+	resetStatusObj := map[string]any{
+		"level":       "status",
+		"code":        "NetStream.Play.Reset",
+		"description": fmt.Sprintf("Resetting and playing stream %s", fullStreamPath),
+		"details":     fullStreamPath,
+	}
 
-	// onStatus 이벤트: NetStream.Play.Start
-	statusObj := map[string]any{
+	resetSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, resetStatusObj)
+	if err != nil {
+		slog.Error("play: failed to encode reset onStatus", "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, resetSequence)
+	if err != nil {
+		slog.Error("play: failed to write reset onStatus", "err", err)
+		return
+	}
+
+	// 2. NetStream.Play.Start 전송
+	startStatusObj := map[string]any{
 		"level":       "status",
 		"code":        "NetStream.Play.Start",
 		"description": fmt.Sprintf("Started playing stream %s", fullStreamPath),
 		"details":     fullStreamPath,
 	}
 
-	statusSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, statusObj)
+	startSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, startStatusObj)
 	if err != nil {
-		slog.Error("play: failed to encode onStatus", "err", err)
+		slog.Error("play: failed to encode start onStatus", "err", err)
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, statusSequence)
+	err = s.writer.writeCommand(s.conn, startSequence)
 	if err != nil {
-		slog.Error("play: failed to write onStatus", "err", err)
+		slog.Error("play: failed to write start onStatus", "err", err)
 		return
 	}
+
+	// 3. Play 시작 이벤트 전송
+	s.sendEvent(PlayStarted{
+		SessionId:  s.sessionId,
+		StreamName: fullStreamPath, // full path 사용
+		StreamId:   s.streamID,
+	})
 
 	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
@@ -482,18 +502,107 @@ func (s *session) handleAudio(message *Message) {
 		return
 	}
 
-	// 오디오 데이터 길이 계산
-	audioDataSize := 0
+	// 오디오 데이터를 그대로 전달 (FLV 형식 유지)
 	audioData := make([]byte, 0)
 	for _, chunk := range message.payload {
-		audioDataSize += len(chunk)
 		audioData = append(audioData, chunk...)
+	}
+
+	if len(audioData) == 0 {
+		slog.Warn("empty audio data received")
+		return
+	}
+
+	firstByte := audioData[0]
+	codecId := "unknown"
+	sampleRate := "unknown"
+	sampleSize := "unknown"
+	channels := "unknown"
+	aacPacketType := ""
+
+	// 오디오 코덱 ID (4비트)
+	switch (firstByte >> 4) & 0x0F {
+	case 0:
+		codecId = "Linear PCM, platform endian"
+	case 1:
+		codecId = "ADPCM"
+	case 2:
+		codecId = "MP3"
+	case 3:
+		codecId = "Linear PCM, little endian"
+	case 4:
+		codecId = "Nellymoser 16kHz mono"
+	case 5:
+		codecId = "Nellymoser 8kHz mono"
+	case 6:
+		codecId = "Nellymoser"
+	case 7:
+		codecId = "G.711 A-law"
+	case 8:
+		codecId = "G.711 mu-law"
+	case 10:
+		codecId = "AAC"
+	case 11:
+		codecId = "Speex"
+	case 14:
+		codecId = "MP3 8kHz"
+	case 15:
+		codecId = "Device-specific sound"
+	}
+
+	// 샘플링 비율 (2비트)
+	switch (firstByte >> 2) & 0x03 {
+	case 0:
+		sampleRate = "5.5kHz"
+	case 1:
+		sampleRate = "11kHz"
+	case 2:
+		sampleRate = "22kHz"
+	case 3:
+		sampleRate = "44kHz"
+	}
+
+	// 샘플 크기 (1비트)
+	if (firstByte>>1)&0x01 == 0 {
+		sampleSize = "8-bit"
+	} else {
+		sampleSize = "16-bit"
+	}
+
+	// 채널 (1비트)
+	if firstByte&0x01 == 0 {
+		channels = "mono"
+	} else {
+		channels = "stereo"
+	}
+
+	// AAC 특수 처리
+	if ((firstByte>>4)&0x0F) == 10 && len(audioData) > 1 {
+		aacPacketType = ""
+		switch audioData[1] {
+		case 0:
+			aacPacketType = "AAC sequence header" // AudioSpecificConfig
+		case 1:
+			aacPacketType = "AAC raw" // 실제 오디오 데이터
+		}
+
+		if audioData[1] == 0 {
+			slog.Info("received AAC sequence header",
+				"dataSize", len(audioData),
+				"timestamp", message.messageHeader.Timestamp)
+		}
 	}
 
 	slog.Debug("received audio data",
 		"fullStreamPath", fullStreamPath,
-		"dataSize", audioDataSize,
-		"timestamp", message.messageHeader.Timestamp)
+		"dataSize", len(audioData),
+		"codecId", codecId,
+		"sampleRate", sampleRate,
+		"sampleSize", sampleSize,
+		"channels", channels,
+		"aacPacketType", aacPacketType,
+		"timestamp", message.messageHeader.Timestamp,
+		"firstByte", fmt.Sprintf("0x%02x", firstByte))
 
 	// 오디오 데이터 이벤트 전송
 	s.sendEvent(AudioData{
@@ -502,9 +611,6 @@ func (s *session) handleAudio(message *Message) {
 		Timestamp:  message.messageHeader.Timestamp,
 		Data:       audioData,
 	})
-
-	// TODO: 오디오 데이터를 저장하거나 다른 클라이언트에게 전송
-	// 현재는 로깅만 수행
 }
 
 // 비디오 데이터 처리
@@ -520,37 +626,93 @@ func (s *session) handleVideo(message *Message) {
 		return
 	}
 
-	// 비디오 데이터 길이 계산
-	videoDataSize := 0
+	// 비디오 데이터를 그대로 전달 (FLV 형식 유지)
 	videoData := make([]byte, 0)
 	for _, chunk := range message.payload {
-		videoDataSize += len(chunk)
 		videoData = append(videoData, chunk...)
 	}
 
+	if len(videoData) == 0 {
+		slog.Warn("empty video data received")
+		return
+	}
+
 	// 비디오 프레임 타입 확인 (첫 번째 바이트)
+	firstByte := videoData[0]
 	frameType := "unknown"
-	if len(message.payload) > 0 && len(message.payload[0]) > 0 {
-		firstByte := message.payload[0][0]
-		switch (firstByte >> 4) & 0x0F {
+	codecId := "unknown"
+
+	// 프레임 타입 (4비트)
+	switch (firstByte >> 4) & 0x0F {
+	case 1:
+		frameType = "key frame"
+	case 2:
+		frameType = "inter frame"
+	case 3:
+		frameType = "disposable inter frame"
+	case 4:
+		frameType = "generated key frame"
+	case 5:
+		frameType = "video info/command frame"
+	}
+
+	// 코덱 ID (4비트)
+	switch firstByte & 0x0F {
+	case 2:
+		codecId = "Sorenson H.263"
+	case 3:
+		codecId = "Screen video"
+	case 4:
+		codecId = "On2 VP6"
+	case 5:
+		codecId = "On2 VP6 with alpha"
+	case 6:
+		codecId = "Screen video version 2"
+	case 7:
+		codecId = "AVC (H.264)"
+	}
+
+	// H.264 특수 처리
+	if (firstByte&0x0F) == 7 && len(videoData) > 1 {
+		avcPacketType := videoData[1]
+		switch avcPacketType {
+		case 0:
+			frameType = "AVC sequence header" // SPS/PPS
 		case 1:
-			frameType = "key frame"
+			frameType = "AVC NALU" // 실제 비디오 데이터
 		case 2:
-			frameType = "inter frame"
-		case 3:
-			frameType = "disposable inter frame"
-		case 4:
-			frameType = "generated key frame"
-		case 5:
-			frameType = "video info/command frame"
+			frameType = "AVC end of sequence"
+		}
+
+		// AVC sequence header인 경우 세부 정보 로깅
+		if avcPacketType == 0 {
+			slog.Info("received AVC sequence header",
+				"dataSize", len(videoData),
+				"timestamp", message.messageHeader.Timestamp)
+
+			// SPS/PPS 데이터 분석 (선택적)
+			if len(videoData) > 10 {
+				configurationVersion := videoData[5]
+				profile := videoData[6]
+				compatibility := videoData[7]
+				level := videoData[8]
+
+				slog.Info("AVC configuration",
+					"version", configurationVersion,
+					"profile", profile,
+					"compatibility", compatibility,
+					"level", level)
+			}
 		}
 	}
 
 	slog.Debug("received video data",
 		"fullStreamPath", fullStreamPath,
-		"dataSize", videoDataSize,
+		"dataSize", len(videoData),
 		"frameType", frameType,
-		"timestamp", message.messageHeader.Timestamp)
+		"codecId", codecId,
+		"timestamp", message.messageHeader.Timestamp,
+		"firstByte", fmt.Sprintf("0x%02x", firstByte))
 
 	// 비디오 데이터 이벤트 전송
 	s.sendEvent(VideoData{
@@ -560,9 +722,6 @@ func (s *session) handleVideo(message *Message) {
 		FrameType:  frameType,
 		Data:       videoData,
 	})
-
-	// TODO: 비디오 데이터를 저장하거나 다른 클라이언트에게 전송
-	// 현재는 로깅만 수행
 }
 
 // 스크립트 데이터 처리 (메타데이터 등)
@@ -640,8 +799,15 @@ func (s *session) handleOnMetaData(values []any) {
 	if audioSampleRate, ok := metadata["audiosamplerate"]; ok {
 		slog.Info("audio sample rate", "sampleRate", audioSampleRate)
 	}
-
-	slog.Info("onMetaData processed", "fullStreamPath", fullStreamPath, "metadata", metadata)
+	if duration, ok := metadata["duration"]; ok {
+		slog.Info("video duration", "duration", duration)
+	}
+	if audiocodecid, ok := metadata["audiocodecid"]; ok {
+		slog.Info("audio codec", "codecid", audiocodecid)
+	}
+	if videocodecid, ok := metadata["videocodecid"]; ok {
+		slog.Info("video codec", "codecid", videocodecid)
+	}
 
 	// 메타데이터 이벤트 전송
 	s.sendEvent(MetaData{
@@ -650,7 +816,7 @@ func (s *session) handleOnMetaData(values []any) {
 		Metadata:   metadata,
 	})
 
-	// TODO: 메타데이터를 저장하거나 다른 클라이언트에게 전송
+	slog.Info("metadata processed successfully", "fullStreamPath", fullStreamPath, "metadataKeys", len(metadata))
 }
 
 // 텍스트 데이터 처리
@@ -729,8 +895,6 @@ func (s *session) sendEvent(event interface{}) {
 		slog.Warn("event channel full, dropping event", "sessionId", s.sessionId, "eventType", fmt.Sprintf("%T", event))
 	}
 }
-
-
 
 func (s *session) handleRead() {
 	defer func() {
@@ -932,6 +1096,9 @@ func (s *session) handleConnect(values []any) {
 	if err != nil {
 		return
 	}
+
+	// 서버 측에서도 청크 크기 설정 (들어오는 데이터 처리용)
+	s.reader.setChunkSize(4096)
 
 	err = s.writer.writeCommand(s.conn, sequence)
 	if err != nil {
