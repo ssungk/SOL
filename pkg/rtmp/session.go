@@ -970,13 +970,34 @@ func (s *session) handleMessage(message *Message) {
 func (s *session) handleSetChunkSize(message *Message) {
 	slog.Info("handleSetChunkSize")
 
-	if len(message.payload[0]) != 4 {
-		slog.Error("Invalid Set Chunk Size message length", "length", len(message.payload))
+	// 전체 payload 길이 계산
+	totalLength := 0
+	for _, chunk := range message.payload {
+		totalLength += len(chunk)
+	}
+
+	if totalLength != 4 {
+		slog.Error("Invalid Set Chunk Size message length", "length", totalLength)
 		return
 	}
 
-	// 4바이트에서 uint32로 읽기 (big endian)
-	newChunkSize := binary.BigEndian.Uint32(message.payload[0])
+	// 첫 번째 청크에서 4바이트 읽기 (big endian)
+	var chunkSizeBytes []byte
+	if len(message.payload) > 0 && len(message.payload[0]) >= 4 {
+		chunkSizeBytes = message.payload[0][:4]
+	} else {
+		// 여러 청크에 걸쳐있는 경우 합치기
+		chunkSizeBytes = make([]byte, 0, 4)
+		for _, chunk := range message.payload {
+			chunkSizeBytes = append(chunkSizeBytes, chunk...)
+			if len(chunkSizeBytes) >= 4 {
+				chunkSizeBytes = chunkSizeBytes[:4]
+				break
+			}
+		}
+	}
+
+	newChunkSize := binary.BigEndian.Uint32(chunkSizeBytes)
 
 	// 첫 번째 비트(최상위 비트) 체크: 반드시 0이어야 함
 	if newChunkSize&0x80000000 != 0 {
