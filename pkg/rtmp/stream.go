@@ -7,7 +7,6 @@ import (
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
 	name      string
-	publisher *session                 // publisher session 직접 참조
 	players   map[*session]struct{}    // player sessions 직접 참조
 	
 	// 메타데이터 캐시
@@ -34,32 +33,20 @@ func NewStream(name string) *Stream {
 	}
 }
 
-// SetPublisher는 스트림의 발행자를 설정
+// SetPublisher는 스트림의 발행자를 설정 (로깅만 수행)
 func (s *Stream) SetPublisher(publisher *session) {
-	s.publisher = publisher
 	slog.Info("Publisher set", "streamName", s.name, "sessionId", publisher.sessionId)
 }
 
-// RemovePublisher는 스트림의 발행자를 제거
+// RemovePublisher는 스트림의 발행자를 제거 (캐시 청소만 수행)
 func (s *Stream) RemovePublisher() {
-	if s.publisher != nil {
-		slog.Info("Publisher removed", "streamName", s.name, "sessionId", s.publisher.sessionId)
-		s.publisher = nil
-		// 캐시 청소
-		s.gopCache = nil
-		s.lastMetadata = nil
-	}
+	// 캐시 청소
+	s.gopCache = nil
+	s.lastMetadata = nil
+	slog.Info("Publisher removed and cache cleared", "streamName", s.name)
 }
 
-// GetPublisher는 스트림의 발행자를 반환
-func (s *Stream) GetPublisher() *session {
-	return s.publisher
-}
 
-// HasPublisher는 발행자가 있는지 확인
-func (s *Stream) HasPublisher() bool {
-	return s.publisher != nil
-}
 
 // AddPlayer는 플레이어를 추가
 func (s *Stream) AddPlayer(player *session) {
@@ -150,24 +137,18 @@ func (s *Stream) GetName() string {
 	return s.name
 }
 
-// IsActive는 스트림이 활성 상태인지 확인 (발행자 또는 플레이어가 있는 경우)
+// IsActive는 스트림이 활성 상태인지 확인 (플레이어가 있는 경우 또는 캐시된 데이터가 있는 경우)
 func (s *Stream) IsActive() bool {
-	return s.publisher != nil || len(s.players) > 0
+	return len(s.players) > 0 || len(s.gopCache) > 0 || s.lastMetadata != nil
 }
 
 // CleanupSession은 세션 종료 시 스트림에서 해당 세션을 정리
 func (s *Stream) CleanupSession(session *session) {
-	// publisher 정리
-	if s.publisher == session {
-		slog.Info("Cleaning up publisher from stream", "streamName", s.name, "sessionId", session.sessionId)
-		s.publisher = nil
-		s.gopCache = nil
-		s.lastMetadata = nil
-	}
-
 	// player 정리
 	if _, exists := s.players[session]; exists {
 		delete(s.players, session)
 		slog.Info("Cleaned up player from stream", "streamName", s.name, "sessionId", session.sessionId, "playerCount", len(s.players))
 	}
+	
+	// 발행자가 종료되면 캐시 청소 (이는 서버에서 PublishStopped 이벤트로 처리됨)
 }
