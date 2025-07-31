@@ -1,6 +1,7 @@
 package rtmp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,16 +14,20 @@ type Server struct {
 	port     int
 	channel  chan interface{}
 	listener net.Listener        // 리스너 참조 저장
-	done     chan struct{}       // 종료 신호 채널
+	ctx      context.Context     // 컨텍스트
+	cancel   context.CancelFunc  // 컨텍스트 취소 함수
 }
 
 func NewServer() *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	
 	server := &Server{
 		sessions: make(map[string]*session), // sessionId를 키로 사용
 		streams:  make(map[string]*Stream),  // 스트림 맵 초기화
 		port:     1935,
 		channel:  make(chan interface{}, 100),
-		done:     make(chan struct{}),       // 종료 신호 채널 초기화
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 	return server
 }
@@ -46,7 +51,10 @@ func (s *Server) Start() error {
 func (s *Server) Stop() {
 	slog.Info("Server stopping...")
 
-	// 1. 새로운 연결 둑기 (리스너 종료)
+	// 1. 컨텍스트 취소 (모든 고루틴에 종료 신호)
+	s.cancel()
+
+	// 2. 새로운 연결 차단 (리스너 종료)
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
 			slog.Error("Error closing listener", "err", err)
@@ -55,7 +63,7 @@ func (s *Server) Stop() {
 		}
 	}
 
-	// 2. 모든 세션 종료
+	// 3. 모든 세션 종료
 	slog.Info("Closing all sessions", "sessionCount", len(s.sessions))
 	for sessionId, session := range s.sessions {
 		if session.conn != nil {
@@ -65,19 +73,16 @@ func (s *Server) Stop() {
 		}
 	}
 
-	// 3. 모든 스트림 청소
+	// 4. 모든 스트림 청소
 	slog.Info("Clearing all streams", "streamCount", len(s.streams))
 	for streamName, stream := range s.streams {
 		stream.RemovePublisher() // 캐시 청소
 		slog.Debug("Stream cleared", "streamName", streamName)
 	}
 
-	// 4. 맵 청소
+	// 5. 맵 청소
 	s.sessions = make(map[string]*session)
 	s.streams = make(map[string]*Stream)
-
-	// 5. 이벤트 루프 종료 신호
-	close(s.done)
 
 	// 6. 이벤트 채널 청소 (남은 이벤트 처리)
 	for {
@@ -100,7 +105,7 @@ func (s *Server) eventLoop() {
 		select {
 		case data := <-s.channel:
 			s.channelHandler(data)
-		case <-s.done:
+		case <-s.ctx.Done():
 			slog.Info("Event loop stopping...")
 			return
 		}
@@ -310,9 +315,9 @@ func (s *Server) createListener() (net.Listener, error) {
 func (s *Server) acceptConnections(ln net.Listener) {
 	defer closeWithLog(ln)
 	for {
-		// 리스너가 닫혔는지 확인
+		// 컨텍스트 취소 확인
 		select {
-		case <-s.done:
+		case <-s.ctx.Done():
 			slog.Info("Accept loop stopping...")
 			return
 		default:
@@ -323,7 +328,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 		if err != nil {
 			// 리스너가 닫혔을 때 정상 종료
 			select {
-			case <-s.done:
+			case <-s.ctx.Done():
 				slog.Info("Accept loop stopped (listener closed)")
 				return
 			default:
