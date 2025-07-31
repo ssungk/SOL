@@ -271,7 +271,7 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 		cachedFrames = append(cachedFrames, CachedFrame{
 			frameType: s.videoCache.sequenceHeader.frameType,
 			timestamp: s.videoCache.sequenceHeader.timestamp,
-			data:      s.videoCache.sequenceHeader.data,
+			data:      concatChunks(s.videoCache.sequenceHeader.data), // [][]byte를 []byte로 변환
 			msgType:   9, // video
 		})
 	}
@@ -281,7 +281,7 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 		cachedFrames = append(cachedFrames, CachedFrame{
 			frameType: "audio", // AAC sequence header를 일반 오디오로 표시
 			timestamp: s.audioCache.sequenceHeader.timestamp,
-			data:      s.audioCache.sequenceHeader.data,
+			data:      concatChunks(s.audioCache.sequenceHeader.data), // [][]byte를 []byte로 변환
 			msgType:   8, // audio
 		})
 	}
@@ -291,7 +291,7 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 		cachedFrames = append(cachedFrames, CachedFrame{
 			frameType: frame.frameType,
 			timestamp: frame.timestamp,
-			data:      frame.data,
+			data:      concatChunks(frame.data), // [][]byte를 []byte로 변환
 			msgType:   9, // video
 		})
 	}
@@ -301,7 +301,7 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 		cachedFrames = append(cachedFrames, CachedFrame{
 			frameType: frame.frameType,
 			timestamp: frame.timestamp,
-			data:      frame.data,
+			data:      concatChunks(frame.data), // [][]byte를 []byte로 변환
 			msgType:   8, // audio
 		})
 	}
