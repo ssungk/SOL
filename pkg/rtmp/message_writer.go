@@ -100,7 +100,7 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 		fmtType         = 0 // full 12-byte header
 		chunkStreamID   = 4 // 오디오용 chunk stream ID
 		messageTypeID   = 8 // Audio
-		messageStreamID = 1 // stream ID
+		messageStreamID = 0 // stream ID (일관성 위해 0으로 통일)
 	)
 
 	// Basic Header
@@ -111,9 +111,9 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 
 	// Message Header
 	header := make([]byte, 11)
-	PutUint24(header[0:], timestamp)                      // 3 bytes timestamp
-	PutUint24(header[3:], uint32(len(audioData)))         // 3 bytes message length
-	header[6] = messageTypeID                             // 1 byte type ID
+	PutUint24(header[0:], timestamp)                           // 3 bytes timestamp
+	PutUint24(header[3:], uint32(len(audioData)))              // 3 bytes message length
+	header[6] = messageTypeID                                  // 1 byte type ID
 	binary.LittleEndian.PutUint32(header[7:], messageStreamID) // 4 bytes message stream ID
 
 	if _, err := w.Write(header); err != nil {
@@ -130,7 +130,7 @@ func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp
 		fmtType         = 0 // full 12-byte header
 		chunkStreamID   = 5 // 비디오용 chunk stream ID
 		messageTypeID   = 9 // Video
-		messageStreamID = 1 // stream ID
+		messageStreamID = 0 // stream ID (일관성 위해 0으로 통일)
 	)
 
 	// Basic Header
@@ -141,9 +141,9 @@ func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp
 
 	// Message Header
 	header := make([]byte, 11)
-	PutUint24(header[0:], timestamp)                      // 3 bytes timestamp
-	PutUint24(header[3:], uint32(len(videoData)))         // 3 bytes message length
-	header[6] = messageTypeID                             // 1 byte type ID
+	PutUint24(header[0:], timestamp)                           // 3 bytes timestamp
+	PutUint24(header[3:], uint32(len(videoData)))              // 3 bytes message length
+	header[6] = messageTypeID                                  // 1 byte type ID
 	binary.LittleEndian.PutUint32(header[7:], messageStreamID) // 4 bytes message stream ID
 
 	if _, err := w.Write(header); err != nil {
@@ -160,7 +160,7 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 		fmtType         = 0  // full 12-byte header
 		chunkStreamID   = 6  // 스크립트 데이터용 chunk stream ID
 		messageTypeID   = 18 // AMF0 Data Message
-		messageStreamID = 1  // stream ID
+		messageStreamID = 0  // stream ID (일관성 위해 0으로 통일)
 		timestamp       = 0  // 메타데이터는 timestamp 0
 	)
 
@@ -205,7 +205,7 @@ func (mw *messageWriter) writeChunkedData(w io.Writer, data []byte, chunkStreamI
 
 		// 첫 번째 청크가 아니면 Type 3 헤더 (데이터만)
 		if !firstChunk {
-			// Type 3: 데이터만, 헤더 없음
+			// Type 3: 데이터만, 헤더 없음 (fmt=3, csid=chunkStreamID)
 			type3Header := []byte{(3 << 6) | chunkStreamID}
 			if _, err := w.Write(type3Header); err != nil {
 				return err
