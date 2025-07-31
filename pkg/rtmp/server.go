@@ -8,16 +8,16 @@ import (
 )
 
 type Server struct {
-	sessions map[*session]struct{}
-	streams  map[string]*Stream // 스트림 직접 관리
+	sessions map[string]*session   // sessionId를 키로 사용
+	streams  map[string]*Stream    // 스트림 직접 관리
 	port     int
 	channel  chan interface{}
 }
 
 func NewServer() *Server {
 	server := &Server{
-		sessions: make(map[*session]struct{}),
-		streams:  make(map[string]*Stream), // 스트림 맵 초기화
+		sessions: make(map[string]*session),  // sessionId를 키로 사용
+		streams:  make(map[string]*Stream),   // 스트림 맵 초기화
 		port:     1935,
 		channel:  make(chan interface{}, 100),
 	}
@@ -83,22 +83,18 @@ func (s *Server) channelHandler(data interface{}) {
 }
 
 func (s *Server) TerminatedEventHandler(id string) {
-	// 세션을 찾아서 제거
-	var targetSession *session
-	for session := range s.sessions {
-		if session.sessionId == id {
-			targetSession = session
-			break
-		}
+	// 세션을 직접 찾기 (O(1))
+	targetSession, exists := s.sessions[id]
+	if !exists {
+		slog.Warn("Session not found for termination", "sessionId", id)
+		return
 	}
 
-	if targetSession != nil {
-		// 모든 스트림에서 해당 세션 정리
-		s.cleanupSessionFromAllStreams(targetSession)
-		// 세션 맵에서 제거
-		delete(s.sessions, targetSession)
-		slog.Info("Session terminated", "sessionId", id)
-	}
+	// 모든 스트림에서 해당 세션 정리
+	s.cleanupSessionFromAllStreams(targetSession)
+	// 세션 맵에서 제거
+	delete(s.sessions, id)
+	slog.Info("Session terminated", "sessionId", id)
 }
 
 // 모든 스트림에서 세션 정리
@@ -232,17 +228,10 @@ func (s *Server) handleMetaData(event MetaData) {
 	})
 }
 
-// 세션 ID로 세션 찾기
+// 세션 ID로 세션 찾기 (O(1) 성능)
 func (s *Server) findSessionById(sessionId string) *session {
-	for session := range s.sessions {
-		if session.sessionId == sessionId {
-			return session
-		}
-	}
-	return nil
+	return s.sessions[sessionId] // nil이 자동으로 반환됨
 }
-
-// 스트림 관리 메서드들
 
 // GetOrCreateStream은 스트림을 가져오거나 생성
 func (s *Server) GetOrCreateStream(streamName string) *Stream {
@@ -347,8 +336,8 @@ func (s *Server) acceptConnections(ln net.Listener) {
 		// 세션 생성 시 서버의 이벤트 채널을 전달
 		session := s.newSessionWithChannel(conn)
 
-		// session 객체를 키로 사용해서 세션 저장
-		s.sessions[session] = struct{}{}
+		// sessionId를 키로 사용해서 세션 저장
+		s.sessions[session.sessionId] = session
 	}
 }
 
@@ -370,8 +359,6 @@ func (s *Server) newSessionWithChannel(conn net.Conn) *session {
 
 	return session
 }
-
-
 
 func closeWithLog(c io.Closer) {
 	if err := c.Close(); err != nil {
