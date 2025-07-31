@@ -33,8 +33,30 @@ func NewStream(name string) *Stream {
 	}
 }
 
-// ProcessAudioData는 오디오 데이터를 받아서 모든 플레이어에게 전송
+// addAudioSample은 오디오 샘플을 캐시에 추가 (최근 5개만 유지)
+func (s *Stream) addAudioSample(timestamp uint32, data []byte) {
+	// 오디오 프레임을 GOP 캐시에 추가
+	audioFrame := CachedFrame{
+		frameType: "audio",
+		timestamp: timestamp,
+		data:      data,
+		msgType:   8, // audio
+	}
+	
+	// 오디오 프레임을 GOP 캐시 끝에 추가
+	s.gopCache = append(s.gopCache, audioFrame)
+	
+	// 오디오 샘플 수 제한 (최근 100개 프레임)
+	if len(s.gopCache) > 100 {
+		s.gopCache = s.gopCache[len(s.gopCache)-100:]
+	}
+}
+
+// ProcessAudioData는 오디오 데이터를 받아서 캐시 업데이트 후 모든 플레이어에게 전송
 func (s *Stream) ProcessAudioData(event AudioData) {
+	// 오디오 샘플 캐시 (최근 5개 프레임만 유지)
+	s.addAudioSample(event.Timestamp, event.Data)
+	
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
 		go s.sendAudioToPlayer(player, event)
@@ -76,10 +98,13 @@ func (s *Stream) RemovePublisher() {
 	slog.Info("Publisher removed and cache cleared", "streamName", s.name)
 }
 
-// AddPlayer는 플레이어를 추가
+// AddPlayer는 플레이어를 추가하고 즉시 캐시된 데이터를 전송
 func (s *Stream) AddPlayer(player *session) {
 	s.players[player] = struct{}{}
 	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
+	
+	// 새로 입장한 플레이어에게 즉시 캐시된 데이터 전송
+	go s.SendCachedDataToPlayer(player)
 }
 
 // RemovePlayer는 플레이어를 제거
@@ -116,16 +141,28 @@ func (s *Stream) GetMetadata() map[string]any {
 // AddVideoFrame은 비디오 프레임을 GOP 캐시에 추가
 func (s *Stream) AddVideoFrame(frameType string, timestamp uint32, data []byte) {
 	if frameType == "key frame" {
-		// 새 GOP 시작 - 기존 캐시 청소
-		s.gopCache = []CachedFrame{
-			{
-				frameType: frameType,
-				timestamp: timestamp,
-				data:      data,
-				msgType:   9, // video
-			},
+		// 새 GOP 시작 - 비디오 프레임만 청소하고 오디오는 유지
+		newCache := make([]CachedFrame, 0)
+		
+		// 기존 오디오 프레임들 유지 (최근 10개만)
+		audioCount := 0
+		for i := len(s.gopCache) - 1; i >= 0 && audioCount < 10; i-- {
+			if s.gopCache[i].msgType == 8 { // audio
+				newCache = append([]CachedFrame{s.gopCache[i]}, newCache...)
+				audioCount++
+			}
 		}
-		slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp)
+		
+		// 새 키프레임 추가
+		newCache = append(newCache, CachedFrame{
+			frameType: frameType,
+			timestamp: timestamp,
+			data:      data,
+			msgType:   9, // video
+		})
+		
+		s.gopCache = newCache
+		slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp, "audioFramesKept", audioCount)
 	} else if frameType == "inter frame" {
 		// 키프레임 이후 프레임들 캐시에 추가
 		if len(s.gopCache) > 0 { // 키프레임이 있는 경우만
@@ -136,9 +173,9 @@ func (s *Stream) AddVideoFrame(frameType string, timestamp uint32, data []byte) 
 				msgType:   9, // video
 			})
 
-			// 캐시 크기 제한 (GOP 당 최대 50프레임)
-			if len(s.gopCache) > 50 {
-				s.gopCache = s.gopCache[len(s.gopCache)-50:]
+			// 캐시 크기 제한 (최대 100프레임)
+			if len(s.gopCache) > 100 {
+				s.gopCache = s.gopCache[len(s.gopCache)-100:]
 			}
 		}
 	}
@@ -199,34 +236,44 @@ func (s *Stream) sendMetaDataToPlayer(player *session, event MetaData) {
 	}
 }
 
-// SendCachedDataToPlayer는 새로 입장하는 플레이어에게 캐시된 데이터를 전송
+// SendCachedDataToPlayer는 새로 입장하는 플레이어에게 캐시된 데이터를 순서대로 전송
 func (s *Stream) SendCachedDataToPlayer(player *session) {
-	// 메타데이터 전송
+	// 1. 메타데이터 먼저 전송 (동기)
 	if s.lastMetadata != nil {
-		go s.sendMetaDataToPlayer(player, MetaData{
+		s.sendMetaDataToPlayer(player, MetaData{
 			SessionId:  "cache", // 캐시된 데이터는 cache로 표시
 			StreamName: s.name,
 			Metadata:   s.lastMetadata,
 		})
+		slog.Debug("Sent cached metadata to new player", "streamName", s.name, "sessionId", player.sessionId)
 	}
 
-	// GOP 캐시 전송
-	for _, frame := range s.gopCache {
-		if frame.msgType == 8 { // audio
-			go s.sendAudioToPlayer(player, AudioData{
-				SessionId:  "cache",
-				StreamName: s.name,
-				Timestamp:  frame.timestamp,
-				Data:       frame.data,
-			})
-		} else if frame.msgType == 9 { // video
-			go s.sendVideoToPlayer(player, VideoData{
-				SessionId:  "cache",
-				StreamName: s.name,
-				Timestamp:  frame.timestamp,
-				FrameType:  frame.frameType,
-				Data:       frame.data,
-			})
-		}
+	// 2. GOP 캐시가 있으면 순서대로 전송 (비동기로 전체 블록 전송)
+	if len(s.gopCache) > 0 {
+		go func() {
+			slog.Debug("Sending GOP cache to new player", "streamName", s.name, "sessionId", player.sessionId, "frameCount", len(s.gopCache))
+			
+			// GOP 캐시를 타임스탬프 순서대로 전송
+			for _, frame := range s.gopCache {
+				if frame.msgType == 8 { // audio
+					s.sendAudioToPlayer(player, AudioData{
+						SessionId:  "cache",
+						StreamName: s.name,
+						Timestamp:  frame.timestamp,
+						Data:       frame.data,
+					})
+				} else if frame.msgType == 9 { // video
+					s.sendVideoToPlayer(player, VideoData{
+						SessionId:  "cache",
+						StreamName: s.name,
+						Timestamp:  frame.timestamp,
+						FrameType:  frame.frameType,
+						Data:       frame.data,
+					})
+				}
+			}
+			
+			slog.Debug("Finished sending GOP cache to new player", "streamName", s.name, "sessionId", player.sessionId)
+		}()
 	}
 }

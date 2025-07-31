@@ -152,12 +152,9 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 
 	// 스트림 생성 또는 가져오기
 	stream := s.GetOrCreateStream(event.StreamName)
-	stream.AddPlayer(player) // session 객체 직접 전달
+	stream.AddPlayer(player) // session 객체 직접 전달 (캐시 데이터 자동 전송)
 
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
-
-	// 캐시된 데이터 전송 (메타데이터 + GOP)
-	stream.SendCachedDataToPlayer(player)
 }
 
 // Play 종료 처리
