@@ -157,7 +157,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
 	// 캐시된 데이터 전송 (메타데이터 + GOP)
-	stream.SendCachedDataToPlayer(player, s.sendAudioToPlayer, s.sendVideoToPlayer, s.sendMetaDataToPlayer)
+	stream.SendCachedDataToPlayer(player)
 }
 
 // Play 종료 처리
@@ -191,7 +191,7 @@ func (s *Server) handleAudioData(event AudioData) {
 	}
 
 	// Stream에서 직접 처리 및 전송
-	stream.ProcessAudioData(event, s.sendAudioToPlayer)
+	stream.ProcessAudioData(event)
 }
 
 // 비디오 데이터 처리
@@ -202,7 +202,7 @@ func (s *Server) handleVideoData(event VideoData) {
 	}
 
 	// Stream에서 직접 처리 및 전송 (GOP 캐시 업데이트 포함)
-	stream.ProcessVideoData(event, s.sendVideoToPlayer)
+	stream.ProcessVideoData(event)
 }
 
 // 메타데이터 처리
@@ -213,7 +213,7 @@ func (s *Server) handleMetaData(event MetaData) {
 	}
 
 	// Stream에서 직접 처리 및 전송 (메타데이터 캐시 포함)
-	stream.ProcessMetaData(event, s.sendMetaDataToPlayer)
+	stream.ProcessMetaData(event)
 }
 
 // 세션 ID로 세션 찾기
@@ -244,30 +244,6 @@ func (s *Server) RemoveStream(streamName string) {
 }
 
 
-
-// 플레이어에게 오디오 데이터 전송
-func (s *Server) sendAudioToPlayer(player *session, event AudioData) {
-	err := player.writer.writeAudioData(player.conn, event.Data, event.Timestamp)
-	if err != nil {
-		slog.Error("Failed to send audio to player", "sessionId", player.sessionId, "err", err)
-	}
-}
-
-// 플레이어에게 비디오 데이터 전송
-func (s *Server) sendVideoToPlayer(player *session, event VideoData) {
-	err := player.writer.writeVideoData(player.conn, event.Data, event.Timestamp)
-	if err != nil {
-		slog.Error("Failed to send video to player", "sessionId", player.sessionId, "err", err)
-	}
-}
-
-// 플레이어에게 메타데이터 전송
-func (s *Server) sendMetaDataToPlayer(player *session, event MetaData) {
-	err := player.writer.writeScriptData(player.conn, "onMetaData", event.Metadata)
-	if err != nil {
-		slog.Error("Failed to send metadata to player", "sessionId", player.sessionId, "err", err)
-	}
-}
 
 func (s *Server) createListener() (net.Listener, error) {
 	ln, err := net.Listen("tcp", ":1935")

@@ -34,32 +34,32 @@ func NewStream(name string) *Stream {
 }
 
 // ProcessAudioData는 오디오 데이터를 받아서 모든 플레이어에게 전송
-func (s *Stream) ProcessAudioData(event AudioData, writerFunc func(*session, AudioData)) {
+func (s *Stream) ProcessAudioData(event AudioData) {
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
-		go writerFunc(player, event)
+		go s.sendAudioToPlayer(player, event)
 	}
 }
 
 // ProcessVideoData는 비디오 데이터를 받아서 GOP 캐시 업데이트 후 모든 플레이어에게 전송
-func (s *Stream) ProcessVideoData(event VideoData, writerFunc func(*session, VideoData)) {
+func (s *Stream) ProcessVideoData(event VideoData) {
 	// GOP 캐시 업데이트
 	s.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
 	
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
-		go writerFunc(player, event)
+		go s.sendVideoToPlayer(player, event)
 	}
 }
 
 // ProcessMetaData는 메타데이터를 받아서 캐시 업데이트 후 모든 플레이어에게 전송
-func (s *Stream) ProcessMetaData(event MetaData, writerFunc func(*session, MetaData)) {
+func (s *Stream) ProcessMetaData(event MetaData) {
 	// 메타데이터 캐시
 	s.SetMetadata(event.Metadata)
 	
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
-		go writerFunc(player, event)
+		go s.sendMetaDataToPlayer(player, event)
 	}
 }
 
@@ -175,11 +175,35 @@ func (s *Stream) CleanupSession(session *session) {
 	// 발행자가 종료되면 캐시 청소 (이는 서버에서 PublishStopped 이벤트로 처리됨)
 }
 
+// sendAudioToPlayer는 플레이어에게 오디오 데이터를 전송
+func (s *Stream) sendAudioToPlayer(player *session, event AudioData) {
+	err := player.writer.writeAudioData(player.conn, event.Data, event.Timestamp)
+	if err != nil {
+		slog.Error("Failed to send audio to player", "streamName", s.name, "sessionId", player.sessionId, "err", err)
+	}
+}
+
+// sendVideoToPlayer는 플레이어에게 비디오 데이터를 전송
+func (s *Stream) sendVideoToPlayer(player *session, event VideoData) {
+	err := player.writer.writeVideoData(player.conn, event.Data, event.Timestamp)
+	if err != nil {
+		slog.Error("Failed to send video to player", "streamName", s.name, "sessionId", player.sessionId, "err", err)
+	}
+}
+
+// sendMetaDataToPlayer는 플레이어에게 메타데이터를 전송
+func (s *Stream) sendMetaDataToPlayer(player *session, event MetaData) {
+	err := player.writer.writeScriptData(player.conn, "onMetaData", event.Metadata)
+	if err != nil {
+		slog.Error("Failed to send metadata to player", "streamName", s.name, "sessionId", player.sessionId, "err", err)
+	}
+}
+
 // SendCachedDataToPlayer는 새로 입장하는 플레이어에게 캐시된 데이터를 전송
-func (s *Stream) SendCachedDataToPlayer(player *session, audioWriter func(*session, AudioData), videoWriter func(*session, VideoData), metaWriter func(*session, MetaData)) {
+func (s *Stream) SendCachedDataToPlayer(player *session) {
 	// 메타데이터 전송
 	if s.lastMetadata != nil {
-		go metaWriter(player, MetaData{
+		go s.sendMetaDataToPlayer(player, MetaData{
 			SessionId:  "cache", // 캐시된 데이터는 cache로 표시
 			StreamName: s.name,
 			Metadata:   s.lastMetadata,
@@ -189,14 +213,14 @@ func (s *Stream) SendCachedDataToPlayer(player *session, audioWriter func(*sessi
 	// GOP 캐시 전송
 	for _, frame := range s.gopCache {
 		if frame.msgType == 8 { // audio
-			go audioWriter(player, AudioData{
+			go s.sendAudioToPlayer(player, AudioData{
 				SessionId:  "cache",
 				StreamName: s.name,
 				Timestamp:  frame.timestamp,
 				Data:       frame.data,
 			})
 		} else if frame.msgType == 9 { // video
-			go videoWriter(player, VideoData{
+			go s.sendVideoToPlayer(player, VideoData{
 				SessionId:  "cache",
 				StreamName: s.name,
 				Timestamp:  frame.timestamp,
