@@ -12,6 +12,8 @@ type Server struct {
 	streams  map[string]*Stream  // 스트림 직접 관리
 	port     int
 	channel  chan interface{}
+	listener net.Listener        // 리스너 참조 저장
+	done     chan struct{}       // 종료 신호 채널
 }
 
 func NewServer() *Server {
@@ -20,6 +22,7 @@ func NewServer() *Server {
 		streams:  make(map[string]*Stream),  // 스트림 맵 초기화
 		port:     1935,
 		channel:  make(chan interface{}, 100),
+		done:     make(chan struct{}),       // 종료 신호 채널 초기화
 	}
 	return server
 }
@@ -29,6 +32,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
+	s.listener = ln // 리스너 참조 저장
 
 	// 이벤트 루프 시작
 	go s.eventLoop()
@@ -40,7 +44,55 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() {
+	slog.Info("Server stopping...")
 
+	// 1. 새로운 연결 둑기 (리스너 종료)
+	if s.listener != nil {
+		if err := s.listener.Close(); err != nil {
+			slog.Error("Error closing listener", "err", err)
+		} else {
+			slog.Info("Listener closed")
+		}
+	}
+
+	// 2. 모든 세션 종료
+	slog.Info("Closing all sessions", "sessionCount", len(s.sessions))
+	for sessionId, session := range s.sessions {
+		if session.conn != nil {
+			if err := session.conn.Close(); err != nil {
+				slog.Error("Error closing session connection", "sessionId", sessionId, "err", err)
+			}
+		}
+	}
+
+	// 3. 모든 스트림 청소
+	slog.Info("Clearing all streams", "streamCount", len(s.streams))
+	for streamName, stream := range s.streams {
+		stream.RemovePublisher() // 캐시 청소
+		slog.Debug("Stream cleared", "streamName", streamName)
+	}
+
+	// 4. 맵 청소
+	s.sessions = make(map[string]*session)
+	s.streams = make(map[string]*Stream)
+
+	// 5. 이벤트 루프 종료 신호
+	close(s.done)
+
+	// 6. 이벤트 채널 청소 (남은 이벤트 처리)
+	for {
+		select {
+		case <-s.channel:
+			// 남은 이벤트 버리기
+		default:
+			// 채널이 비었으면 종료
+			goto cleanup_done
+		}
+	}
+
+cleanup_done:
+	close(s.channel)
+	slog.Info("Server stopped successfully")
 }
 
 func (s *Server) eventLoop() {
@@ -48,6 +100,9 @@ func (s *Server) eventLoop() {
 		select {
 		case data := <-s.channel:
 			s.channelHandler(data)
+		case <-s.done:
+			slog.Info("Event loop stopping...")
+			return
 		}
 	}
 }
@@ -255,11 +310,26 @@ func (s *Server) createListener() (net.Listener, error) {
 func (s *Server) acceptConnections(ln net.Listener) {
 	defer closeWithLog(ln)
 	for {
+		// 리스너가 닫혔는지 확인
+		select {
+		case <-s.done:
+			slog.Info("Accept loop stopping...")
+			return
+		default:
+			// 비블로킹 방식으로 계속 진행
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
-			slog.Error("Accept failed", "err", err)
-			// TODO: 종료 로직 필요
-			return
+			// 리스너가 닫혔을 때 정상 종료
+			select {
+			case <-s.done:
+				slog.Info("Accept loop stopped (listener closed)")
+				return
+			default:
+				slog.Error("Accept failed", "err", err)
+				return
+			}
 		}
 
 		// 세션 생성 시 서버의 이벤트 채널을 전달
