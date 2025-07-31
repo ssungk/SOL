@@ -255,17 +255,29 @@ func PutUint24(b []byte, v uint32) {
 	b[2] = byte(v & 0xFF)
 }
 
-// 오디오 데이터 전송
-func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
-	header := newMessageHeader(timestamp, uint32(len(audioData)), MSG_TYPE_AUDIO, 0)
-	msg := NewMessage(header, [][]byte{audioData})
+// 오디오 데이터 전송 (zero-copy)
+func (mw *messageWriter) writeAudioData(w io.Writer, audioData [][]byte, timestamp uint32) error {
+	// 전체 데이터 크기 계산
+	totalLength := 0
+	for _, chunk := range audioData {
+		totalLength += len(chunk)
+	}
+	
+	header := newMessageHeader(timestamp, uint32(totalLength), MSG_TYPE_AUDIO, 0)
+	msg := NewMessage(header, audioData) // [][]byte 그대로 전달
 	return mw.writeMessage(w, msg)
 }
 
-// 비디오 데이터 전송
-func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
-	header := newMessageHeader(timestamp, uint32(len(videoData)), MSG_TYPE_VIDEO, 0)
-	msg := NewMessage(header, [][]byte{videoData})
+// 비디오 데이터 전송 (zero-copy)
+func (mw *messageWriter) writeVideoData(w io.Writer, videoData [][]byte, timestamp uint32) error {
+	// 전체 데이터 크기 계산
+	totalLength := 0
+	for _, chunk := range videoData {
+		totalLength += len(chunk)
+	}
+	
+	header := newMessageHeader(timestamp, uint32(totalLength), MSG_TYPE_VIDEO, 0)
+	msg := NewMessage(header, videoData) // [][]byte 그대로 전달
 	return mw.writeMessage(w, msg)
 }
 

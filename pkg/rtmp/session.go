@@ -502,18 +502,14 @@ func (s *session) handleAudio(message *Message) {
 		return
 	}
 
-	// 오디오 데이터를 그대로 전달 (FLV 형식 유지)
-	audioData := make([]byte, 0)
-	for _, chunk := range message.payload {
-		audioData = append(audioData, chunk...)
-	}
-
-	if len(audioData) == 0 {
+	// Zero-copy: payload를 그대로 사용
+	if len(message.payload) == 0 {
 		slog.Warn("empty audio data received")
 		return
 	}
 
-	firstByte := audioData[0]
+	// 첫 번째 청크의 첫 범째 바이트로 오디오 정보 추출
+	firstByte := message.payload[0][0]
 	codecId := "unknown"
 	sampleRate := "unknown"
 	sampleSize := "unknown"
@@ -577,25 +573,36 @@ func (s *session) handleAudio(message *Message) {
 	}
 
 	// AAC 특수 처리
-	if ((firstByte>>4)&0x0F) == 10 && len(audioData) > 1 {
+	if ((firstByte>>4)&0x0F) == 10 && len(message.payload[0]) > 1 {
 		aacPacketType = ""
-		switch audioData[1] {
+		switch message.payload[0][1] {
 		case 0:
 			aacPacketType = "AAC sequence header" // AudioSpecificConfig
 		case 1:
 			aacPacketType = "AAC raw" // 실제 오디오 데이터
 		}
 
-		if audioData[1] == 0 {
+		if message.payload[0][1] == 0 {
+			// 전체 데이터 크기 계산
+			totalSize := 0
+			for _, chunk := range message.payload {
+				totalSize += len(chunk)
+			}
 			slog.Info("received AAC sequence header",
-				"dataSize", len(audioData),
+				"dataSize", totalSize,
 				"timestamp", message.messageHeader.Timestamp)
 		}
 	}
 
+	// 전체 데이터 크기 계산
+	totalSize := 0
+	for _, chunk := range message.payload {
+		totalSize += len(chunk)
+	}
+
 	slog.Debug("received audio data",
 		"fullStreamPath", fullStreamPath,
-		"dataSize", len(audioData),
+		"dataSize", totalSize,
 		"codecId", codecId,
 		"sampleRate", sampleRate,
 		"sampleSize", sampleSize,
@@ -604,12 +611,12 @@ func (s *session) handleAudio(message *Message) {
 		"timestamp", message.messageHeader.Timestamp,
 		"firstByte", fmt.Sprintf("0x%02x", firstByte))
 
-	// 오디오 데이터 이벤트 전송
+	// Zero-copy: 오디오 데이터 이벤트 전송
 	s.sendEvent(AudioData{
 		SessionId:  s.sessionId,
 		StreamName: fullStreamPath,
 		Timestamp:  message.messageHeader.Timestamp,
-		Data:       audioData,
+		Data:       message.payload, // [][]byte 그대로 전달
 	})
 }
 
@@ -626,19 +633,14 @@ func (s *session) handleVideo(message *Message) {
 		return
 	}
 
-	// 비디오 데이터를 그대로 전달 (FLV 형식 유지)
-	videoData := make([]byte, 0)
-	for _, chunk := range message.payload {
-		videoData = append(videoData, chunk...)
-	}
-
-	if len(videoData) == 0 {
+	// Zero-copy: payload를 그대로 사용
+	if len(message.payload) == 0 {
 		slog.Warn("empty video data received")
 		return
 	}
 
-	// 비디오 프레임 타입 확인 (첫 번째 바이트)
-	firstByte := videoData[0]
+	// 첫 번째 청크의 첫 번째 바이트로 비디오 정보 추출
+	firstByte := message.payload[0][0]
 	frameType := "unknown"
 	codecId := "unknown"
 
@@ -673,8 +675,8 @@ func (s *session) handleVideo(message *Message) {
 	}
 
 	// H.264 특수 처리
-	if (firstByte&0x0F) == 7 && len(videoData) > 1 {
-		avcPacketType := videoData[1]
+	if (firstByte&0x0F) == 7 && len(message.payload[0]) > 1 {
+		avcPacketType := message.payload[0][1]
 		switch avcPacketType {
 		case 0:
 			frameType = "AVC sequence header" // SPS/PPS
@@ -686,16 +688,21 @@ func (s *session) handleVideo(message *Message) {
 
 		// AVC sequence header인 경우 세부 정보 로깅
 		if avcPacketType == 0 {
+			// 전체 데이터 크기 계산
+			totalSize := 0
+			for _, chunk := range message.payload {
+				totalSize += len(chunk)
+			}
 			slog.Info("received AVC sequence header",
-				"dataSize", len(videoData),
+				"dataSize", totalSize,
 				"timestamp", message.messageHeader.Timestamp)
 
-			// SPS/PPS 데이터 분석 (선택적)
-			if len(videoData) > 10 {
-				configurationVersion := videoData[5]
-				profile := videoData[6]
-				compatibility := videoData[7]
-				level := videoData[8]
+			// SPS/PPS 데이터 분석 (선택적) - 첫 번째 청크에서만
+			if len(message.payload[0]) > 10 {
+				configurationVersion := message.payload[0][5]
+				profile := message.payload[0][6]
+				compatibility := message.payload[0][7]
+				level := message.payload[0][8]
 
 				slog.Info("AVC configuration",
 					"version", configurationVersion,
@@ -706,21 +713,27 @@ func (s *session) handleVideo(message *Message) {
 		}
 	}
 
+	// 전체 데이터 크기 계산
+	totalSize := 0
+	for _, chunk := range message.payload {
+		totalSize += len(chunk)
+	}
+
 	slog.Debug("received video data",
 		"fullStreamPath", fullStreamPath,
-		"dataSize", len(videoData),
+		"dataSize", totalSize,
 		"frameType", frameType,
 		"codecId", codecId,
 		"timestamp", message.messageHeader.Timestamp,
 		"firstByte", fmt.Sprintf("0x%02x", firstByte))
 
-	// 비디오 데이터 이벤트 전송
+	// Zero-copy: 비디오 데이터 이벤트 전송
 	s.sendEvent(VideoData{
 		SessionId:  s.sessionId,
 		StreamName: fullStreamPath,
 		Timestamp:  message.messageHeader.Timestamp,
 		FrameType:  frameType,
-		Data:       videoData,
+		Data:       message.payload, // [][]byte 그대로 전달
 	})
 }
 

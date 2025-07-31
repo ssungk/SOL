@@ -23,14 +23,14 @@ type Stream struct {
 type VideoFrame struct {
 	frameType string // "key frame", "inter frame", "AVC sequence header", "AVC NALU"
 	timestamp uint32
-	data      []byte
+	data      [][]byte // Zero-copy payload chunks
 }
 
 // AudioFrame은 오디오 프레임 정보  
 type AudioFrame struct {
 	frameType string // "audio", "AAC sequence header"
 	timestamp uint32
-	data      []byte
+	data      [][]byte // Zero-copy payload chunks
 }
 
 // VideoCache는 비디오 프레임 캐시를 관리
@@ -54,6 +54,29 @@ type CachedFrame struct {
 	msgType   uint8 // 8=audio, 9=video
 }
 
+// copyChunks는 [][]byte를 deep copy하여 안전한 사본을 만든다
+func copyChunks(chunks [][]byte) [][]byte {
+	copied := make([][]byte, len(chunks))
+	for i, chunk := range chunks {
+		copied[i] = make([]byte, len(chunk))
+		copy(copied[i], chunk)
+	}
+	return copied
+}
+
+// concatChunks는 [][]byte를 하나의 []byte로 합친다 (호환성 지원용)
+func concatChunks(chunks [][]byte) []byte {
+	totalLen := 0
+	for _, chunk := range chunks {
+		totalLen += len(chunk)
+	}
+	
+	result := make([]byte, 0, totalLen)
+	for _, chunk := range chunks {
+		result = append(result, chunk...)
+	}
+	return result
+}
 // NewStream은 새로운 스트림을 생성
 func NewStream(name string) *Stream {
 	return &Stream{
@@ -70,16 +93,15 @@ func NewStream(name string) *Stream {
 }
 
 // addAudioFrame은 오디오 프레임을 오디오 캐시에 추가
-func (s *Stream) addAudioFrame(timestamp uint32, data []byte) {
-	// AAC sequence header 특수 처리
-	if len(data) > 1 && ((data[0]>>4)&0x0F) == 10 && data[1] == 0 {
+func (s *Stream) addAudioFrame(timestamp uint32, data [][]byte) {
+	// AAC sequence header 특수 처리 - 첫 번째 청크를 기준으로 판단
+	if len(data) > 0 && len(data[0]) > 1 && ((data[0][0]>>4)&0x0F) == 10 && data[0][1] == 0 {
 		// AAC sequence header 설정
 		s.audioCache.sequenceHeader = &AudioFrame{
 			frameType: "AAC sequence header",
 			timestamp: timestamp,
-			data:      make([]byte, len(data)),
+			data:      copyChunks(data), // Deep copy for safety
 		}
-		copy(s.audioCache.sequenceHeader.data, data)
 		slog.Debug("AAC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
 	}
@@ -88,9 +110,8 @@ func (s *Stream) addAudioFrame(timestamp uint32, data []byte) {
 	audioFrame := AudioFrame{
 		frameType: "audio",
 		timestamp: timestamp,
-		data:      make([]byte, len(data)),
+		data:      copyChunks(data), // Deep copy for safety
 	}
-	copy(audioFrame.data, data)
 
 	// 오디오 프레임을 최근 프레임 리스트에 추가
 	s.audioCache.recentFrames = append(s.audioCache.recentFrames, audioFrame)
@@ -194,16 +215,15 @@ func (s *Stream) GetMetadata() map[string]any {
 }
 
 // addVideoFrame은 비디오 프레임을 비디오 캐시에 추가
-func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data []byte) {
+func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data [][]byte) {
 	// H.264 AVC sequence header는 별도 처리
 	if frameType == "AVC sequence header" {
 		// AVC sequence header 설정
 		s.videoCache.sequenceHeader = &VideoFrame{
 			frameType: frameType,
 			timestamp: timestamp,
-			data:      make([]byte, len(data)),
+			data:      copyChunks(data), // Deep copy for safety
 		}
-		copy(s.videoCache.sequenceHeader.data, data)
 		slog.Debug("AVC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
 	}
@@ -220,9 +240,8 @@ func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data []byte) 
 		videoFrame := VideoFrame{
 			frameType: frameType,
 			timestamp: timestamp,
-			data:      make([]byte, len(data)),
+			data:      copyChunks(data), // Deep copy for safety
 		}
-		copy(videoFrame.data, data)
 		s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
 	} else if frameType == "inter frame" {
@@ -231,9 +250,8 @@ func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data []byte) 
 			videoFrame := VideoFrame{
 				frameType: frameType,
 				timestamp: timestamp,
-				data:      make([]byte, len(data)),
+				data:      copyChunks(data), // Deep copy for safety
 			}
-			copy(videoFrame.data, data)
 			s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
 			// 캐시 크기 제한 (최대 50프레임)

@@ -38,7 +38,7 @@ type AudioData struct {
 	SessionId  string
 	StreamName string
 	Timestamp  uint32
-	Data       []byte
+	Data       [][]byte // Zero-copy payload chunks
 }
 
 // 비디오 데이터 수신 이벤트
@@ -47,7 +47,7 @@ type VideoData struct {
 	StreamName string
 	Timestamp  uint32
 	FrameType  string
-	Data       []byte
+	Data       [][]byte // Zero-copy payload chunks
 }
 
 // 메타데이터 수신 이벤트
