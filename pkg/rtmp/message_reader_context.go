@@ -6,8 +6,6 @@ import (
 	"sync"
 )
 
-const DefaultChunkSize uint32 = 128
-
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
 	payloads       map[uint32][][]byte
@@ -21,8 +19,8 @@ func newMessageReaderContext() *messageReaderContext {
 		messageHeaders: make(map[uint32]*messageHeader),
 		payloads:       make(map[uint32][][]byte),
 		payloadLengths: make(map[uint32]uint32),
-		chunkSize:      DefaultChunkSize,
-		bufferPool:     NewBufferPool(DefaultChunkSize),
+		chunkSize:      DEFAULT_CHUNK_SIZE,
+		bufferPool:     NewBufferPool(DEFAULT_CHUNK_SIZE),
 	}
 }
 

@@ -917,7 +917,7 @@ func (s *session) handleRead() {
 		}
 
 		switch message.messageHeader.typeId {
-		case 1: // Set Chunk Size
+		case MSG_TYPE_SET_CHUNK_SIZE: // Set Chunk Size
 			s.handleSetChunkSize(message)
 		default:
 			s.handleMessage(message)
@@ -938,29 +938,29 @@ func (s *session) handleEvent() {
 func (s *session) handleMessage(message *Message) {
 	slog.Info("receive message", "typeId", message.messageHeader.typeId)
 	switch message.messageHeader.typeId {
-	case 1: // Set Chunk Size
+	case MSG_TYPE_SET_CHUNK_SIZE: // Set Chunk Size
 		s.handleSetChunkSize(message)
-	case 2: // Abort Message
+	case MSG_TYPE_ABORT: // Abort Message
 		// Optional: ignore or log
-	case 3: // Acknowledgement
+	case MSG_TYPE_ACKNOWLEDGEMENT: // Acknowledgement
 		// 서버용: 클라이언트의 ack 수신
-	case 4: // User Control Messages
+	case MSG_TYPE_USER_CONTROL: // User Control Messages
 		//s.handleUserControl(message)
-	case 5: // Window Acknowledgement Size
+	case MSG_TYPE_WINDOW_ACK_SIZE: // Window Acknowledgement Size
 		// 클라이언트가 설정한 ack 윈도우 크기
-	case 6: // Set Peer Bandwidth
+	case MSG_TYPE_SET_PEER_BW: // Set Peer Bandwidth
 		// bandwidth 제한에 대한 정보
-	case 8: // Audio
+	case MSG_TYPE_AUDIO: // Audio
 		s.handleAudio(message)
-	case 9: // Video
+	case MSG_TYPE_VIDEO: // Video
 		s.handleVideo(message)
-	case 15: // AMF3 Data Message
+	case MSG_TYPE_AMF3_DATA: // AMF3 Data Message
 		// AMF3 포맷. 대부분 Flash Player
-	case 16: // AMF3 Shared Object
-	case 17: // AMF3 Command Message
-	case 18: // AMF0 Data Message (e.g., onMetaData)
+	case MSG_TYPE_AMF3_SHARED_OBJECT: // AMF3 Shared Object
+	case MSG_TYPE_AMF3_COMMAND: // AMF3 Command Message
+	case MSG_TYPE_AMF0_DATA: // AMF0 Data Message (e.g., onMetaData)
 		s.handleScriptData(message)
-	case 20: // AMF0 Command Message (e.g., connect, play, publish)
+	case MSG_TYPE_AMF0_COMMAND: // AMF0 Command Message (e.g., connect, play, publish)
 		s.handleAMF0Command(message)
 	default:
 		slog.Warn("unhandled RTMP message type", "type", message.messageHeader.typeId)
@@ -986,8 +986,7 @@ func (s *session) handleSetChunkSize(message *Message) {
 	}
 
 	// RTMP 최대 청크 크기 제한 (1 ~ 16777215)
-	const maxChunkSize = 0xFFFFFF
-	if newChunkSize < 1 || newChunkSize > maxChunkSize {
+	if newChunkSize < 1 || newChunkSize > EXTENDED_TIMESTAMP_THRESHOLD {
 		slog.Error("Set Chunk Size out of valid range", "value", newChunkSize)
 		return
 	}

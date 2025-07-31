@@ -28,7 +28,7 @@ func handshake(rw io.ReadWriter) error {
 		return fmt.Errorf("failed to read C0: %w", err)
 	}
 
-	if c0[0] != 0x03 {
+	if c0[0] != RTMP_VERSION {
 		return fmt.Errorf("unsupported RTMP version: %d", c0[0])
 	}
 
@@ -38,7 +38,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// S1
-	s1 := make([]byte, 1536)
+	s1 := make([]byte, HANDSHAKE_SIZE)
 	copy(s1[0:4], []byte{0, 0, 0, 0}) // time field
 	copy(s1[4:8], []byte{0, 0, 0, 0}) // zero field
 	_, _ = rand.Read(s1[8:])          // random field
@@ -48,7 +48,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// C1
-	c1 := make([]byte, 1536)
+	c1 := make([]byte, HANDSHAKE_SIZE)
 	if _, err := io.ReadFull(rw, c1); err != nil {
 		return fmt.Errorf("failed to read C1: %w", err)
 	}
@@ -59,7 +59,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// C2
-	c2 := make([]byte, 1536)
+	c2 := make([]byte, HANDSHAKE_SIZE)
 	if _, err := io.ReadFull(rw, c2); err != nil {
 		return fmt.Errorf("failed to read C2: %w", err)
 	}
@@ -171,7 +171,7 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	typeId := buf[6]
 	streamId := binary.LittleEndian.Uint32(buf[7:11])
 
-	if timestamp == 0xFFFFFF {
+	if timestamp == EXTENDED_TIMESTAMP_THRESHOLD {
 		var err error
 		timestamp, err = readExtendedTimestamp(r)
 		if err != nil {
@@ -194,7 +194,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	length := readUint24BE(buf[3:6])
 	typeId := buf[6]
 
-	if timestampDelta == 0xFFFFFF {
+	if timestampDelta == EXTENDED_TIMESTAMP_THRESHOLD {
 		var err error
 		timestampDelta, err = readExtendedTimestamp(r)
 		if err != nil {
@@ -212,7 +212,7 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	}
 
 	timestampDelta := readUint24BE(buf[:])
-	if timestampDelta == 0xFFFFFF {
+	if timestampDelta == EXTENDED_TIMESTAMP_THRESHOLD {
 		var err error
 		timestampDelta, err = readExtendedTimestamp(r)
 		if err != nil {
