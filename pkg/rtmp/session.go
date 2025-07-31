@@ -19,15 +19,17 @@ type session struct {
 	externalChannel chan<- interface{}
 	messageChannel  chan *Message
 
-	// Session 식별자
-	sessionId string
-
 	// Stream 관리
 	streamID     uint32
 	streamName   string // streamkey
 	appName      string // appname
 	isPublishing bool
 	isPlaying    bool
+}
+
+// GetID는 세션의 포인터 주소값을 문자열로 반환
+func (s *session) GetID() string {
+	return fmt.Sprintf("%p", s)
 }
 
 // createStream 명령어 처리

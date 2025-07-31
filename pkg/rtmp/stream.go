@@ -7,9 +7,12 @@ import (
 // Stream은 개별 스트림 정보를 관리
 type Stream struct {
 	name      string
-	playerIDs map[string]struct{} // player session IDs
+	publisher *session                 // publisher session 직접 참조
+	players   map[*session]struct{}    // player sessions 직접 참조
+	
 	// 메타데이터 캐시
 	lastMetadata map[string]any
+	
 	// GOP 캐시 (키프레임 및 직후 프레임들)
 	gopCache []CachedFrame
 }
@@ -25,49 +28,63 @@ type CachedFrame struct {
 // NewStream은 새로운 스트림을 생성
 func NewStream(name string) *Stream {
 	return &Stream{
-		name:      name,
-		playerIDs: make(map[string]struct{}),
-		gopCache:  make([]CachedFrame, 0),
+		name:     name,
+		players:  make(map[*session]struct{}),
+		gopCache: make([]CachedFrame, 0),
 	}
 }
 
-// SetPublisher는 스트림의 발행자를 설정 (로깅만 수행)
-func (s *Stream) SetPublisher(sessionID string) {
-	slog.Info("Publisher set", "streamName", s.name, "sessionId", sessionID)
+// SetPublisher는 스트림의 발행자를 설정
+func (s *Stream) SetPublisher(publisher *session) {
+	s.publisher = publisher
+	slog.Info("Publisher set", "streamName", s.name, "sessionId", publisher.sessionId)
 }
 
 // RemovePublisher는 스트림의 발행자를 제거
 func (s *Stream) RemovePublisher() {
-	// 캐시 청소
-	s.gopCache = nil
-	s.lastMetadata = nil
-	slog.Info("Publisher removed", "streamName", s.name)
+	if s.publisher != nil {
+		slog.Info("Publisher removed", "streamName", s.name, "sessionId", s.publisher.sessionId)
+		s.publisher = nil
+		// 캐시 청소
+		s.gopCache = nil
+		s.lastMetadata = nil
+	}
+}
+
+// GetPublisher는 스트림의 발행자를 반환
+func (s *Stream) GetPublisher() *session {
+	return s.publisher
+}
+
+// HasPublisher는 발행자가 있는지 확인
+func (s *Stream) HasPublisher() bool {
+	return s.publisher != nil
 }
 
 // AddPlayer는 플레이어를 추가
-func (s *Stream) AddPlayer(sessionID string) {
-	s.playerIDs[sessionID] = struct{}{}
-	slog.Info("Player added", "streamName", s.name, "sessionId", sessionID, "playerCount", len(s.playerIDs))
+func (s *Stream) AddPlayer(player *session) {
+	s.players[player] = struct{}{}
+	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
 }
 
 // RemovePlayer는 플레이어를 제거
-func (s *Stream) RemovePlayer(sessionID string) {
-	delete(s.playerIDs, sessionID)
-	slog.Info("Player removed", "streamName", s.name, "sessionId", sessionID, "playerCount", len(s.playerIDs))
+func (s *Stream) RemovePlayer(player *session) {
+	delete(s.players, player)
+	slog.Info("Player removed", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
 }
 
-// GetPlayerIDs는 모든 플레이어 ID를 반환
-func (s *Stream) GetPlayerIDs() []string {
-	playerIDs := make([]string, 0, len(s.playerIDs))
-	for playerID := range s.playerIDs {
-		playerIDs = append(playerIDs, playerID)
+// GetPlayers는 모든 플레이어를 반환
+func (s *Stream) GetPlayers() []*session {
+	players := make([]*session, 0, len(s.players))
+	for player := range s.players {
+		players = append(players, player)
 	}
-	return playerIDs
+	return players
 }
 
 // GetPlayerCount는 플레이어 수를 반환
 func (s *Stream) GetPlayerCount() int {
-	return len(s.playerIDs)
+	return len(s.players)
 }
 
 // SetMetadata는 메타데이터를 설정 및 캐시
@@ -120,12 +137,37 @@ func (s *Stream) GetGOPCache() []CachedFrame {
 	return cache
 }
 
+// BroadcastToPlayers는 모든 플레이어에게 데이터를 브로드캐스트
+func (s *Stream) BroadcastToPlayers(broadcastFunc func(*session)) {
+	players := s.GetPlayers()
+	for _, player := range players {
+		go broadcastFunc(player)
+	}
+}
+
 // GetName은 스트림 이름을 반환
 func (s *Stream) GetName() string {
 	return s.name
 }
 
-// IsActive는 스트림이 활성 상태인지 확인 (플레이어가 있는 경우)
+// IsActive는 스트림이 활성 상태인지 확인 (발행자 또는 플레이어가 있는 경우)
 func (s *Stream) IsActive() bool {
-	return len(s.playerIDs) > 0
+	return s.publisher != nil || len(s.players) > 0
+}
+
+// CleanupSession은 세션 종료 시 스트림에서 해당 세션을 정리
+func (s *Stream) CleanupSession(session *session) {
+	// publisher 정리
+	if s.publisher == session {
+		slog.Info("Cleaning up publisher from stream", "streamName", s.name, "sessionId", session.sessionId)
+		s.publisher = nil
+		s.gopCache = nil
+		s.lastMetadata = nil
+	}
+
+	// player 정리
+	if _, exists := s.players[session]; exists {
+		delete(s.players, session)
+		slog.Info("Cleaned up player from stream", "streamName", s.name, "sessionId", session.sessionId, "playerCount", len(s.players))
+	}
 }

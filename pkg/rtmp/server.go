@@ -10,18 +10,18 @@ import (
 )
 
 type Server struct {
-	sessions map[string]*session // sessionId를 키로 사용
+	sessions map[*session]struct{}
+	streams  map[string]*Stream // 스트림 직접 관리
 	port     int
 	channel  chan interface{}
-	streams  map[string]*Stream // 스트림 직접 관리
 }
 
 func NewServer() *Server {
 	server := &Server{
-		sessions: make(map[string]*session), // sessionId를 키로 사용
+		sessions: make(map[*session]struct{}),
+		streams:  make(map[string]*Stream), // 스트림 맵 초기화
 		port:     1935,
 		channel:  make(chan interface{}, 100),
-		streams:  make(map[string]*Stream), // 스트림 맵 초기화
 	}
 	return server
 }
@@ -85,9 +85,34 @@ func (s *Server) channelHandler(data interface{}) {
 }
 
 func (s *Server) TerminatedEventHandler(id string) {
-	// 세션 제거
-	delete(s.sessions, id)
-	slog.Info("Session terminated", "sessionId", id)
+	// 세션을 찾아서 제거
+	var targetSession *session
+	for session := range s.sessions {
+		if session.sessionId == id {
+			targetSession = session
+			break
+		}
+	}
+
+	if targetSession != nil {
+		// 모든 스트림에서 해당 세션 정리
+		s.cleanupSessionFromAllStreams(targetSession)
+		// 세션 맵에서 제거
+		delete(s.sessions, targetSession)
+		slog.Info("Session terminated", "sessionId", id)
+	}
+}
+
+// 모든 스트림에서 세션 정리
+func (s *Server) cleanupSessionFromAllStreams(session *session) {
+	for streamName, stream := range s.streams {
+		stream.CleanupSession(session)
+		// 스트림이 비활성 상태면 제거
+		if !stream.IsActive() {
+			delete(s.streams, streamName)
+			slog.Info("Removed inactive stream", "streamName", streamName)
+		}
+	}
 }
 
 // Publish 시작 처리
@@ -101,7 +126,7 @@ func (s *Server) handlePublishStarted(event PublishStarted) {
 
 	// 스트림 생성 또는 가져오기
 	stream := s.GetOrCreateStream(event.StreamName)
-	stream.SetPublisher(event.SessionId) // sessionID 사용
+	stream.SetPublisher(publisher) // session 객체 직접 전달
 
 	slog.Info("Publisher registered", "streamName", event.StreamName, "sessionId", event.SessionId)
 }
@@ -133,7 +158,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 
 	// 스트림 생성 또는 가져오기
 	stream := s.GetOrCreateStream(event.StreamName)
-	stream.AddPlayer(event.SessionId) // sessionID 사용
+	stream.AddPlayer(player) // session 객체 직접 전달
 
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
@@ -143,12 +168,19 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 
 // Play 종료 처리
 func (s *Server) handlePlayStopped(event PlayStopped) {
+	// 세션 찾기
+	player := s.findSessionById(event.SessionId)
+	if player == nil {
+		slog.Error("Player session not found for stop", "sessionId", event.SessionId)
+		return
+	}
+
 	stream := s.GetStream(event.StreamName)
 	if stream == nil {
 		return
 	}
 
-	stream.RemovePlayer(event.SessionId) // sessionID 사용
+	stream.RemovePlayer(player) // session 객체 직접 전달
 	slog.Info("Player unregistered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
 
 	// 스트림이 비활성 상태면 제거
@@ -165,7 +197,7 @@ func (s *Server) handleAudioData(event AudioData) {
 	}
 
 	// 모든 플레이어에게 전송
-	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	stream.BroadcastToPlayers(func(player *session) {
 		s.sendAudioToPlayer(player, event)
 	})
 }
@@ -180,8 +212,8 @@ func (s *Server) handleVideoData(event VideoData) {
 	// GOP 캐시 업데이트
 	stream.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
 
-	// 모든 플래이어에게 전송
-	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	// 모든 플레이어에게 전송
+	stream.BroadcastToPlayers(func(player *session) {
 		s.sendVideoToPlayer(player, event)
 	})
 }
@@ -197,14 +229,43 @@ func (s *Server) handleMetaData(event MetaData) {
 	stream.SetMetadata(event.Metadata)
 
 	// 모든 플레이어에게 전송
-	s.BroadcastToStreamPlayers(event.StreamName, func(player *session) {
+	stream.BroadcastToPlayers(func(player *session) {
 		s.sendMetaDataToPlayer(player, event)
 	})
 }
 
 // 세션 ID로 세션 찾기
 func (s *Server) findSessionById(sessionId string) *session {
-	return s.sessions[sessionId]
+	for session := range s.sessions {
+		if session.sessionId == sessionId {
+			return session
+		}
+	}
+	return nil
+}
+
+// 스트림 관리 메서드들
+
+// GetOrCreateStream은 스트림을 가져오거나 생성
+func (s *Server) GetOrCreateStream(streamName string) *Stream {
+	stream, exists := s.streams[streamName]
+	if !exists {
+		stream = NewStream(streamName)
+		s.streams[streamName] = stream
+		slog.Info("Created new stream", "streamName", streamName)
+	}
+	return stream
+}
+
+// GetStream은 스트림을 가져옴 (없으면 nil 반환)
+func (s *Server) GetStream(streamName string) *Stream {
+	return s.streams[streamName]
+}
+
+// RemoveStream은 스트림을 제거
+func (s *Server) RemoveStream(streamName string) {
+	delete(s.streams, streamName)
+	slog.Info("Removed stream", "streamName", streamName)
 }
 
 // 플레이어에게 캐시된 데이터 전송
@@ -288,8 +349,8 @@ func (s *Server) acceptConnections(ln net.Listener) {
 		// 세션 생성 시 서버의 이벤트 채널을 전달
 		session := s.newSessionWithChannel(conn)
 
-		// sessionId를 키로 사용해서 세션 저장
-		s.sessions[session.sessionId] = session
+		// session 객체를 키로 사용해서 세션 저장
+		s.sessions[session] = struct{}{}
 	}
 }
 
@@ -321,46 +382,6 @@ func (s *Server) generateSessionId() string {
 		return "unknown"
 	}
 	return hex.EncodeToString(bytes)[:8] // 8자리로 단축
-}
-
-// 스트림 관리 메서드들
-
-// GetOrCreateStream은 스트림을 가져오거나 생성
-func (s *Server) GetOrCreateStream(streamName string) *Stream {
-	stream, exists := s.streams[streamName]
-	if !exists {
-		stream = NewStream(streamName)
-		s.streams[streamName] = stream
-		slog.Info("Created new stream", "streamName", streamName)
-	}
-
-	return stream
-}
-
-// GetStream은 스트림을 가져옴 (없으면 nil 반환)
-func (s *Server) GetStream(streamName string) *Stream {
-	return s.streams[streamName]
-}
-
-// RemoveStream은 스트림을 제거
-func (s *Server) RemoveStream(streamName string) {
-	delete(s.streams, streamName)
-	slog.Info("Removed stream", "streamName", streamName)
-}
-
-// BroadcastToStreamPlayers는 스트림의 모든 플래이어에게 브로드캐스트
-func (s *Server) BroadcastToStreamPlayers(streamName string, callback func(*session)) {
-	stream := s.GetStream(streamName)
-	if stream == nil {
-		return
-	}
-
-	playerIDs := stream.GetPlayerIDs()
-	for _, playerID := range playerIDs {
-		if session := s.findSessionById(playerID); session != nil {
-			go callback(session)
-		}
-	}
 }
 
 func closeWithLog(c io.Closer) {
