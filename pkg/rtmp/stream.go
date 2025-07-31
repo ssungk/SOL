@@ -12,11 +12,41 @@ type Stream struct {
 	// 메타데이터 캐시
 	lastMetadata map[string]any
 
-	// GOP 캐시 (키프레임 및 직후 프레임들)
-	gopCache []CachedFrame
+	// 비디오 캐시 (GOP 기반)
+	videoCache VideoCache
+
+	// 오디오 캐시 (최근 프레임들)
+	audioCache AudioCache
 }
 
-// CachedFrame은 캐시된 프레임 정보
+// VideoFrame은 비디오 프레임 정보
+type VideoFrame struct {
+	frameType string // "key frame", "inter frame", "AVC sequence header", "AVC NALU"
+	timestamp uint32
+	data      []byte
+}
+
+// AudioFrame은 오디오 프레임 정보  
+type AudioFrame struct {
+	frameType string // "audio", "AAC sequence header"
+	timestamp uint32
+	data      []byte
+}
+
+// VideoCache는 비디오 프레임 캐시를 관리
+type VideoCache struct {
+	sequenceHeader *VideoFrame   // AVC sequence header
+	gopFrames      []VideoFrame  // GOP 프레임들 (키프레임 + 후속 프레임들)
+}
+
+// AudioCache는 오디오 프레임 캐시를 관리
+type AudioCache struct {
+	sequenceHeader *AudioFrame   // AAC sequence header
+	recentFrames   []AudioFrame  // 최근 오디오 프레임들
+	maxFrames      int           // 최대 캐시할 오디오 프레임 수
+}
+
+// CachedFrame은 호환성을 위한 통합 프레임 정보 (기존 코드와의 호환성)
 type CachedFrame struct {
 	frameType string
 	timestamp uint32
@@ -27,92 +57,66 @@ type CachedFrame struct {
 // NewStream은 새로운 스트림을 생성
 func NewStream(name string) *Stream {
 	return &Stream{
-		name:     name,
-		players:  make(map[*session]struct{}),
-		gopCache: make([]CachedFrame, 0),
+		name:    name,
+		players: make(map[*session]struct{}),
+		videoCache: VideoCache{
+			gopFrames: make([]VideoFrame, 0),
+		},
+		audioCache: AudioCache{
+			recentFrames: make([]AudioFrame, 0),
+			maxFrames:    10, // 최대 10개 오디오 프레임 캐시
+		},
 	}
 }
 
-// addAudioSample은 오디오 샘플을 캐시에 추가 (최근 5개만 유지)
-func (s *Stream) addAudioSample(timestamp uint32, data []byte) {
+// addAudioFrame은 오디오 프레임을 오디오 캐시에 추가
+func (s *Stream) addAudioFrame(timestamp uint32, data []byte) {
 	// AAC sequence header 특수 처리
-	if len(data) > 1 && ((data[0] >> 4) & 0x0F) == 10 && data[1] == 0 {
-		// AAC sequence header는 별도 처리 - 기존 sequence header 제거 후 새로 추가
-		newCache := make([]CachedFrame, 0)
-		for _, frame := range s.gopCache {
-			if !(len(frame.data) > 1 && ((frame.data[0] >> 4) & 0x0F) == 10 && frame.data[1] == 0) {
-				newCache = append(newCache, frame)
-			}
-		}
-		
-		// AAC sequence header를 오디오 프레임 중 맨 앞에 추가
-		aacSequenceFrame := CachedFrame{
-			frameType: "audio",
+	if len(data) > 1 && ((data[0]>>4)&0x0F) == 10 && data[1] == 0 {
+		// AAC sequence header 설정
+		s.audioCache.sequenceHeader = &AudioFrame{
+			frameType: "AAC sequence header",
 			timestamp: timestamp,
-			data:      data,
-			msgType:   8, // audio
+			data:      make([]byte, len(data)),
 		}
-		
-		// AVC sequence header 다음, 다른 오디오 프레임 앞에 삽입
-		finalCache := make([]CachedFrame, 0)
-		aacSequenceAdded := false
-		
-		for _, frame := range newCache {
-			if frame.frameType == "AVC sequence header" {
-				finalCache = append(finalCache, frame)
-			} else if frame.msgType == 8 && !aacSequenceAdded {
-				// 첫 번째 일반 오디오 프레임 앞에 AAC sequence header 삽입
-				finalCache = append(finalCache, aacSequenceFrame)
-				finalCache = append(finalCache, frame)
-				aacSequenceAdded = true
-			} else {
-				finalCache = append(finalCache, frame)
-			}
-		}
-		
-		// AAC sequence header가 아직 추가되지 않았다면 끝에 추가
-		if !aacSequenceAdded {
-			finalCache = append(finalCache, aacSequenceFrame)
-		}
-		
-		s.gopCache = finalCache
+		copy(s.audioCache.sequenceHeader.data, data)
 		slog.Debug("AAC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
 	}
-	
-	// 일반 오디오 프레임을 GOP 캐시에 추가
-	audioFrame := CachedFrame{
+
+	// 일반 오디오 프레임 추가
+	audioFrame := AudioFrame{
 		frameType: "audio",
 		timestamp: timestamp,
-		data:      data,
-		msgType:   8, // audio
+		data:      make([]byte, len(data)),
 	}
-	
-	// 오디오 프레임을 GOP 캐시 끝에 추가
-	s.gopCache = append(s.gopCache, audioFrame)
-	
-	// 오디오 샘플 수 제한 (최근 100개 프레임)
-	if len(s.gopCache) > 100 {
-		s.gopCache = s.gopCache[len(s.gopCache)-100:]
+	copy(audioFrame.data, data)
+
+	// 오디오 프레임을 최근 프레임 리스트에 추가
+	s.audioCache.recentFrames = append(s.audioCache.recentFrames, audioFrame)
+
+	// 최대 프레임 수 제한
+	if len(s.audioCache.recentFrames) > s.audioCache.maxFrames {
+		s.audioCache.recentFrames = s.audioCache.recentFrames[len(s.audioCache.recentFrames)-s.audioCache.maxFrames:]
 	}
 }
 
 // ProcessAudioData는 오디오 데이터를 받아서 캐시 업데이트 후 모든 플레이어에게 전송
 func (s *Stream) ProcessAudioData(event AudioData) {
-	// 오디오 샘플 캐시 (최근 5개 프레임만 유지)
-	s.addAudioSample(event.Timestamp, event.Data)
-	
+	// 오디오 프레임 캐시
+	s.addAudioFrame(event.Timestamp, event.Data)
+
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
 		go s.sendAudioToPlayer(player, event)
 	}
 }
 
-// ProcessVideoData는 비디오 데이터를 받아서 GOP 캐시 업데이트 후 모든 플레이어에게 전송
+// ProcessVideoData는 비디오 데이터를 받아서 비디오 캐시 업데이트 후 모든 플레이어에게 전송
 func (s *Stream) ProcessVideoData(event VideoData) {
-	// GOP 캐시 업데이트
-	s.AddVideoFrame(event.FrameType, event.Timestamp, event.Data)
-	
+	// 비디오 프레임 캐시 업데이트
+	s.addVideoFrame(event.FrameType, event.Timestamp, event.Data)
+
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
 		go s.sendVideoToPlayer(player, event)
@@ -123,7 +127,7 @@ func (s *Stream) ProcessVideoData(event VideoData) {
 func (s *Stream) ProcessMetaData(event MetaData) {
 	// 메타데이터 캐시
 	s.SetMetadata(event.Metadata)
-	
+
 	// 모든 플레이어에게 비동기 전송
 	for player := range s.players {
 		go s.sendMetaDataToPlayer(player, event)
@@ -137,17 +141,23 @@ func (s *Stream) SetPublisher(publisher *session) {
 
 // RemovePublisher는 스트림의 발행자를 제거 (캐시 청소만 수행)
 func (s *Stream) RemovePublisher() {
-	// 캐시 청소
-	s.gopCache = nil
+	// 모든 캐시 청소
+	s.videoCache = VideoCache{
+		gopFrames: make([]VideoFrame, 0),
+	}
+	s.audioCache = AudioCache{
+		recentFrames: make([]AudioFrame, 0),
+		maxFrames:    10,
+	}
 	s.lastMetadata = nil
-	slog.Info("Publisher removed and cache cleared", "streamName", s.name)
+	slog.Info("Publisher removed and all caches cleared", "streamName", s.name)
 }
 
 // AddPlayer는 플레이어를 추가하고 즉시 캐시된 데이터를 전송
 func (s *Stream) AddPlayer(player *session) {
 	s.players[player] = struct{}{}
 	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
-	
+
 	// 새로 입장한 플레이어에게 즉시 캐시된 데이터 전송
 	go s.SendCachedDataToPlayer(player)
 }
@@ -183,99 +193,103 @@ func (s *Stream) GetMetadata() map[string]any {
 	return s.lastMetadata
 }
 
-// AddVideoFrame은 비디오 프레임을 GOP 캐시에 추가
-func (s *Stream) AddVideoFrame(frameType string, timestamp uint32, data []byte) {
+// addVideoFrame은 비디오 프레임을 비디오 캐시에 추가
+func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data []byte) {
 	// H.264 AVC sequence header는 별도 처리
 	if frameType == "AVC sequence header" {
-		// 기존 sequence header 제거 후 새로 추가
-		newCache := make([]CachedFrame, 0)
-		for _, frame := range s.gopCache {
-			if frame.frameType != "AVC sequence header" {
-				newCache = append(newCache, frame)
-			}
-		}
-		
-		// sequence header를 맨 앞에 추가
-		sequenceFrame := CachedFrame{
+		// AVC sequence header 설정
+		s.videoCache.sequenceHeader = &VideoFrame{
 			frameType: frameType,
 			timestamp: timestamp,
-			data:      data,
-			msgType:   9, // video
+			data:      make([]byte, len(data)),
 		}
-		s.gopCache = append([]CachedFrame{sequenceFrame}, newCache...)
-		
+		copy(s.videoCache.sequenceHeader.data, data)
 		slog.Debug("AVC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
 	}
-	
+
 	if frameType == "key frame" || frameType == "AVC NALU" {
-		// 실제 key frame인 경우에만 새 GOP 시작
+		// key frame인 경우 새 GOP 시작
 		if frameType == "key frame" {
-			// 새 GOP 시작 - 비디오 프레임만 청소하고 오디오는 유지
-			newCache := make([]CachedFrame, 0)
-			
-			// AVC sequence header 유지
-			for _, frame := range s.gopCache {
-				if frame.frameType == "AVC sequence header" {
-					newCache = append(newCache, frame)
-				}
-			}
-			
-			// 기존 오디오 프레임들 유지 (최근 10개만)
-			audioCount := 0
-			for i := len(s.gopCache) - 1; i >= 0 && audioCount < 10; i-- {
-				if s.gopCache[i].msgType == 8 { // audio
-					newCache = append([]CachedFrame{s.gopCache[i]}, newCache...)
-					audioCount++
-				}
-			}
-			
-			// 새 키프레임 추가
-			newCache = append(newCache, CachedFrame{
-				frameType: frameType,
-				timestamp: timestamp,
-				data:      data,
-				msgType:   9, // video
-			})
-			
-			s.gopCache = newCache
-			slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp, "audioFramesKept", audioCount)
-		} else {
-			// AVC NALU (데이터 프레임) 추가
-			s.gopCache = append(s.gopCache, CachedFrame{
-				frameType: frameType,
-				timestamp: timestamp,
-				data:      data,
-				msgType:   9, // video
-			})
+			// 새 GOP 시작 - 기존 GOP 프레임들 제거
+			s.videoCache.gopFrames = make([]VideoFrame, 0)
+			slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp)
 		}
+
+		// 새 비디오 프레임 추가
+		videoFrame := VideoFrame{
+			frameType: frameType,
+			timestamp: timestamp,
+			data:      make([]byte, len(data)),
+		}
+		copy(videoFrame.data, data)
+		s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
+
 	} else if frameType == "inter frame" {
 		// 키프레임 이후 프레임들 캐시에 추가
-		if len(s.gopCache) > 0 { // 키프레임이 있는 경우만
-			s.gopCache = append(s.gopCache, CachedFrame{
+		if len(s.videoCache.gopFrames) > 0 { // 키프레임이 있는 경우만
+			videoFrame := VideoFrame{
 				frameType: frameType,
 				timestamp: timestamp,
-				data:      data,
-				msgType:   9, // video
-			})
+				data:      make([]byte, len(data)),
+			}
+			copy(videoFrame.data, data)
+			s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
-			// 캐시 크기 제한 (최대 100프레임)
-			if len(s.gopCache) > 100 {
-				s.gopCache = s.gopCache[len(s.gopCache)-100:]
+			// 캐시 크기 제한 (최대 50프레임)
+			if len(s.videoCache.gopFrames) > 50 {
+				s.videoCache.gopFrames = s.videoCache.gopFrames[len(s.videoCache.gopFrames)-50:]
 			}
 		}
 	}
 }
 
-// GetGOPCache는 GOP 캐시를 반환
+// GetGOPCache는 호환성을 위해 통합된 캐시를 CachedFrame 형태로 반환
 func (s *Stream) GetGOPCache() []CachedFrame {
-	// 슬라이스 복사본 반환 (동시성 안전)
-	cache := make([]CachedFrame, len(s.gopCache))
-	copy(cache, s.gopCache)
-	return cache
+	cachedFrames := make([]CachedFrame, 0)
+
+	// 1. AVC sequence header 추가
+	if s.videoCache.sequenceHeader != nil {
+		cachedFrames = append(cachedFrames, CachedFrame{
+			frameType: s.videoCache.sequenceHeader.frameType,
+			timestamp: s.videoCache.sequenceHeader.timestamp,
+			data:      s.videoCache.sequenceHeader.data,
+			msgType:   9, // video
+		})
+	}
+
+	// 2. AAC sequence header 추가
+	if s.audioCache.sequenceHeader != nil {
+		cachedFrames = append(cachedFrames, CachedFrame{
+			frameType: "audio", // AAC sequence header를 일반 오디오로 표시
+			timestamp: s.audioCache.sequenceHeader.timestamp,
+			data:      s.audioCache.sequenceHeader.data,
+			msgType:   8, // audio
+		})
+	}
+
+	// 3. 비디오 GOP 프레임들 추가
+	for _, frame := range s.videoCache.gopFrames {
+		cachedFrames = append(cachedFrames, CachedFrame{
+			frameType: frame.frameType,
+			timestamp: frame.timestamp,
+			data:      frame.data,
+			msgType:   9, // video
+		})
+	}
+
+	// 4. 최근 오디오 프레임들 추가
+	for _, frame := range s.audioCache.recentFrames {
+		cachedFrames = append(cachedFrames, CachedFrame{
+			frameType: frame.frameType,
+			timestamp: frame.timestamp,
+			data:      frame.data,
+			msgType:   8, // audio
+		})
+	}
+
+	return cachedFrames
 }
-
-
 
 // GetName은 스트림 이름을 반환
 func (s *Stream) GetName() string {
@@ -284,7 +298,12 @@ func (s *Stream) GetName() string {
 
 // IsActive는 스트림이 활성 상태인지 확인 (플레이어가 있는 경우 또는 캐시된 데이터가 있는 경우)
 func (s *Stream) IsActive() bool {
-	return len(s.players) > 0 || len(s.gopCache) > 0 || s.lastMetadata != nil
+	return len(s.players) > 0 || 
+		   len(s.videoCache.gopFrames) > 0 || 
+		   len(s.audioCache.recentFrames) > 0 ||
+		   s.videoCache.sequenceHeader != nil ||
+		   s.audioCache.sequenceHeader != nil ||
+		   s.lastMetadata != nil
 }
 
 // CleanupSession은 세션 종료 시 스트림에서 해당 세션을 정리
@@ -334,32 +353,68 @@ func (s *Stream) SendCachedDataToPlayer(player *session) {
 		slog.Debug("Sent cached metadata to new player", "streamName", s.name, "sessionId", player.sessionId)
 	}
 
-	// 2. GOP 캐시가 있으면 순서대로 전송 (비동기로 전체 블록 전송)
-	if len(s.gopCache) > 0 {
+	// 2. 캐시된 데이터가 있으면 순서대로 전솤 (비동기로 전체 블록 전송)
+	hasCachedData := s.videoCache.sequenceHeader != nil || 
+		           len(s.videoCache.gopFrames) > 0 || 
+		           s.audioCache.sequenceHeader != nil ||
+		           len(s.audioCache.recentFrames) > 0
+
+	if hasCachedData {
 		go func() {
-			slog.Debug("Sending GOP cache to new player", "streamName", s.name, "sessionId", player.sessionId, "frameCount", len(s.gopCache))
-			
-			// GOP 캐시를 타임스탬프 순서대로 전송
-			for _, frame := range s.gopCache {
-				if frame.msgType == 8 { // audio
-					s.sendAudioToPlayer(player, AudioData{
-						SessionId:  "cache",
-						StreamName: s.name,
-						Timestamp:  frame.timestamp,
-						Data:       frame.data,
-					})
-				} else if frame.msgType == 9 { // video
-					s.sendVideoToPlayer(player, VideoData{
-						SessionId:  "cache",
-						StreamName: s.name,
-						Timestamp:  frame.timestamp,
-						FrameType:  frame.frameType,
-						Data:       frame.data,
-					})
-				}
+			totalFrames := 0
+			if s.videoCache.sequenceHeader != nil {
+				totalFrames++
 			}
-			
-			slog.Debug("Finished sending GOP cache to new player", "streamName", s.name, "sessionId", player.sessionId)
+			if s.audioCache.sequenceHeader != nil {
+				totalFrames++
+			}
+			totalFrames += len(s.videoCache.gopFrames) + len(s.audioCache.recentFrames)
+
+			slog.Debug("Sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId, "frameCount", totalFrames)
+
+			// 1) AVC sequence header 먼저 전송
+			if s.videoCache.sequenceHeader != nil {
+				s.sendVideoToPlayer(player, VideoData{
+					SessionId:  "cache",
+					StreamName: s.name,
+					Timestamp:  s.videoCache.sequenceHeader.timestamp,
+					FrameType:  s.videoCache.sequenceHeader.frameType,
+					Data:       s.videoCache.sequenceHeader.data,
+				})
+			}
+
+			// 2) AAC sequence header 전송
+			if s.audioCache.sequenceHeader != nil {
+				s.sendAudioToPlayer(player, AudioData{
+					SessionId:  "cache",
+					StreamName: s.name,
+					Timestamp:  s.audioCache.sequenceHeader.timestamp,
+					Data:       s.audioCache.sequenceHeader.data,
+				})
+			}
+
+			// 3) 비디오 GOP 프레임들 전송
+			for _, frame := range s.videoCache.gopFrames {
+				s.sendVideoToPlayer(player, VideoData{
+					SessionId:  "cache",
+					StreamName: s.name,
+					Timestamp:  frame.timestamp,
+					FrameType:  frame.frameType,
+					Data:       frame.data,
+				})
+			}
+
+			// 4) 최근 오디오 프레임들 전송
+			for _, frame := range s.audioCache.recentFrames {
+				s.sendAudioToPlayer(player, AudioData{
+					SessionId:  "cache",
+					StreamName: s.name,
+					Timestamp:  frame.timestamp,
+					Data:       frame.data,
+				})
+			}
+
+			slog.Debug("Finished sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId)
 		}()
 	}
 }
