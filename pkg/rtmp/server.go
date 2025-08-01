@@ -8,6 +8,12 @@ import (
 	"net"
 )
 
+// StreamConfig는 스트림 설정을 담는 구조체
+type StreamConfig struct {
+	GopCacheSize        int
+	MaxPlayersPerStream int
+}
+
 type Server struct {
 	sessions map[string]*session // sessionId를 키로 사용
 	streams  map[string]*Stream  // 스트림 직접 관리
@@ -16,18 +22,20 @@ type Server struct {
 	listener net.Listener        // 리스너 참조 저장
 	ctx      context.Context     // 컨텍스트
 	cancel   context.CancelFunc  // 컨텍스트 취소 함수
+	streamConfig StreamConfig     // 스트림 설정
 }
 
-func NewServer() *Server {
+func NewServer(port int, streamConfig StreamConfig) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	server := &Server{
 		sessions: make(map[string]*session), // sessionId를 키로 사용
 		streams:  make(map[string]*Stream),  // 스트림 맵 초기화
-		port:     1935,
+		port:     port,
 		channel:  make(chan interface{}, 100),
 		ctx:      ctx,
 		cancel:   cancel,
+		streamConfig: streamConfig,
 	}
 	return server
 }
@@ -179,7 +187,7 @@ func (s *Server) handlePublishStarted(event PublishStarted) {
 	}
 
 	// 스트림 생성 또는 가져오기
-	stream := s.GetOrCreateStream(event.StreamName)
+	stream := s.GetOrCreateStream(event.StreamName, s.streamConfig)
 	stream.SetPublisher(publisher) // session 객체 직접 전달
 
 	slog.Info("Publisher registered", "streamName", event.StreamName, "sessionId", event.SessionId)
@@ -211,7 +219,7 @@ func (s *Server) handlePlayStarted(event PlayStarted) {
 	}
 
 	// 스트림 생성 또는 가져오기
-	stream := s.GetOrCreateStream(event.StreamName)
+	stream := s.GetOrCreateStream(event.StreamName, s.streamConfig)
 	stream.AddPlayer(player) // session 객체 직접 전달 (캐시 데이터 자동 전송)
 
 	slog.Info("Player registered", "streamName", event.StreamName, "sessionId", event.SessionId, "playerCount", stream.GetPlayerCount())
@@ -279,12 +287,12 @@ func (s *Server) findSessionById(sessionId string) *session {
 }
 
 // GetOrCreateStream은 스트림을 가져오거나 생성
-func (s *Server) GetOrCreateStream(streamName string) *Stream {
+func (s *Server) GetOrCreateStream(streamName string, config StreamConfig) *Stream {
 	stream, exists := s.streams[streamName]
 	if !exists {
-		stream = NewStream(streamName)
+		stream = NewStream(streamName, config.GopCacheSize, config.MaxPlayersPerStream)
 		s.streams[streamName] = stream
-		slog.Info("Created new stream", "streamName", streamName)
+		slog.Info("Created new stream", "streamName", streamName, "gopCacheSize", config.GopCacheSize, "maxPlayers", config.MaxPlayersPerStream)
 	}
 	return stream
 }
@@ -303,7 +311,8 @@ func (s *Server) RemoveStream(streamName string) {
 
 
 func (s *Server) createListener() (net.Listener, error) {
-	ln, err := net.Listen("tcp", ":1935")
+	addr := fmt.Sprintf(":%d", s.port)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		slog.Info("Error starting RTMP server", "err", err)
 		return nil, err

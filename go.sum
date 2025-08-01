@@ -1,4 +1,6 @@
 github.com/lmittmann/tint v1.1.1 h1:xmmGuinUsCSxWdwH1OqMUQ4tzQsq3BdjJLAAmVKJ9Dw=
 github.com/lmittmann/tint v1.1.1/go.mod h1:HIS3gSy7qNwGCj+5oRjAutErFBl4BzdQP6cJZ0NfMwE=
-github.com/zhangpeihao/goamf v0.0.0-20140409082417-3ff2c19514a8 h1:r1JUI0wuHlgRb8jNd3zPBBkjUdrjpVKr8SdJWc8ntg8=
-github.com/zhangpeihao/goamf v0.0.0-20140409082417-3ff2c19514a8/go.mod h1:RZd/IqzNpFANwOB9rVmsnAYpo/6KesK4PqrN1a5cRgg=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=

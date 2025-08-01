@@ -11,7 +11,7 @@ import (
 )
 
 // initLogger는 애플리케이션의 기본 slog 로거를 설정합니다.
-func InitLogger() {
+func InitLogger(config *Config) {
 	// 프로젝트의 루트 경로를 정의합니다.
 	// 일반적으로 main 함수가 있는 디렉토리나, go.mod 파일이 있는 디렉토리를 기준으로 합니다.
 	// 현재 실행 파일의 디렉토리를 기준으로 프로젝트 루트를 찾습니다.
@@ -45,7 +45,7 @@ func InitLogger() {
 
 	// tint.NewHandler를 사용하여 컬러 출력 및 slog.HandlerOptions 설정을 합니다.
 	handler := tint.NewHandler(os.Stdout, &tint.Options{
-		Level:      slog.LevelDebug, // DEBUG 레벨까지 모두 출력
+		Level:      config.GetSlogLevel(), // 설정에서 로그 레벨 가져오기
 		AddSource:  true,            // 소스 코드 정보 포함 (ReplaceAttr와 함께 사용)
 		NoColor:    false,           // 컬러 출력 활성화
 		TimeFormat: time.RFC3339,    // 시간 포맷

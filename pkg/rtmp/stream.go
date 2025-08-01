@@ -17,6 +17,10 @@ type Stream struct {
 
 	// 오디오 캐시 (최근 프레임들)
 	audioCache AudioCache
+
+	// 설정 값들
+	gopCacheSize        int
+	maxPlayersPerStream int
 }
 
 // VideoFrame은 비디오 프레임 정보
@@ -78,7 +82,7 @@ func concatChunks(chunks [][]byte) []byte {
 	return result
 }
 // NewStream은 새로운 스트림을 생성
-func NewStream(name string) *Stream {
+func NewStream(name string, gopCacheSize, maxPlayersPerStream int) *Stream {
 	return &Stream{
 		name:    name,
 		players: make(map[*session]struct{}),
@@ -89,6 +93,8 @@ func NewStream(name string) *Stream {
 			recentFrames: make([]AudioFrame, 0),
 			maxFrames:    10, // 최대 10개 오디오 프레임 캐시
 		},
+		gopCacheSize:        gopCacheSize,
+		maxPlayersPerStream: maxPlayersPerStream,
 	}
 }
 
@@ -176,6 +182,12 @@ func (s *Stream) RemovePublisher() {
 
 // AddPlayer는 플레이어를 추가하고 즉시 캐시된 데이터를 전송
 func (s *Stream) AddPlayer(player *session) {
+	// 최대 플레이어 수 체크
+	if s.maxPlayersPerStream > 0 && len(s.players) >= s.maxPlayersPerStream {
+		slog.Warn("Maximum players reached for stream", "streamName", s.name, "maxPlayers", s.maxPlayersPerStream, "currentPlayers", len(s.players))
+		return
+	}
+
 	s.players[player] = struct{}{}
 	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
 
@@ -254,9 +266,9 @@ func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data [][]byte
 			}
 			s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
-			// 캐시 크기 제한 (최대 50프레임)
-			if len(s.videoCache.gopFrames) > 50 {
-				s.videoCache.gopFrames = s.videoCache.gopFrames[len(s.videoCache.gopFrames)-50:]
+			// 캐시 크기 제한 (설정에서 가져오기)
+			if s.gopCacheSize > 0 && len(s.videoCache.gopFrames) > s.gopCacheSize {
+				s.videoCache.gopFrames = s.videoCache.gopFrames[len(s.videoCache.gopFrames)-s.gopCacheSize:]
 			}
 		}
 	}

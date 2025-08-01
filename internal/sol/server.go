@@ -2,6 +2,7 @@ package sol
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -16,20 +17,34 @@ type Server struct {
 	channel chan interface{}
 	ctx     context.Context    // 루트 컨텍스트
 	cancel  context.CancelFunc // 컨텍스트 취소 함수
+	config  *Config            // 설정
 }
 
 func NewServer() *Server {
-	InitLogger()
+	// 설정 로드 (로거 초기화 전에 먼저)
+	config, err := LoadConfig()
+	if err != nil {
+		// 설정 로드 실패 시 기본 로거로 에러 출력
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 설정을 기반으로 로거 초기화
+	InitLogger(config)
 
 	// 취소 가능한 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sol := &Server{
 		channel: make(chan interface{}, 10),
-		rtmp:    rtmp.NewServer(),
+		rtmp:    rtmp.NewServer(config.RTMP.Port, rtmp.StreamConfig{
+			GopCacheSize:        config.Stream.GopCacheSize,
+			MaxPlayersPerStream: config.Stream.MaxPlayersPerStream,
+		}),
 		ticker:  time.NewTicker(1000 * time.Second),
 		ctx:     ctx,
 		cancel:  cancel,
+		config:  config,
 	}
 	return sol
 }
@@ -43,7 +58,7 @@ func (s *Server) Start() {
 		os.Exit(1)
 	}
 	
-	slog.Info("RTMP Server started on port 1935")
+	slog.Info("RTMP Server started", "port", s.config.RTMP.Port)
 	
 	// 이벤트 루프 시작
 	go s.eventLoop()

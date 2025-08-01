@@ -1,0 +1,14 @@
+# Sol RTMP Server Configuration
+
+# RTMP 서버 설정
+rtmp:
+  port: 1935
+
+# 로깅 설정
+logging:
+  level: info  # debug, info, warn, error
+
+# 스트림 관련 설정
+stream:
+  gop_cache_size: 10
+  max_players_per_stream: 100
