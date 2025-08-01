@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sol/pkg/rtmp"
+	"sol/pkg/rtsp"
 	"syscall"
 	"time"
 )
@@ -14,6 +15,7 @@ import (
 type Server struct {
 	ticker  *time.Ticker
 	rtmp    *rtmp.Server
+	rtsp    *rtsp.Server
 	channel chan interface{}
 	ctx     context.Context    // 루트 컨텍스트
 	cancel  context.CancelFunc // 컨텍스트 취소 함수
@@ -24,7 +26,7 @@ func NewServer() *Server {
 	// 설정 로드 (로거 초기화 전에 먼저)
 	config, err := LoadConfig()
 	if err != nil {
-		// 설정 로드 실패 시 기본 로거로 에러 출력
+		// 설정 로드 실패 시 기본 로거로 에러 출력 후 종료
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
@@ -41,6 +43,10 @@ func NewServer() *Server {
 			GopCacheSize:        config.Stream.GopCacheSize,
 			MaxPlayersPerStream: config.Stream.MaxPlayersPerStream,
 		}),
+		rtsp:    rtsp.NewServer(rtsp.RTSPConfig{
+			Port:    config.RTSP.Port,
+			Timeout: config.RTSP.Timeout,
+		}),
 		ticker:  time.NewTicker(1000 * time.Second),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -50,7 +56,7 @@ func NewServer() *Server {
 }
 
 func (s *Server) Start() {
-	slog.Info("RTMP Server starting...")
+	slog.Info("Servers starting...")
 	
 	// RTMP 서버 시작
 	if err := s.rtmp.Start(); err != nil {
@@ -59,6 +65,14 @@ func (s *Server) Start() {
 	}
 	
 	slog.Info("RTMP Server started", "port", s.config.RTMP.Port)
+	
+	// RTSP 서버 시작
+	if err := s.rtsp.Start(); err != nil {
+		slog.Error("Failed to start RTSP server", "err", err)
+		os.Exit(1)
+	}
+	
+	slog.Info("RTSP Server started", "port", s.config.RTSP.Port)
 	
 	// 이벤트 루프 시작
 	go s.eventLoop()
@@ -95,13 +109,16 @@ func (s *Server) shutdown() {
 	// 2. RTMP 서버 종료
 	s.rtmp.Stop()
 	
-	// 3. 티커 종료
+	// 3. RTSP 서버 종료
+	s.rtsp.Stop()
+	
+	// 4. 티커 종료
 	if s.ticker != nil {
 		s.ticker.Stop()
 		slog.Info("Ticker stopped")
 	}
 	
-	// 4. 채널 청소
+	// 5. 채널 청소
 	for {
 		select {
 		case <-s.channel:

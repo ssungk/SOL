@@ -12,12 +12,18 @@ import (
 
 type Config struct {
 	RTMP    RTMPConfig    `yaml:"rtmp"`
+	RTSP    RTSPConfig    `yaml:"rtsp"`
 	Logging LoggingConfig `yaml:"logging"`
 	Stream  StreamConfig  `yaml:"stream"`
 }
 
 type RTMPConfig struct {
 	Port int `yaml:"port"`
+}
+
+type RTSPConfig struct {
+	Port    int `yaml:"port"`
+	Timeout int `yaml:"timeout"`
 }
 
 type LoggingConfig struct {
@@ -29,14 +35,44 @@ type StreamConfig struct {
 	MaxPlayersPerStream int `yaml:"max_players_per_stream"`
 }
 
+// GetConfigWithDefaults returns default configuration values
+func GetConfigWithDefaults() *Config {
+	return &Config{
+		RTMP: RTMPConfig{
+			Port: 1935,
+		},
+		RTSP: RTSPConfig{
+			Port: 554,
+			Timeout: 60,
+		},
+		Logging: LoggingConfig{
+			Level: "info",
+		},
+		Stream: StreamConfig{
+			GopCacheSize:        10,
+			MaxPlayersPerStream: 100,
+		},
+	}
+}
+
 // LoadConfig loads configuration from yaml file
 func LoadConfig() (*Config, error) {
+	// 기본 설정값으로 초기화
+	config := GetConfigWithDefaults()
+
 	// 설정 파일 경로 결정 (프로젝트 루트의 configs/default.yaml)
 	configPath := filepath.Join("configs", "default.yaml")
 	
-	// 파일 존재 확인
+	// 파일 존재 확인 - 없으면 기본값 사용
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file not found: %s", configPath)
+		fmt.Printf("Config file not found (%s), using default values:\n", configPath)
+		fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
+		fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
+		fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+		fmt.Printf("  Log Level: %s\n", config.Logging.Level)
+	fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
+	fmt.Printf("  Max Players Per Stream: %d\n", config.Stream.MaxPlayersPerStream)
+		return config, nil
 	}
 	
 	// 파일 읽기
@@ -45,18 +81,24 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 	
-	// YAML 파싱
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	// YAML 파싱 - 기존 기본값 위에 덮어쓰기
+	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 	
-	// 기본값 설정 및 검증
+	// 설정 검증
 	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 	
-	return &config, nil
+	fmt.Printf("Config loaded from %s:\n", configPath)
+	fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
+	fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
+	fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+	fmt.Printf("  Log Level: %s\n", config.Logging.Level)
+	fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
+	fmt.Printf("  Max Players Per Stream: %d\n", config.Stream.MaxPlayersPerStream)
+	return config, nil
 }
 
 // validate checks if the configuration is valid
@@ -64,6 +106,16 @@ func (c *Config) validate() error {
 	// RTMP 포트 검증
 	if c.RTMP.Port <= 0 || c.RTMP.Port > 65535 {
 		return fmt.Errorf("invalid rtmp port: %d (must be between 1-65535)", c.RTMP.Port)
+	}
+	
+	// RTSP 포트 검증
+	if c.RTSP.Port <= 0 || c.RTSP.Port > 65535 {
+		return fmt.Errorf("invalid rtsp port: %d (must be between 1-65535)", c.RTSP.Port)
+	}
+	
+	// RTSP 타임아웃 검증
+	if c.RTSP.Timeout <= 0 {
+		return fmt.Errorf("invalid rtsp timeout: %d (must be positive)", c.RTSP.Timeout)
 	}
 	
 	// 로그 레벨 검증
