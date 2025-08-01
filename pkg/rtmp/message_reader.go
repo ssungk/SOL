@@ -127,19 +127,37 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 	slog.Info("fmt", "fmt", format)
 
 	if chunkStreamId == 0 {
+		// 2바이트 basic header: chunk stream ID = 64 + 다음 바이트 값
 		buf := [1]byte{}
 		if _, err := io.ReadFull(r, buf[:]); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read 2-byte basic header: %w", err)
 		}
-		chunkStreamId = chunkStreamId + uint32(buf[0])
+		chunkStreamId = 64 + uint32(buf[0])
+		
+		// 범위 검증 (64-319)
+		if chunkStreamId > 319 {
+			return nil, fmt.Errorf("invalid chunk stream ID %d for 2-byte header (must be 64-319)", chunkStreamId)
+		}
+		
 	} else if chunkStreamId == 1 {
+		// 3바이트 basic header: chunk stream ID = 64 + 리틀엔디안 16비트
 		buf := [2]byte{}
 		if _, err := io.ReadFull(r, buf[:2]); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read 3-byte basic header: %w", err)
 		}
-		chunkStreamId = 64 + uint32(binary.LittleEndian.Uint16(buf[:]))
-
+		value := uint32(binary.LittleEndian.Uint16(buf[:]))
+		chunkStreamId = 64 + value
+		
+		// 범위 검증 (320-65599)
+		if chunkStreamId < 320 || chunkStreamId > 65599 {
+			return nil, fmt.Errorf("invalid chunk stream ID %d for 3-byte header (must be 320-65599)", chunkStreamId)
+		}
+		
+	} else if chunkStreamId < 2 {
+		// chunk stream ID 0과 1은 특별한 의미로 사용되어 일반 사용 불가
+		return nil, fmt.Errorf("invalid chunk stream ID %d (must be >= 2)", chunkStreamId)
 	} else {
+		// 1바이트 basic header: chunk stream ID = 2-63 (직접 사용)
 		slog.Info("chunkStreamId", "chunkStreamId", chunkStreamId)
 	}
 
