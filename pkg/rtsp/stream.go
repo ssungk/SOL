@@ -7,13 +7,13 @@ import (
 
 // Stream represents an RTSP stream
 type Stream struct {
-	name        string
-	sessions    map[*Session]struct{} // connected sessions
-	publisher   *Session              // publishing session (for RECORD)
-	players     map[*Session]struct{} // playing sessions
-	sdp         string                // Session Description Protocol
-	isActive    bool
-	mutex       sync.RWMutex
+	name      string
+	sessions  map[*Session]struct{} // connected sessions
+	publisher *Session              // publishing session (for RECORD)
+	players   map[*Session]struct{} // playing sessions
+	sdp       string                // Session Description Protocol
+	isActive  bool
+	mutex     sync.RWMutex
 }
 
 // StreamManager manages RTSP streams
@@ -43,14 +43,14 @@ func NewStream(name string) *Stream {
 func (sm *StreamManager) GetOrCreateStream(streamPath string) *Stream {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	stream, exists := sm.streams[streamPath]
 	if !exists {
 		stream = NewStream(streamPath)
 		sm.streams[streamPath] = stream
 		slog.Info("RTSP stream created", "streamPath", streamPath)
 	}
-	
+
 	return stream
 }
 
@@ -58,7 +58,7 @@ func (sm *StreamManager) GetOrCreateStream(streamPath string) *Stream {
 func (sm *StreamManager) GetStream(streamPath string) *Stream {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	return sm.streams[streamPath]
 }
 
@@ -66,7 +66,7 @@ func (sm *StreamManager) GetStream(streamPath string) *Stream {
 func (sm *StreamManager) RemoveStream(streamPath string) {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	delete(sm.streams, streamPath)
 	slog.Info("RTSP stream removed", "streamPath", streamPath)
 }
@@ -75,12 +75,12 @@ func (sm *StreamManager) RemoveStream(streamPath string) {
 func (sm *StreamManager) GetAllStreams() map[string]*Stream {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	result := make(map[string]*Stream)
 	for path, stream := range sm.streams {
 		result[path] = stream
 	}
-	
+
 	return result
 }
 
@@ -88,7 +88,7 @@ func (sm *StreamManager) GetAllStreams() map[string]*Stream {
 func (s *Stream) AddSession(session *Session) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	s.sessions[session] = struct{}{}
 	slog.Info("Session added to RTSP stream", "streamPath", s.name, "sessionId", session.sessionId, "sessionCount", len(s.sessions))
 }
@@ -97,17 +97,17 @@ func (s *Stream) AddSession(session *Session) {
 func (s *Stream) RemoveSession(session *Session) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	delete(s.sessions, session)
 	delete(s.players, session)
-	
+
 	// Clear publisher if it's the same session
 	if s.publisher == session {
 		s.publisher = nil
 		s.isActive = false
 		slog.Info("Publisher removed from RTSP stream", "streamPath", s.name)
 	}
-	
+
 	slog.Info("Session removed from RTSP stream", "streamPath", s.name, "sessionId", session.sessionId, "sessionCount", len(s.sessions))
 }
 
@@ -115,11 +115,11 @@ func (s *Stream) RemoveSession(session *Session) {
 func (s *Stream) SetPublisher(session *Session, sdp string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	s.publisher = session
 	s.sdp = sdp
 	s.isActive = true
-	
+
 	slog.Info("Publisher set for RTSP stream", "streamPath", s.name, "sessionId", session.sessionId)
 }
 
@@ -127,7 +127,7 @@ func (s *Stream) SetPublisher(session *Session, sdp string) {
 func (s *Stream) AddPlayer(session *Session) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	s.players[session] = struct{}{}
 	slog.Info("Player added to RTSP stream", "streamPath", s.name, "sessionId", session.sessionId, "playerCount", len(s.players))
 }
@@ -136,7 +136,7 @@ func (s *Stream) AddPlayer(session *Session) {
 func (s *Stream) RemovePlayer(session *Session) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	delete(s.players, session)
 	slog.Info("Player removed from RTSP stream", "streamPath", s.name, "sessionId", session.sessionId, "playerCount", len(s.players))
 }
@@ -145,7 +145,7 @@ func (s *Stream) RemovePlayer(session *Session) {
 func (s *Stream) GetSDP() string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	return s.sdp
 }
 
@@ -153,7 +153,7 @@ func (s *Stream) GetSDP() string {
 func (s *Stream) IsActive() bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	return s.isActive
 }
 
@@ -161,7 +161,7 @@ func (s *Stream) IsActive() bool {
 func (s *Stream) GetPlayerCount() int {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	return len(s.players)
 }
 
@@ -169,7 +169,7 @@ func (s *Stream) GetPlayerCount() int {
 func (s *Stream) GetSessionCount() int {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	return len(s.sessions)
 }
 
@@ -181,12 +181,32 @@ func (s *Stream) BroadcastRTPPacket(data []byte) {
 		players = append(players, player)
 	}
 	s.mutex.RUnlock()
-	
-	// Send to all players (in practice, this would be sent via RTP)
+
+	// Send RTP packet to all players
 	for _, player := range players {
-		// This is where RTP packets would be sent to each player
-		// For now, we just log it
-		slog.Debug("RTP packet would be sent to player", "streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
+		if player.IsInterleavedMode() {
+			// TCP interleaved mode
+			err := player.SendInterleavedRTPPacket(data)
+			if err != nil {
+				slog.Error("Failed to send interleaved RTP packet to player",
+					"streamPath", s.name, "sessionId", player.sessionId, "err", err)
+			} else {
+				slog.Debug("Interleaved RTP packet sent to player",
+					"streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
+			}
+		} else if player.IsUDPMode() && player.rtpSession != nil && player.rtpTransport != nil {
+			// UDP mode
+			err := player.rtpTransport.SendRTPPacket(player.rtpSession.GetSSRC(), data, 0, false)
+			if err != nil {
+				slog.Error("Failed to send UDP RTP packet to player",
+					"streamPath", s.name, "sessionId", player.sessionId, "err", err)
+			} else {
+				slog.Debug("UDP RTP packet sent to player",
+					"streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
+			}
+		} else {
+			slog.Debug("Player has no valid transport setup", "streamPath", s.name, "sessionId", player.sessionId)
+		}
 	}
 }
 
@@ -194,7 +214,7 @@ func (s *Stream) BroadcastRTPPacket(data []byte) {
 func (s *Stream) CleanupInactiveSessions() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	// This would typically check for inactive sessions and remove them
 	// For now, it's a placeholder
 }

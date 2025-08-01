@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sol/pkg/rtp"
 )
 
 // RTSPConfig represents RTSP server configuration
@@ -16,14 +17,16 @@ type RTSPConfig struct {
 
 // Server represents an RTSP server
 type Server struct {
-	port          int
-	timeout       int
-	sessions      map[string]*Session // sessionId -> session
-	streamManager *StreamManager
-	channel       chan interface{}
-	listener      net.Listener
-	ctx           context.Context
-	cancel        context.CancelFunc
+	port            int
+	timeout         int
+	sessions        map[string]*Session // sessionId -> session
+	streamManager   *StreamManager
+	rtpTransport    *rtp.RTPTransport
+	rtpStarted      bool
+	channel         chan interface{}
+	listener        net.Listener
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // NewServer creates a new RTSP server
@@ -35,6 +38,7 @@ func NewServer(config RTSPConfig) *Server {
 		timeout:       config.Timeout,
 		sessions:      make(map[string]*Session),
 		streamManager: NewStreamManager(),
+		rtpTransport:  rtp.NewRTPTransport(),
 		channel:       make(chan interface{}, 100),
 		ctx:           ctx,
 		cancel:        cancel,
@@ -48,6 +52,8 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.listener = ln
+	
+	// RTP transport는 첫 번째 SETUP 요청시에 시작됩니다
 	
 	// Start event loop
 	go s.eventLoop()
@@ -64,6 +70,11 @@ func (s *Server) Stop() {
 	
 	// Cancel context
 	s.cancel()
+	
+	// Stop RTP transport
+	if s.rtpStarted {
+		s.rtpTransport.Stop()
+	}
 	
 	// Close listener
 	if s.listener != nil {
@@ -292,7 +303,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 		}
 		
 		// Create new session
-		session := NewSession(conn, s.channel)
+		session := NewSession(conn, s.channel, s.rtpTransport)
 		s.sessions[session.sessionId] = session
 		
 		// Start session handling
@@ -307,4 +318,22 @@ func closeWithLog(c io.Closer) {
 	if err := c.Close(); err != nil {
 		slog.Error("Error closing resource", "err", err)
 	}
+}
+
+// ensureRTPTransport starts RTP transport if not already started
+func (s *Server) ensureRTPTransport() error {
+	if s.rtpStarted {
+		return nil
+	}
+	
+	// Start RTP transport (use base port + 1000 for RTP port)
+	rtpPort := s.port + 1000
+	if err := s.rtpTransport.StartUDP(rtpPort); err != nil {
+		slog.Error("Failed to start RTP transport", "err", err)
+		return err
+	}
+	
+	s.rtpStarted = true
+	slog.Info("RTP transport started on demand", "rtpPort", rtpPort)
+	return nil
 }

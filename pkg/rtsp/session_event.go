@@ -42,18 +42,11 @@ type AnnounceReceived struct {
 	SDP        string
 }
 
-// RTPPacketReceived represents RTP packet data
+// RTPPacketReceived represents RTP packet data from client
 type RTPPacketReceived struct {
-	SessionId  string
-	StreamPath string
-	Data       []byte
-	Timestamp  uint32
+	SessionId   string
+	StreamPath  string
+	Data        []byte
+	Timestamp   uint32
 	PayloadType uint8
-}
-
-// RTCPPacketReceived represents RTCP packet data
-type RTCPPacketReceived struct {
-	SessionId  string
-	StreamPath string
-	Data       []byte
 }
