@@ -179,6 +179,11 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
+	// Fmt0에서 타임스탬프 단조성 검증 (이전 헤더가 있는 경우)
+	if header != nil && timestamp < header.Timestamp {
+		slog.Warn("Non-monotonic timestamp detected in Fmt0", "previousTimestamp", header.Timestamp, "newTimestamp", timestamp)
+	}
+
 	slog.Info("Fmt0MessageHeade", "timestamp", timestamp, "MessageLength", length, "MessageTypeID", typeId, "MessageStreamID", streamId)
 
 	return newMessageHeader(timestamp, length, typeId, streamId), nil
@@ -202,7 +207,22 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	return newMessageHeader(timestampDelta, length, typeId, header.streamId), nil
+	// 이전 타임스탬프에 델타를 더해서 새로운 타임스탬프 계산
+	newTimestamp := header.Timestamp + timestampDelta
+
+	// 타임스탬프 단조성 검증 (델타가 0이 아닌 경우)
+	// 오버플로우 상황은 제외 (newTimestamp가 작아진 경우가 정상적인 wrap-around인지 확인)
+	if timestampDelta > 0 && newTimestamp <= header.Timestamp {
+		// 32비트 오버플로우가 아닌 실제 단조성 위반인지 확인
+		if header.Timestamp < 0xF0000000 || newTimestamp > 0x10000000 {
+			slog.Warn("Non-monotonic timestamp detected in Fmt1",
+				"previousTimestamp", header.Timestamp,
+				"timestampDelta", timestampDelta,
+				"newTimestamp", newTimestamp)
+		}
+	}
+
+	return newMessageHeader(newTimestamp, length, typeId, header.streamId), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -220,7 +240,22 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	return newMessageHeader(timestampDelta, header.length, header.typeId, header.streamId), nil
+	// 이전 타임스탬프에 델타를 더해서 새로운 타임스탬프 계산
+	newTimestamp := header.Timestamp + timestampDelta
+
+	// 타임스탬프 단조성 검증 (델타가 0이 아닌 경우)
+	// 오버플로우 상황은 제외 (newTimestamp가 작아진 경우가 정상적인 wrap-around인지 확인)
+	if timestampDelta > 0 && newTimestamp <= header.Timestamp {
+		// 32비트 오버플로우가 아닌 실제 단조성 위반인지 확인
+		if header.Timestamp < 0xF0000000 || newTimestamp > 0x10000000 {
+			slog.Warn("Non-monotonic timestamp detected in Fmt2",
+				"previousTimestamp", header.Timestamp,
+				"timestampDelta", timestampDelta,
+				"newTimestamp", newTimestamp)
+		}
+	}
+
+	return newMessageHeader(newTimestamp, header.length, header.typeId, header.streamId), nil
 }
 
 func readFmt3MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
