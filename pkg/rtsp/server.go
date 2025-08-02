@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sol/pkg/rtp"
+	"sync"
 )
 
 // RTSPConfig represents RTSP server configuration
@@ -23,14 +24,16 @@ type Server struct {
 	streamManager   *StreamManager
 	rtpTransport    *rtp.RTPTransport
 	rtpStarted      bool
-	channel         chan interface{}
+	channel         chan interface{}    // 내부 채널
+	externalChannel chan<- interface{} // 외부 송신 전용 채널
+	wg              *sync.WaitGroup     // 외부 WaitGroup 참조
 	listener        net.Listener
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
 
 // NewServer creates a new RTSP server
-func NewServer(config RTSPConfig) *Server {
+func NewServer(config RTSPConfig, externalChannel chan<- interface{}, wg *sync.WaitGroup) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	return &Server{
@@ -39,7 +42,9 @@ func NewServer(config RTSPConfig) *Server {
 		sessions:      make(map[string]*Session),
 		streamManager: NewStreamManager(),
 		rtpTransport:  rtp.NewRTPTransport(),
-		channel:       make(chan interface{}, 100),
+		channel:       make(chan interface{}, 100), // 내부 채널
+		externalChannel: externalChannel,             // 외부 송신 전용 채널
+		wg:            wg,                           // 외부 WaitGroup 참조
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -112,6 +117,10 @@ cleanup_done:
 
 // eventLoop processes events
 func (s *Server) eventLoop() {
+	// 송신자로 등록
+	s.wg.Add(1)
+	defer s.wg.Done()
+	
 	for {
 		select {
 		case event := <-s.channel:

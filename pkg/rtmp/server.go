@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 )
 
 // StreamConfig는 스트림 설정을 담는 구조체
@@ -18,21 +19,25 @@ type Server struct {
 	sessions map[string]*session // sessionId를 키로 사용
 	streams  map[string]*Stream  // 스트림 직접 관리
 	port     int
-	channel  chan interface{}
+	channel  chan interface{}    // 내부 채널
+	externalChannel chan<- interface{} // 외부 송신 전용 채널
+	wg       *sync.WaitGroup     // 외부 WaitGroup 참조
 	listener net.Listener        // 리스너 참조 저장
 	ctx      context.Context     // 컨텍스트
 	cancel   context.CancelFunc  // 컨텍스트 취소 함수
 	streamConfig StreamConfig     // 스트림 설정
 }
 
-func NewServer(port int, streamConfig StreamConfig) *Server {
+func NewServer(port int, streamConfig StreamConfig, externalChannel chan<- interface{}, wg *sync.WaitGroup) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	server := &Server{
 		sessions: make(map[string]*session), // sessionId를 키로 사용
 		streams:  make(map[string]*Stream),  // 스트림 맵 초기화
 		port:     port,
-		channel:  make(chan interface{}, 100),
+		channel:  make(chan interface{}, 100), // 내부 채널
+		externalChannel: externalChannel,         // 외부 송신 전용 채널
+		wg:       wg,                           // 외부 WaitGroup 참조
 		ctx:      ctx,
 		cancel:   cancel,
 		streamConfig: streamConfig,
@@ -109,12 +114,16 @@ cleanup_done:
 }
 
 func (s *Server) eventLoop() {
+	// 송신자로 등록
+	s.wg.Add(1)
+	defer s.wg.Done()
+	
 	for {
 		select {
 		case data := <-s.channel:
 			s.channelHandler(data)
 		case <-s.ctx.Done():
-			slog.Info("Event loop stopping...")
+			slog.Info("RTMP event loop stopping...")
 			return
 		}
 	}
