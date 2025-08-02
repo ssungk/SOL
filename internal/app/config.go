@@ -1,4 +1,4 @@
-package sol
+package app
 
 import (
 	"fmt"
@@ -13,6 +13,7 @@ import (
 type Config struct {
 	RTMP    RTMPConfig    `yaml:"rtmp"`
 	RTSP    RTSPConfig    `yaml:"rtsp"`
+	API     APIConfig     `yaml:"api"`
 	Logging LoggingConfig `yaml:"logging"`
 	Stream  StreamConfig  `yaml:"stream"`
 }
@@ -24,6 +25,10 @@ type RTMPConfig struct {
 type RTSPConfig struct {
 	Port    int `yaml:"port"`
 	Timeout int `yaml:"timeout"`
+}
+
+type APIConfig struct {
+	Port int `yaml:"port"`
 }
 
 type LoggingConfig struct {
@@ -44,6 +49,9 @@ func GetConfigWithDefaults() *Config {
 		RTSP: RTSPConfig{
 			Port: 554,
 			Timeout: 60,
+		},
+		API: APIConfig{
+			Port: 8080,
 		},
 		Logging: LoggingConfig{
 			Level: "info",
@@ -69,6 +77,7 @@ func LoadConfig() (*Config, error) {
 		fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 		fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 		fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+		fmt.Printf("  API Port: %d\n", config.API.Port)
 		fmt.Printf("  Log Level: %s\n", config.Logging.Level)
 	fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
 	fmt.Printf("  Max Players Per Stream: %d\n", config.Stream.MaxPlayersPerStream)
@@ -95,6 +104,7 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 	fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 	fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+	fmt.Printf("  API Port: %d\n", config.API.Port)
 	fmt.Printf("  Log Level: %s\n", config.Logging.Level)
 	fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
 	fmt.Printf("  Max Players Per Stream: %d\n", config.Stream.MaxPlayersPerStream)
@@ -116,6 +126,11 @@ func (c *Config) validate() error {
 	// RTSP 타임아웃 검증
 	if c.RTSP.Timeout <= 0 {
 		return fmt.Errorf("invalid rtsp timeout: %d (must be positive)", c.RTSP.Timeout)
+	}
+	
+	// API 포트 검증
+	if c.API.Port <= 0 || c.API.Port > 65535 {
+		return fmt.Errorf("invalid api port: %d (must be between 1-65535)", c.API.Port)
 	}
 	
 	// 로그 레벨 검증
