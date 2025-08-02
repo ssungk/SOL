@@ -119,33 +119,33 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 		return nil, err
 	}
 
-	var chunkStreamId uint32
-
 	format := (buf[0] & 0xC0) >> 6
-	chunkStreamId = uint32(buf[0] & 0x3F)
+	firstByte := buf[0] & 0x3F
+	var chunkStreamId uint32
 
 	slog.Info("fmt", "fmt", format)
 
-	if chunkStreamId == 0 {
+	switch firstByte {
+	case 0:
 		// 2바이트 basic header: chunk stream ID = 64 + 다음 바이트 값
-		buf := [1]byte{}
-		if _, err := io.ReadFull(r, buf[:]); err != nil {
+		secondByte := [1]byte{}
+		if _, err := io.ReadFull(r, secondByte[:]); err != nil {
 			return nil, fmt.Errorf("failed to read 2-byte basic header: %w", err)
 		}
-		chunkStreamId = 64 + uint32(buf[0])
+		chunkStreamId = 64 + uint32(secondByte[0])
 		
 		// 범위 검증 (64-319)
 		if chunkStreamId > 319 {
 			return nil, fmt.Errorf("invalid chunk stream ID %d for 2-byte header (must be 64-319)", chunkStreamId)
 		}
 		
-	} else if chunkStreamId == 1 {
+	case 1:
 		// 3바이트 basic header: chunk stream ID = 64 + 리틀엔디안 16비트
-		buf := [2]byte{}
-		if _, err := io.ReadFull(r, buf[:2]); err != nil {
+		extraBytes := [2]byte{}
+		if _, err := io.ReadFull(r, extraBytes[:2]); err != nil {
 			return nil, fmt.Errorf("failed to read 3-byte basic header: %w", err)
 		}
-		value := uint32(binary.LittleEndian.Uint16(buf[:]))
+		value := uint32(binary.LittleEndian.Uint16(extraBytes[:]))
 		chunkStreamId = 64 + value
 		
 		// 범위 검증 (320-65599)
@@ -153,11 +153,15 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 			return nil, fmt.Errorf("invalid chunk stream ID %d for 3-byte header (must be 320-65599)", chunkStreamId)
 		}
 		
-	} else if chunkStreamId < 2 {
-		// chunk stream ID 0과 1은 특별한 의미로 사용되어 일반 사용 불가
-		return nil, fmt.Errorf("invalid chunk stream ID %d (must be >= 2)", chunkStreamId)
-	} else {
+	default:
 		// 1바이트 basic header: chunk stream ID = 2-63 (직접 사용)
+		chunkStreamId = uint32(firstByte)
+		
+		// 유효한 범위 검증 (2-63)
+		if chunkStreamId < 2 {
+			return nil, fmt.Errorf("invalid chunk stream ID %d (must be >= 2)", chunkStreamId)
+		}
+		
 		slog.Info("chunkStreamId", "chunkStreamId", chunkStreamId)
 	}
 
@@ -197,9 +201,17 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	// Fmt0에서 타임스탬프 단조성 검증 (이전 헤더가 있는 경우)
+	// Fmt0에서 타임스탬프 단조성 검증 및 수정 (이전 헤더가 있는 경우)
 	if header != nil && timestamp < header.Timestamp {
-		slog.Warn("Non-monotonic timestamp detected in Fmt0", "previousTimestamp", header.Timestamp, "newTimestamp", timestamp)
+		// 32비트 오버플로우가 아닌 실제 역순 감지
+		if header.Timestamp < 0xF0000000 || timestamp > 0x10000000 {
+			// 비정상적인 역순 - 강제로 단조 증가 유지
+			timestamp = header.Timestamp + 1
+			slog.Warn("Fixed non-monotonic timestamp in Fmt0",
+				"previousTimestamp", header.Timestamp,
+				"originalTimestamp", readUint24BE(buf[0:3]),
+				"correctedTimestamp", timestamp)
+		}
 	}
 
 	slog.Info("Fmt0MessageHeade", "timestamp", timestamp, "MessageLength", length, "MessageTypeID", typeId, "MessageStreamID", streamId)
@@ -225,18 +237,20 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	// 이전 타임스탬프에 델타를 더해서 새로운 타임스탬프 계산
+	// 올바른 타임스탬프 계산 (32비트 산술로 오버플로우 자동 처리)
 	newTimestamp := header.Timestamp + timestampDelta
 
-	// 타임스탬프 단조성 검증 (델타가 0이 아닌 경우)
-	// 오버플로우 상황은 제외 (newTimestamp가 작아진 경우가 정상적인 wrap-around인지 확인)
-	if timestampDelta > 0 && newTimestamp <= header.Timestamp {
-		// 32비트 오버플로우가 아닌 실제 단조성 위반인지 확인
-		if header.Timestamp < 0xF0000000 || newTimestamp > 0x10000000 {
-			slog.Warn("Non-monotonic timestamp detected in Fmt1",
+	// 단조성 검증 및 수정 (델타가 0이 아닌 경우만)
+	if timestampDelta > 0 {
+		// 32비트 오버플로우는 정상적인 상황 (약 49일마다 발생)
+		// 실제 문제는 델타가 양수인데 타임스탬프가 감소하는 경우
+		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
+			// 비정상적인 역순 - 강제로 단조 증가 유지
+			newTimestamp = header.Timestamp + 1
+			slog.Warn("Fixed non-monotonic timestamp in Fmt1",
 				"previousTimestamp", header.Timestamp,
 				"timestampDelta", timestampDelta,
-				"newTimestamp", newTimestamp)
+				"correctedTimestamp", newTimestamp)
 		}
 	}
 
@@ -258,18 +272,18 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		}
 	}
 
-	// 이전 타임스탬프에 델타를 더해서 새로운 타임스탬프 계산
+	// 올바른 타임스탬프 계산
 	newTimestamp := header.Timestamp + timestampDelta
 
-	// 타임스탬프 단조성 검증 (델타가 0이 아닌 경우)
-	// 오버플로우 상황은 제외 (newTimestamp가 작아진 경우가 정상적인 wrap-around인지 확인)
-	if timestampDelta > 0 && newTimestamp <= header.Timestamp {
-		// 32비트 오버플로우가 아닌 실제 단조성 위반인지 확인
-		if header.Timestamp < 0xF0000000 || newTimestamp > 0x10000000 {
-			slog.Warn("Non-monotonic timestamp detected in Fmt2",
+	// 단조성 검증 및 수정 (델타가 0이 아닌 경우만)
+	if timestampDelta > 0 {
+		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
+			// 비정상적인 역순 - 강제로 단조 증가 유지
+			newTimestamp = header.Timestamp + 1
+			slog.Warn("Fixed non-monotonic timestamp in Fmt2",
 				"previousTimestamp", header.Timestamp,
 				"timestampDelta", timestampDelta,
-				"newTimestamp", newTimestamp)
+				"correctedTimestamp", newTimestamp)
 		}
 	}
 
@@ -292,10 +306,16 @@ func readExtendedTimestamp(r io.Reader) (uint32, error) {
 func readPayload(r io.Reader, bufferPool *sync.Pool, size uint32) ([]byte, error) {
 	buf := bufferPool.Get().([]byte)[:size]
 	if _, err := io.ReadFull(r, buf); err != nil {
+		bufferPool.Put(buf[:cap(buf)]) // 오류 시에도 버퍼 반환
 		return nil, err
 	}
 
-	return buf, nil
+	// 데이터를 복사해서 반환 (버퍼 풀 안전성 보장)
+	result := make([]byte, size)
+	copy(result, buf)
+	bufferPool.Put(buf[:cap(buf)]) // 버퍼 풀에 반환
+
+	return result, nil
 }
 
 func readUint24BE(buf []byte) uint32 {

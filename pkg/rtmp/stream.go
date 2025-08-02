@@ -58,15 +58,8 @@ type CachedFrame struct {
 	msgType   uint8 // 8=audio, 9=video
 }
 
-// copyChunks는 [][]byte를 deep copy하여 안전한 사본을 만든다
-func copyChunks(chunks [][]byte) [][]byte {
-	copied := make([][]byte, len(chunks))
-	for i, chunk := range chunks {
-		copied[i] = make([]byte, len(chunk))
-		copy(copied[i], chunk)
-	}
-	return copied
-}
+// copyChunks 함수는 zero-copy 최적화로 인해 제거됨
+// 대신 data를 직접 참조하여 메모리 효율성 향상
 
 // concatChunks는 [][]byte를 하나의 []byte로 합친다 (호환성 지원용)
 func concatChunks(chunks [][]byte) []byte {
@@ -102,21 +95,21 @@ func NewStream(name string, gopCacheSize, maxPlayersPerStream int) *Stream {
 func (s *Stream) addAudioFrame(timestamp uint32, data [][]byte) {
 	// AAC sequence header 특수 처리 - 첫 번째 청크를 기준으로 판단
 	if len(data) > 0 && len(data[0]) > 1 && ((data[0][0]>>4)&0x0F) == 10 && data[0][1] == 0 {
-		// AAC sequence header 설정
+		// AAC sequence header 설정 (zero-copy)
 		s.audioCache.sequenceHeader = &AudioFrame{
 			frameType: "AAC sequence header",
 			timestamp: timestamp,
-			data:      copyChunks(data), // Deep copy for safety
+			data:      data, // Direct reference for zero-copy
 		}
 		slog.Debug("AAC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
 	}
 
-	// 일반 오디오 프레임 추가
+	// 일반 오디오 프레임 추가 (zero-copy)
 	audioFrame := AudioFrame{
 		frameType: "audio",
 		timestamp: timestamp,
-		data:      copyChunks(data), // Deep copy for safety
+		data:      data, // Direct reference for zero-copy
 	}
 
 	// 오디오 프레임을 최근 프레임 리스트에 추가
@@ -133,9 +126,9 @@ func (s *Stream) ProcessAudioData(event AudioData) {
 	// 오디오 프레임 캐시
 	s.addAudioFrame(event.Timestamp, event.Data)
 
-	// 모든 플레이어에게 비동기 전송
+	// 모든 플레이어에게 동기적으로 전송 (race condition 방지)
 	for player := range s.players {
-		go s.sendAudioToPlayer(player, event)
+		s.sendAudioToPlayer(player, event)
 	}
 }
 
@@ -144,9 +137,9 @@ func (s *Stream) ProcessVideoData(event VideoData) {
 	// 비디오 프레임 캐시 업데이트
 	s.addVideoFrame(event.FrameType, event.Timestamp, event.Data)
 
-	// 모든 플레이어에게 비동기 전송
+	// 모든 플레이어에게 동기적으로 전송 (race condition 방지)
 	for player := range s.players {
-		go s.sendVideoToPlayer(player, event)
+		s.sendVideoToPlayer(player, event)
 	}
 }
 
@@ -155,9 +148,9 @@ func (s *Stream) ProcessMetaData(event MetaData) {
 	// 메타데이터 캐시
 	s.SetMetadata(event.Metadata)
 
-	// 모든 플레이어에게 비동기 전송
+	// 모든 플레이어에게 동기적으로 전송 (race condition 방지)
 	for player := range s.players {
-		go s.sendMetaDataToPlayer(player, event)
+		s.sendMetaDataToPlayer(player, event)
 	}
 }
 
@@ -191,8 +184,8 @@ func (s *Stream) AddPlayer(player *session) {
 	s.players[player] = struct{}{}
 	slog.Info("Player added", "streamName", s.name, "sessionId", player.sessionId, "playerCount", len(s.players))
 
-	// 새로 입장한 플레이어에게 즉시 캐시된 데이터 전송
-	go s.SendCachedDataToPlayer(player)
+	// 새로 입장한 플레이어에게 즉시 캐시된 데이터 전송 (동기적 처리)
+	s.SendCachedDataToPlayer(player)
 }
 
 // RemovePlayer는 플레이어를 제거
@@ -230,11 +223,11 @@ func (s *Stream) GetMetadata() map[string]any {
 func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data [][]byte) {
 	// H.264 AVC sequence header는 별도 처리
 	if frameType == "AVC sequence header" {
-		// AVC sequence header 설정
+		// AVC sequence header 설정 (zero-copy)
 		s.videoCache.sequenceHeader = &VideoFrame{
 			frameType: frameType,
 			timestamp: timestamp,
-			data:      copyChunks(data), // Deep copy for safety
+			data:      data, // Direct reference for zero-copy
 		}
 		slog.Debug("AVC sequence header cached", "streamName", s.name, "timestamp", timestamp)
 		return
@@ -248,11 +241,11 @@ func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data [][]byte
 			slog.Debug("New GOP started", "streamName", s.name, "timestamp", timestamp)
 		}
 
-		// 새 비디오 프레임 추가
+		// 새 비디오 프레임 추가 (zero-copy)
 		videoFrame := VideoFrame{
 			frameType: frameType,
 			timestamp: timestamp,
-			data:      copyChunks(data), // Deep copy for safety
+			data:      data, // Direct reference for zero-copy
 		}
 		s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
@@ -262,7 +255,7 @@ func (s *Stream) addVideoFrame(frameType string, timestamp uint32, data [][]byte
 			videoFrame := VideoFrame{
 				frameType: frameType,
 				timestamp: timestamp,
-				data:      copyChunks(data), // Deep copy for safety
+				data:      data, // Direct reference for zero-copy
 			}
 			s.videoCache.gopFrames = append(s.videoCache.gopFrames, videoFrame)
 
@@ -383,68 +376,66 @@ func (s *Stream) SendCachedDataToPlayer(player *session) {
 		slog.Debug("Sent cached metadata to new player", "streamName", s.name, "sessionId", player.sessionId)
 	}
 
-	// 2. 캐시된 데이터가 있으면 순서대로 전솤 (비동기로 전체 블록 전송)
+	// 2. 캐시된 데이터가 있으면 순서대로 전송 (동기적 처리)
 	hasCachedData := s.videoCache.sequenceHeader != nil || 
 		           len(s.videoCache.gopFrames) > 0 || 
 		           s.audioCache.sequenceHeader != nil ||
 		           len(s.audioCache.recentFrames) > 0
 
 	if hasCachedData {
-		go func() {
-			totalFrames := 0
-			if s.videoCache.sequenceHeader != nil {
-				totalFrames++
-			}
-			if s.audioCache.sequenceHeader != nil {
-				totalFrames++
-			}
-			totalFrames += len(s.videoCache.gopFrames) + len(s.audioCache.recentFrames)
+		totalFrames := 0
+		if s.videoCache.sequenceHeader != nil {
+			totalFrames++
+		}
+		if s.audioCache.sequenceHeader != nil {
+			totalFrames++
+		}
+		totalFrames += len(s.videoCache.gopFrames) + len(s.audioCache.recentFrames)
 
-			slog.Debug("Sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId, "frameCount", totalFrames)
+		slog.Debug("Sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId, "frameCount", totalFrames)
 
-			// 1) AVC sequence header 먼저 전송
-			if s.videoCache.sequenceHeader != nil {
-				s.sendVideoToPlayer(player, VideoData{
-					SessionId:  "cache",
-					StreamName: s.name,
-					Timestamp:  s.videoCache.sequenceHeader.timestamp,
-					FrameType:  s.videoCache.sequenceHeader.frameType,
-					Data:       s.videoCache.sequenceHeader.data,
-				})
-			}
+		// 1) AVC sequence header 먼저 전송
+		if s.videoCache.sequenceHeader != nil {
+			s.sendVideoToPlayer(player, VideoData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  s.videoCache.sequenceHeader.timestamp,
+				FrameType:  s.videoCache.sequenceHeader.frameType,
+				Data:       s.videoCache.sequenceHeader.data,
+			})
+		}
 
-			// 2) AAC sequence header 전송
-			if s.audioCache.sequenceHeader != nil {
-				s.sendAudioToPlayer(player, AudioData{
-					SessionId:  "cache",
-					StreamName: s.name,
-					Timestamp:  s.audioCache.sequenceHeader.timestamp,
-					Data:       s.audioCache.sequenceHeader.data,
-				})
-			}
+		// 2) AAC sequence header 전송
+		if s.audioCache.sequenceHeader != nil {
+			s.sendAudioToPlayer(player, AudioData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  s.audioCache.sequenceHeader.timestamp,
+				Data:       s.audioCache.sequenceHeader.data,
+			})
+		}
 
-			// 3) 비디오 GOP 프레임들 전송
-			for _, frame := range s.videoCache.gopFrames {
-				s.sendVideoToPlayer(player, VideoData{
-					SessionId:  "cache",
-					StreamName: s.name,
-					Timestamp:  frame.timestamp,
-					FrameType:  frame.frameType,
-					Data:       frame.data,
-				})
-			}
+		// 3) 비디오 GOP 프레임들 전송
+		for _, frame := range s.videoCache.gopFrames {
+			s.sendVideoToPlayer(player, VideoData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  frame.timestamp,
+				FrameType:  frame.frameType,
+				Data:       frame.data,
+			})
+		}
 
-			// 4) 최근 오디오 프레임들 전송
-			for _, frame := range s.audioCache.recentFrames {
-				s.sendAudioToPlayer(player, AudioData{
-					SessionId:  "cache",
-					StreamName: s.name,
-					Timestamp:  frame.timestamp,
-					Data:       frame.data,
-				})
-			}
+		// 4) 최근 오디오 프레임들 전송
+		for _, frame := range s.audioCache.recentFrames {
+			s.sendAudioToPlayer(player, AudioData{
+				SessionId:  "cache",
+				StreamName: s.name,
+				Timestamp:  frame.timestamp,
+				Data:       frame.data,
+			})
+		}
 
-			slog.Debug("Finished sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId)
-		}()
+		slog.Debug("Finished sending cached data to new player", "streamName", s.name, "sessionId", player.sessionId)
 	}
 }
