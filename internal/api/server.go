@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"sol/internal/sol"
 
 	"github.com/gin-gonic/gin"
@@ -48,7 +49,15 @@ func (s *Server) SetupRoutes() {
 // Start starts the API server
 func (s *Server) Start() error {
 	s.SetupRoutes()
-	return s.router.Run(":" + s.port)
+	
+	// 논블로킹으로 서버 시작
+	go func() {
+		if err := s.router.Run(":" + s.port); err != nil {
+			slog.Error("API server error", "err", err)
+		}
+	}()
+	
+	return nil
 }
 
 // GetRouter returns the gin router (for testing)

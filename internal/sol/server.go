@@ -2,10 +2,11 @@ package sol
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
-	"time"
+	"sync"
 )
 
 // StreamConfig represents stream configuration
@@ -15,32 +16,35 @@ type StreamConfig struct {
 }
 
 type Server struct {
-	ticker  *time.Ticker
 	rtmp    *rtmp.Server
 	rtsp    *rtsp.Server
 	channel chan interface{}
 	ctx     context.Context
 	cancel  context.CancelFunc
+	wg      sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
 }
 
-func NewServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig, ctx context.Context) *Server {
-	// 취소 가능한 컨텍스트 생성
-	childCtx, cancel := context.WithCancel(ctx)
+func NewServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig) *Server {
+	// 자체적으로 컨텍스트 생성
+	ctx, cancel := context.WithCancel(context.Background())
 
 	sol := &Server{
 		channel: make(chan interface{}, 10),
-		rtmp: rtmp.NewServer(rtmpPort, rtmp.StreamConfig{
-			GopCacheSize:        streamConfig.GopCacheSize,
-			MaxPlayersPerStream: streamConfig.MaxPlayersPerStream,
-		}),
-		rtsp: rtsp.NewServer(rtsp.RTSPConfig{
-			Port:    rtspPort,
-			Timeout: rtspTimeout,
-		}),
-		ticker: time.NewTicker(1000 * time.Second),
-		ctx:    childCtx,
-		cancel: cancel,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
+
+	// RTMP 서버 생성 시 Sol 서버의 채널과 WaitGroup 전달
+	sol.rtmp = rtmp.NewServer(rtmpPort, rtmp.StreamConfig{
+		GopCacheSize:        streamConfig.GopCacheSize,
+		MaxPlayersPerStream: streamConfig.MaxPlayersPerStream,
+	}, sol.channel, &sol.wg)
+
+	// RTSP 서버 생성 시 Sol 서버의 채널과 WaitGroup 전달
+	sol.rtsp = rtsp.NewServer(rtsp.RTSPConfig{
+		Port:    rtspPort,
+		Timeout: rtspTimeout,
+	}, sol.channel, &sol.wg)
 	return sol
 }
 
@@ -72,36 +76,8 @@ func (s *Server) Start() error {
 // Stop stops the server
 func (s *Server) Stop() {
 	slog.Info("Stopping Sol Server...")
-
-	// 1. 컨텍스트 취소 (모든 고루틴에 종료 신호)
 	s.cancel()
-
-	// 2. RTMP 서버 종료
-	s.rtmp.Stop()
-
-	// 3. RTSP 서버 종료
-	s.rtsp.Stop()
-
-	// 4. 티커 종료
-	if s.ticker != nil {
-		s.ticker.Stop()
-		slog.Info("Ticker stopped")
-	}
-
-	// 5. 채널 청소
-	for {
-		select {
-		case <-s.channel:
-			// 남은 이벤트 버리기
-		default:
-			// 채널이 비었으면 종료
-			goto cleanup_done
-		}
-	}
-
-cleanup_done:
-	close(s.channel)
-	slog.Info("Sol Server stopped successfully")
+	slog.Info("Sol Server stop signal sent")
 }
 
 func (s *Server) eventLoop() {
@@ -109,15 +85,33 @@ func (s *Server) eventLoop() {
 		select {
 		case data := <-s.channel:
 			s.channelHandler(data)
-		case <-s.ticker.C:
-			slog.Info("test")
 		case <-s.ctx.Done():
-			slog.Info("Sol event loop stopping...")
+			s.shutdown()
 			return
 		}
 	}
 }
 
 func (s *Server) channelHandler(data interface{}) {
+	switch v := data.(type) {
+	default:
+		slog.Warn("Unknown event type", "eventType", fmt.Sprintf("%T", v))
+	}
+}
 
+// shutdown performs the actual shutdown sequence
+func (s *Server) shutdown() {
+	slog.Info("Sol event loop stopping...")
+
+	s.rtmp.Stop()
+	slog.Info("RTMP Server stopped")
+
+	s.rtsp.Stop()
+	slog.Info("RTSP Server stopped")
+
+	// 모든 송신자(eventLoop)가 완료될 때까지 대기
+	s.wg.Wait()
+	slog.Info("All senders finished")
+
+	slog.Info("Sol Server stopped successfully")
 }
