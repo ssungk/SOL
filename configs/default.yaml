@@ -11,6 +11,10 @@ rtsp:
   port: 554                     # 기본값: 554
   timeout: 60                   # 기본값: 60 (초)
 
+# API 서버 설정
+api:
+  port: 8080                    # 기본값: 8080
+
 # 로깅 설정
 logging:
   level: info                   # 기본값: info (debug, info, warn, error)

@@ -1,4 +1,4 @@
-package sol
+package app
 
 import (
 	"log/slog"
