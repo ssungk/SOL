@@ -2,7 +2,7 @@ package api
 
 import (
 	"log/slog"
-	"sol/internal/sol"
+	"sol/internal/media"
 
 	"github.com/gin-gonic/gin"
 )
@@ -11,11 +11,11 @@ import (
 type Server struct {
 	router    *gin.Engine
 	port      string
-	solServer *sol.Server // DI된 sol 서버
+	mediaServer *media.MediaServer // DI된 media 서버
 }
 
 // NewServerWithDI creates a new API server instance with dependency injection
-func NewServerWithDI(port string, solServer *sol.Server) *Server {
+func NewServerWithDI(port string, mediaServer *media.MediaServer) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 	
@@ -26,9 +26,9 @@ func NewServerWithDI(port string, solServer *sol.Server) *Server {
 	router.Use(gin.Recovery())
 	
 	return &Server{
-		router:    router,
-		port:      port,
-		solServer: solServer,
+		router:      router,
+		port:        port,
+		mediaServer: mediaServer,
 	}
 }
 
