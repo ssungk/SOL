@@ -26,8 +26,8 @@ func (s *Server) PullHandler(c *gin.Context) {
 		// For now, ignore binding errors and always return 200
 	}
 
-	// TODO: 여기서 s.solServer를 사용하여 스트리밍 관련 기능 처리
-	// 예: s.solServer.GetStreams(), s.solServer.GetStats() 등
+	// TODO: 여기서 s.mediaServer를 사용하여 스트리밍 관련 기능 처리
+	// 예: s.mediaServer.GetStreams(), s.mediaServer.GetStats() 등
 
 	// Always return 200 OK as requested
 	response := PullResponse{

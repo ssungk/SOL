@@ -1,7 +1,7 @@
 package main
 
-import "sol/internal/app"
+import "sol/internal/sol"
 
 func main() {
-	app.NewApp().Start()
+	sol.NewApp().Start()
 }
