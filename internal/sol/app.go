@@ -36,7 +36,7 @@ func NewSol() *SOL {
 	})
 
 	// API 서버 생성 (media 서버를 DI)
-	apiServer := api.NewServerWithDI(strconv.Itoa(config.API.Port), mediaServer)
+	apiServer := api.NewServer(strconv.Itoa(config.API.Port), mediaServer)
 
 	return &SOL{
 		config:      config,

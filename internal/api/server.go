@@ -14,8 +14,8 @@ type Server struct {
 	mediaServer *media.MediaServer // DI된 media 서버
 }
 
-// NewServerWithDI creates a new API server instance with dependency injection
-func NewServerWithDI(port string, mediaServer *media.MediaServer) *Server {
+// NewServer creates a new API server instance
+func NewServer(port string, mediaServer *media.MediaServer) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 	
@@ -30,11 +30,6 @@ func NewServerWithDI(port string, mediaServer *media.MediaServer) *Server {
 		port:        port,
 		mediaServer: mediaServer,
 	}
-}
-
-// NewServer creates a new API server instance (기존 호환성 유지)
-func NewServer(port string) *Server {
-	return NewServerWithDI(port, nil)
 }
 
 // SetupRoutes configures all API routes
