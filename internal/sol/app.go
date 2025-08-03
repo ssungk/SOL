@@ -10,15 +10,15 @@ import (
 	"syscall"
 )
 
-// App represents the main application
-type App struct {
+// SOL represents the main application
+type SOL struct {
 	config      *Config
 	mediaServer *media.MediaServer
 	apiServer   *api.Server
 }
 
 // NewApp creates a new application instance
-func NewApp() *App {
+func NewSol() *SOL {
 	// 설정 로드
 	config, err := LoadConfig()
 	if err != nil {
@@ -38,7 +38,7 @@ func NewApp() *App {
 	// API 서버 생성 (media 서버를 DI)
 	apiServer := api.NewServerWithDI(strconv.Itoa(config.API.Port), mediaServer)
 
-	return &App{
+	return &SOL{
 		config:      config,
 		mediaServer: mediaServer,
 		apiServer:   apiServer,
@@ -46,7 +46,7 @@ func NewApp() *App {
 }
 
 // Start starts the application
-func (app *App) Start() {
+func (app *SOL) Start() {
 	slog.Info("Application starting...")
 
 	// Media 서버 시작 (RTMP, RTSP)
@@ -68,7 +68,7 @@ func (app *App) Start() {
 }
 
 // waitForShutdown waits for shutdown signals and performs graceful shutdown
-func (app *App) waitForShutdown() {
+func (app *SOL) waitForShutdown() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -79,7 +79,7 @@ func (app *App) waitForShutdown() {
 }
 
 // shutdown performs graceful shutdown
-func (app *App) shutdown() {
+func (app *SOL) shutdown() {
 	slog.Info("Stopping application...")
 
 	// Media 서버 종료 (graceful shutdown 내장)
