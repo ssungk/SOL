@@ -592,8 +592,7 @@ func (s *Session) parseTransport(transport string) {
 			s.rtpChannel = 0
 		}
 
-		slog.Info("TCP interleaved transport", "sessionId", s.sessionId,
-			"rtpChannel", s.rtpChannel)
+		slog.Info("TCP interleaved transport", "sessionId", s.sessionId, "rtpChannel", s.rtpChannel)
 		return
 	}
 
@@ -679,8 +678,7 @@ func (s *Session) SendInterleavedRTPPacket(data []byte) error {
 		return fmt.Errorf("failed to send interleaved RTP packet: %v", err)
 	}
 
-	slog.Debug("Interleaved RTP packet sent", "sessionId", s.sessionId,
-		"channel", s.rtpChannel, "dataSize", len(data))
+	slog.Debug("Interleaved RTP packet sent", "sessionId", s.sessionId, "channel", s.rtpChannel, "dataSize", len(data))
 	return nil
 }
 

@@ -207,10 +207,7 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		if header.Timestamp < 0xF0000000 || timestamp > 0x10000000 {
 			// 비정상적인 역순 - 강제로 단조 증가 유지
 			timestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt0",
-				"previousTimestamp", header.Timestamp,
-				"originalTimestamp", readUint24BE(buf[0:3]),
-				"correctedTimestamp", timestamp)
+			slog.Warn("Fixed non-monotonic timestamp in Fmt0", "previousTimestamp", header.Timestamp, "originalTimestamp", readUint24BE(buf[0:3]), "correctedTimestamp", timestamp)
 		}
 	}
 
@@ -247,10 +244,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
 			// 비정상적인 역순 - 강제로 단조 증가 유지
 			newTimestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt1",
-				"previousTimestamp", header.Timestamp,
-				"timestampDelta", timestampDelta,
-				"correctedTimestamp", newTimestamp)
+			slog.Warn("Fixed non-monotonic timestamp in Fmt1", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp)
 		}
 	}
 
@@ -280,10 +274,7 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
 			// 비정상적인 역순 - 강제로 단조 증가 유지
 			newTimestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt2",
-				"previousTimestamp", header.Timestamp,
-				"timestampDelta", timestampDelta,
-				"correctedTimestamp", newTimestamp)
+			slog.Warn("Fixed non-monotonic timestamp in Fmt2", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp)
 		}
 	}
 

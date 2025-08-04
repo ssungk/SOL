@@ -588,9 +588,7 @@ func (s *session) handleAudio(message *Message) {
 			for _, chunk := range message.payload {
 				totalSize += len(chunk)
 			}
-			slog.Info("received AAC sequence header",
-				"dataSize", totalSize,
-				"timestamp", message.messageHeader.Timestamp)
+			slog.Info("received AAC sequence header", "dataSize", totalSize, "timestamp", message.messageHeader.Timestamp)
 		}
 	}
 
@@ -600,16 +598,7 @@ func (s *session) handleAudio(message *Message) {
 		totalSize += len(chunk)
 	}
 
-	slog.Debug("received audio data",
-		"fullStreamPath", fullStreamPath,
-		"dataSize", totalSize,
-		"codecId", codecId,
-		"sampleRate", sampleRate,
-		"sampleSize", sampleSize,
-		"channels", channels,
-		"aacPacketType", aacPacketType,
-		"timestamp", message.messageHeader.Timestamp,
-		"firstByte", fmt.Sprintf("0x%02x", firstByte))
+	slog.Debug("received audio data", "fullStreamPath", fullStreamPath, "dataSize", totalSize, "codecId", codecId, "sampleRate", sampleRate, "sampleSize", sampleSize, "channels", channels, "aacPacketType", aacPacketType, "timestamp", message.messageHeader.Timestamp, "firstByte", fmt.Sprintf("0x%02x", firstByte))
 
 	// Zero-copy: 오디오 데이터 이벤트 전송
 	s.sendEvent(AudioData{
@@ -693,9 +682,7 @@ func (s *session) handleVideo(message *Message) {
 			for _, chunk := range message.payload {
 				totalSize += len(chunk)
 			}
-			slog.Info("received AVC sequence header",
-				"dataSize", totalSize,
-				"timestamp", message.messageHeader.Timestamp)
+			slog.Info("received AVC sequence header", "dataSize", totalSize, "timestamp", message.messageHeader.Timestamp)
 
 			// SPS/PPS 데이터 분석 (선택적) - 첫 번째 청크에서만
 			if len(message.payload[0]) > 10 {
@@ -704,11 +691,7 @@ func (s *session) handleVideo(message *Message) {
 				compatibility := message.payload[0][7]
 				level := message.payload[0][8]
 
-				slog.Info("AVC configuration",
-					"version", configurationVersion,
-					"profile", profile,
-					"compatibility", compatibility,
-					"level", level)
+				slog.Info("AVC configuration", "version", configurationVersion, "profile", profile, "compatibility", compatibility, "level", level)
 			}
 		}
 	}
@@ -719,13 +702,7 @@ func (s *session) handleVideo(message *Message) {
 		totalSize += len(chunk)
 	}
 
-	slog.Debug("received video data",
-		"fullStreamPath", fullStreamPath,
-		"dataSize", totalSize,
-		"frameType", frameType,
-		"codecId", codecId,
-		"timestamp", message.messageHeader.Timestamp,
-		"firstByte", fmt.Sprintf("0x%02x", firstByte))
+	slog.Debug("received video data", "fullStreamPath", fullStreamPath, "dataSize", totalSize, "frameType", frameType, "codecId", codecId, "timestamp", message.messageHeader.Timestamp, "firstByte", fmt.Sprintf("0x%02x", firstByte))
 
 	// Zero-copy: 비디오 데이터 이벤트 전송
 	s.sendEvent(VideoData{

@@ -39,11 +39,7 @@ func NewStream(name string, src StreamSrc) *Stream {
 	// Start the event loop
 	go s.eventLoop(ctx)
 	
-	slog.Info("Stream created with event loop", 
-		"streamName", name,
-		"sessionId", src.GetSessionId(),
-		"protocol", src.GetProtocol(),
-		"srcInfo", src.GetSrcInfo())
+	slog.Info("Stream created with event loop", "streamName", name, "sessionId", src.GetSessionId(), "protocol", src.GetProtocol(), "srcInfo", src.GetSrcInfo())
 	
 	return s
 }
@@ -88,9 +84,7 @@ func (s *Stream) handleEvent(event interface{}) {
 	case MetadataFrame:
 		s.processMetadata(e)
 	default:
-		slog.Warn("Unknown event type received", 
-			"streamName", s.name, 
-			"eventType", fmt.Sprintf("%T", event))
+		slog.Warn("Unknown event type received", "streamName", s.name, "eventType", fmt.Sprintf("%T", event))
 	}
 }
 
@@ -101,10 +95,7 @@ func (s *Stream) Stop() {
 	
 	// Close the source first (this should close the channel)
 	if err := s.src.Close(); err != nil {
-		slog.Error("Failed to close stream source", 
-			"streamName", s.name, 
-			"sessionId", s.src.GetSessionId(), 
-			"err", err)
+		slog.Error("Failed to close stream source", "streamName", s.name, "sessionId", s.src.GetSessionId(), "err", err)
 	}
 	
 	// Cancel the context to stop event loop
@@ -118,10 +109,7 @@ func (s *Stream) Stop() {
 
 // handleSourceDisconnected processes source disconnection events
 func (s *Stream) handleSourceDisconnected(event SourceDisconnectedEvent) {
-	slog.Info("Source disconnected", 
-		"streamName", s.name,
-		"sessionId", event.SessionId,
-		"reason", event.Reason)
+	slog.Info("Source disconnected", "streamName", s.name, "sessionId", event.SessionId, "reason", event.Reason)
 	
 	// Source disconnected means stream should be destroyed
 	// Note: In a real implementation, this would signal the stream manager
@@ -131,10 +119,7 @@ func (s *Stream) handleSourceDisconnected(event SourceDisconnectedEvent) {
 
 // handleDestinationDisconnected processes destination disconnection events
 func (s *Stream) handleDestinationDisconnected(event DestinationDisconnectedEvent) {
-	slog.Info("Destination disconnected", 
-		"streamName", s.name,
-		"sessionId", event.SessionId,
-		"reason", event.Reason)
+	slog.Info("Destination disconnected", "streamName", s.name, "sessionId", event.SessionId, "reason", event.Reason)
 	
 	// Find and remove the destination
 	s.removeDstBySessionId(event.SessionId)
@@ -142,10 +127,7 @@ func (s *Stream) handleDestinationDisconnected(event DestinationDisconnectedEven
 
 // handleDestinationError processes destination error events
 func (s *Stream) handleDestinationError(event DestinationErrorEvent) {
-	slog.Warn("Destination error occurred", 
-		"streamName", s.name,
-		"sessionId", event.SessionId,
-		"error", event.Error)
+	slog.Warn("Destination error occurred", "streamName", s.name, "sessionId", event.SessionId, "error", event.Error)
 	
 	// For now, treat errors as disconnections
 	// In a more sophisticated implementation, you might implement retry logic
@@ -160,9 +142,7 @@ func (s *Stream) removeDstBySessionId(sessionId string) {
 			return
 		}
 	}
-	slog.Debug("Destination not found for removal", 
-		"streamName", s.name, 
-		"sessionId", sessionId)
+	slog.Debug("Destination not found for removal", "streamName", s.name, "sessionId", sessionId)
 }
 
 // AddDst adds a stream destination
@@ -172,11 +152,7 @@ func (s *Stream) AddDst(dst StreamDst) error {
 	// Set external channel for the destination
 	dst.SetExternalChannel(s.channel)
 	
-	slog.Info("Destination added to stream", 
-		"streamName", s.name, 
-		"sessionId", dst.GetSessionId(), 
-		"dstInfo", dst.GetDstInfo(),
-		"dstCount", len(s.dsts))
+	slog.Info("Destination added to stream", "streamName", s.name, "sessionId", dst.GetSessionId(), "dstInfo", dst.GetDstInfo(), "dstCount", len(s.dsts))
 
 	return nil
 }
@@ -188,10 +164,7 @@ func (s *Stream) RemoveDst(dst StreamDst) {
 	// Clear external channel for the destination
 	dst.SetExternalChannel(nil)
 	
-	slog.Info("Destination removed from stream", 
-		"streamName", s.name, 
-		"sessionId", dst.GetSessionId(), 
-		"dstCount", len(s.dsts))
+	slog.Info("Destination removed from stream", "streamName", s.name, "sessionId", dst.GetSessionId(), "dstCount", len(s.dsts))
 }
 
 // processMediaFrame processes incoming media frame from publisher (internal use)
@@ -231,39 +204,25 @@ func (s *Stream) SendCachedDataToDst(dst StreamDst) error {
 	// Send cached metadata first
 	if metadata := s.streamBuffer.GetMetadata(); metadata != nil {
 		if err := dst.SendMetadata(*metadata); err != nil {
-			slog.Error("Failed to send cached metadata to destination", 
-				"streamName", s.name, 
-				"sessionId", dst.GetSessionId(), 
-				"err", err)
+			slog.Error("Failed to send cached metadata to destination", "streamName", s.name, "sessionId", dst.GetSessionId(), "err", err)
 		} else {
-			slog.Debug("Sent cached metadata to destination", 
-				"streamName", s.name, 
-				"sessionId", dst.GetSessionId())
+			slog.Debug("Sent cached metadata to destination", "streamName", s.name, "sessionId", dst.GetSessionId())
 		}
 	}
 
 	// Send cached media frames
 	cachedFrames := s.streamBuffer.GetCachedFrames()
 	if len(cachedFrames) > 0 {
-		slog.Debug("Sending cached frames to new destination", 
-			"streamName", s.name, 
-			"sessionId", dst.GetSessionId(), 
-			"frameCount", len(cachedFrames))
+		slog.Debug("Sending cached frames to new destination", "streamName", s.name, "sessionId", dst.GetSessionId(), "frameCount", len(cachedFrames))
 
 		for _, frame := range cachedFrames {
 			if err := dst.SendMediaFrame(frame); err != nil {
-				slog.Error("Failed to send cached frame to destination", 
-					"streamName", s.name, 
-					"sessionId", dst.GetSessionId(), 
-					"frameType", frame.FrameType,
-					"err", err)
+				slog.Error("Failed to send cached frame to destination", "streamName", s.name, "sessionId", dst.GetSessionId(), "frameType", frame.FrameType, "err", err)
 				// Continue with next frame even if one fails
 			}
 		}
 
-		slog.Debug("Finished sending cached frames to destination", 
-			"streamName", s.name, 
-			"sessionId", dst.GetSessionId())
+		slog.Debug("Finished sending cached frames to destination", "streamName", s.name, "sessionId", dst.GetSessionId())
 	}
 
 	return nil
@@ -306,19 +265,14 @@ func (s *Stream) CleanupSession(session Session) {
 	for dst := range s.dsts {
 		if dst.GetSessionId() == session.GetSessionId() {
 			delete(s.dsts, dst)
-			slog.Info("Cleaned up destination from stream", 
-				"streamName", s.name, 
-				"sessionId", session.GetSessionId(), 
-				"dstCount", len(s.dsts))
+			slog.Info("Cleaned up destination from stream", "streamName", s.name, "sessionId", session.GetSessionId(), "dstCount", len(s.dsts))
 			break
 		}
 	}
 
 	// Check if this is the source session - if so, the stream should be destroyed by the caller
 	if s.src != nil && s.src.GetSessionId() == session.GetSessionId() {
-		slog.Warn("Source session being cleaned up - stream should be destroyed", 
-			"streamName", s.name, 
-			"sessionId", session.GetSessionId())
+		slog.Warn("Source session being cleaned up - stream should be destroyed", "streamName", s.name, "sessionId", session.GetSessionId())
 	}
 }
 
@@ -334,12 +288,7 @@ func (s *Stream) broadcastMediaFrame(frame MediaFrame) {
 	// Send to all active destinations
 	for _, dst := range dsts {
 		if err := dst.SendMediaFrame(frame); err != nil {
-			slog.Error("Failed to send media frame to destination", 
-				"streamName", s.name, 
-				"srcSessionId", s.src.GetSessionId(),
-				"dstSessionId", dst.GetSessionId(), 
-				"frameType", frame.FrameType,
-				"err", err)
+			slog.Error("Failed to send media frame to destination", "streamName", s.name, "srcSessionId", s.src.GetSessionId(), "dstSessionId", dst.GetSessionId(), "frameType", frame.FrameType, "err", err)
 			// Continue with other destinations even if one fails
 		}
 	}
@@ -357,11 +306,7 @@ func (s *Stream) broadcastMetadata(metadata MetadataFrame) {
 	// Send to all active destinations
 	for _, dst := range dsts {
 		if err := dst.SendMetadata(metadata); err != nil {
-			slog.Error("Failed to send metadata to destination", 
-				"streamName", s.name, 
-				"srcSessionId", s.src.GetSessionId(),
-				"dstSessionId", dst.GetSessionId(), 
-				"err", err)
+			slog.Error("Failed to send metadata to destination", "streamName", s.name, "srcSessionId", s.src.GetSessionId(), "dstSessionId", dst.GetSessionId(), "err", err)
 			// Continue with other destinations even if one fails
 		}
 	}
