@@ -27,6 +27,3 @@ go.work.sum
 # tool
 .vscode
 .idea
-
-# Claude assistant file
-.claude.md
