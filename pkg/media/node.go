@@ -5,7 +5,7 @@ package media
 type MediaNode interface {
 	// Basic identification
 	ID() uintptr
-	MediaType() MediaType
+	MediaType() MediaNodeType
 	Address() string
 
 	// Node lifecycle

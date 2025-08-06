@@ -173,6 +173,7 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 ### 🚀 곧 작업 해야할 TODO 리스트
 - [ ] Stream에 Sink 없을 시 auto Release 구현
 - [ ] pkg/rtmp에서 pkg/rtmp2로 마이그레이션 작업
+- [ ] rtmp video tag header Frame으로 전달시 제거 필요
 - [ ] RTSP를 pkg/media 아키텍처로 리팩토링
 
 ### 향후 고려 해볼만한 TODO 리스트

@@ -1,7 +1,6 @@
 package rtmp2
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -21,20 +20,37 @@ type RTMPSink struct {
 	// 메시지 전송을 위한 writer
 	writer *messageWriter
 	
+	// MediaServer와의 통신을 위한 채널
+	eventChannel chan<- interface{}
+	
 	// 상태 관리
 	isActive bool
 }
 
 // NewRTMPSink 새로운 RTMP 싱크 생성
-func NewRTMPSink(sessionInfo RTMPSessionInfo, conn net.Conn, address string) *RTMPSink {
-	baseSink := media.NewBaseMediaSink(media.MediaTypeRTMP, address)
+func NewRTMPSink(sessionInfo RTMPSessionInfo, conn net.Conn, address string, eventChannel chan<- interface{}) *RTMPSink {
+	baseSink := media.NewBaseMediaSink(media.MediaNodeTypeRTMP, address)
 	
-	return &RTMPSink{
+	sink := &RTMPSink{
 		BaseMediaSink: baseSink,
 		sessionInfo:   sessionInfo,
 		conn:          conn,
+		eventChannel:  eventChannel,
 		isActive:      true, // 연결 생성시 바로 활성화
 	}
+	
+	// NodeConnected 이벤트 전송
+	sink.sendEvent(media.NodeConnected{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  sessionInfo.SessionID,
+			StreamName: sessionInfo.AppName + "/" + sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId:  sink.ID(),
+		Address: address,
+	})
+	
+	return sink
 }
 
 // GetSinkId 싱크 ID 반환 (내부 사용용, MediaSink 인터페이스에서 제거됨)
@@ -47,7 +63,7 @@ func (s *RTMPSink) GetSinkInfo() string {
 	return fmt.Sprintf("RTMP Player: %s/%s", s.sessionInfo.AppName, s.sessionInfo.StreamName)
 }
 
-// SendMediaFrame 미디어 프레임 전송 (MediaSink 인터페이스 구현)
+// SendMediaFrame 미디어 프레임 전송
 func (s *RTMPSink) SendMediaFrame(streamId string, frame media.Frame) error {
 	if !s.isActive || s.conn == nil {
 		return fmt.Errorf("sink not active")
@@ -70,25 +86,16 @@ func (s *RTMPSink) SendMediaFrame(streamId string, frame media.Frame) error {
 	}
 	
 	if err != nil {
-		slog.Error("Failed to send frame to RTMP sink", 
-			"sinkId", s.GetSinkId(),
-			"streamId", streamId,
-			"frameType", frame.FrameType,
-			"err", err)
+		slog.Error("Failed to send frame to RTMP sink", "sinkId", s.GetSinkId(), "streamId", streamId, "frameType", frame.FrameType, "err", err)
 		return err
 	}
 	
-	slog.Debug("Media frame sent to RTMP sink", 
-		"sinkId", s.GetSinkId(),
-		"streamId", streamId,
-		"frameType", frame.FrameType,
-		"timestamp", frame.Timestamp,
-		"dataSize", s.calculateDataSize(frame.Data))
+	slog.Debug("Media frame sent to RTMP sink", "sinkId", s.GetSinkId(), "streamId", streamId, "frameType", frame.FrameType, "timestamp", frame.Timestamp, "dataSize", s.calculateDataSize(frame.Data))
 	
 	return nil
 }
 
-// SendMetadata 메타데이터 전송 (MediaSink 인터페이스 구현)
+// SendMetadata 메타데이터 전송
 func (s *RTMPSink) SendMetadata(streamId string, metadata map[string]string) error {
 	if !s.isActive || s.conn == nil {
 		return fmt.Errorf("sink not active")
@@ -101,17 +108,11 @@ func (s *RTMPSink) SendMetadata(streamId string, metadata map[string]string) err
 	// pkg/media MetadataFrame을 RTMP onMetaData 메시지로 변환하여 전송
 	err := s.sendMetadata(metadata)
 	if err != nil {
-		slog.Error("Failed to send metadata to RTMP sink", 
-			"sinkId", s.GetSinkId(),
-			"streamId", streamId,
-			"err", err)
+		slog.Error("Failed to send metadata to RTMP sink", "sinkId", s.GetSinkId(), "streamId", streamId, "err", err)
 		return err
 	}
 	
-	slog.Info("Metadata sent to RTMP sink", 
-		"sinkId", s.GetSinkId(),
-		"streamId", streamId,
-		"metadataKeys", len(metadata))
+	slog.Info("Metadata sent to RTMP sink", "sinkId", s.GetSinkId(), "streamId", streamId, "metadataKeys", len(metadata))
 	
 	return nil
 }
@@ -124,9 +125,17 @@ func (s *RTMPSink) Start() error {
 	
 	s.isActive = true
 	
-	slog.Info("RTMP sink started", 
-		"sinkId", s.GetSinkId(),
-		"sinkInfo", s.GetSinkInfo())
+	// PlayStarted 이벤트 전송
+	s.sendEvent(media.PlayStarted{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
+	slog.Info("RTMP sink started", "sinkId", s.GetSinkId(), "sinkInfo", s.GetSinkInfo())
 	
 	return nil
 }
@@ -137,21 +146,37 @@ func (s *RTMPSink) Stop() error {
 		return err
 	}
 	
+	// PlayStopped 이벤트 전송
+	s.sendEvent(media.PlayStopped{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
+	// NodeDisconnected 이벤트 전송
+	s.sendEvent(media.NodeDisconnected{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
 	s.isActive = false
 	
 	// 연결 종료
 	if s.conn != nil {
 		if err := s.conn.Close(); err != nil {
-			slog.Error("Error closing RTMP sink connection", 
-				"sinkId", s.GetSinkId(),
-				"err", err)
+			slog.Error("Error closing RTMP sink connection", "sinkId", s.GetSinkId(), "err", err)
 		}
 		s.conn = nil
 	}
 	
-	slog.Info("RTMP sink stopped", 
-		"sinkId", s.GetSinkId(),
-		"sinkInfo", s.GetSinkInfo())
+	slog.Info("RTMP sink stopped", "sinkId", s.GetSinkId(), "sinkInfo", s.GetSinkInfo())
 	
 	return nil
 }
@@ -190,26 +215,7 @@ func (s *RTMPSink) calculateDataSize(data [][]byte) int {
 	return totalSize
 }
 
-// GetContext 컨텍스트 반환 (내부 사용)
-func (s *RTMPSink) GetContext() context.Context {
-	return s.Context()
-}
 
-// Deactivate 싱크 비활성화 (연결은 유지하되 데이터 전송 중지)
-func (s *RTMPSink) Deactivate() {
-	s.isActive = false
-	slog.Info("RTMP sink deactivated", 
-		"sinkId", s.GetSinkId(),
-		"sinkInfo", s.GetSinkInfo())
-}
-
-// Activate 싱크 활성화
-func (s *RTMPSink) Activate() {
-	s.isActive = true
-	slog.Info("RTMP sink activated", 
-		"sinkId", s.GetSinkId(),
-		"sinkInfo", s.GetSinkInfo())
-}
 
 // sendVideoFrame 비디오 프레임을 RTMP 메시지로 전송
 func (s *RTMPSink) sendVideoFrame(frame media.Frame) error {
@@ -273,4 +279,19 @@ func (s *RTMPSink) sendMetadata(metadata map[string]string) error {
 	}
 	
 	return s.writer.writeScriptMessage(s.conn, message)
+}
+
+// sendEvent 이벤트를 MediaServer로 직접 전송
+func (s *RTMPSink) sendEvent(event interface{}) {
+	if s.eventChannel == nil {
+		return
+	}
+	
+	select {
+	case s.eventChannel <- event:
+		// 이벤트 전송 성공
+	default:
+		// 채널이 꽉 찬 경우 이벤트 드롭
+		slog.Warn("event channel full, dropping event", "sinkId", s.GetSinkId(), "eventType", fmt.Sprintf("%T", event))
+	}
 }

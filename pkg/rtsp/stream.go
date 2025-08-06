@@ -188,21 +188,17 @@ func (s *Stream) BroadcastRTPPacket(data []byte) {
 			// TCP interleaved mode
 			err := player.SendInterleavedRTPPacket(data)
 			if err != nil {
-				slog.Error("Failed to send interleaved RTP packet to player",
-					"streamPath", s.name, "sessionId", player.sessionId, "err", err)
+				slog.Error("Failed to send interleaved RTP packet to player", "streamPath", s.name, "sessionId", player.sessionId, "err", err)
 			} else {
-				slog.Debug("Interleaved RTP packet sent to player",
-					"streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
+				slog.Debug("Interleaved RTP packet sent to player", "streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
 			}
 		} else if player.IsUDPMode() && player.rtpSession != nil && player.rtpTransport != nil {
 			// UDP mode
 			err := player.rtpTransport.SendRTPPacket(player.rtpSession.GetSSRC(), data, 0, false)
 			if err != nil {
-				slog.Error("Failed to send UDP RTP packet to player",
-					"streamPath", s.name, "sessionId", player.sessionId, "err", err)
+				slog.Error("Failed to send UDP RTP packet to player", "streamPath", s.name, "sessionId", player.sessionId, "err", err)
 			} else {
-				slog.Debug("UDP RTP packet sent to player",
-					"streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
+				slog.Debug("UDP RTP packet sent to player", "streamPath", s.name, "sessionId", player.sessionId, "dataSize", len(data))
 			}
 		} else {
 			slog.Debug("Player has no valid transport setup", "streamPath", s.name, "sessionId", player.sessionId)

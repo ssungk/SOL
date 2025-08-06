@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sol/pkg/amf"
+	"sol/pkg/media"
 )
 
 // session RTMP2에서 사용하는 세션 구조체 (소스/싱크 패턴 기반)
@@ -45,9 +46,7 @@ func (s *session) SetRTMPSource(source *RTMPSource) {
 	s.rtmpSource = source
 	s.isPublishing = true
 	
-	slog.Info("RTMP source set for session", 
-		"sessionId", s.sessionId,
-		"sourceId", source.GetSourceId())
+	slog.Info("RTMP source set for session", "sessionId", s.sessionId, "sourceId", source.GetSourceId())
 }
 
 // SetRTMPSink RTMP 싱크 설정 (플레이어 모드)
@@ -58,9 +57,7 @@ func (s *session) SetRTMPSink(sink *RTMPSink) {
 	// 메시지 writer를 싱크에 연결
 	sink.SetWriter(s.writer)
 	
-	slog.Info("RTMP sink set for session", 
-		"sessionId", s.sessionId,
-		"sinkId", sink.GetSinkId())
+	slog.Info("RTMP sink set for session", "sessionId", s.sessionId, "sinkId", sink.GetSinkId())
 }
 
 // GetRTMPSource RTMP 소스 반환
@@ -165,15 +162,10 @@ func (s *session) handlePublish(values []any) {
 		Type:       RTMPSessionTypePublisher,
 	}
 	
-	rtmpSource := NewRTMPSource(sessionInfo, s.conn.RemoteAddr().String())
+	rtmpSource := NewRTMPSource(sessionInfo, s.conn.RemoteAddr().String(), s.externalChannel)
 	s.SetRTMPSource(rtmpSource)
 
-	// Publish 시작 이벤트 전송
-	s.sendEvent(PublishStarted{
-		SessionId:  s.sessionId,
-		StreamName: fullStreamPath,
-		StreamId:   s.streamID,
-	})
+	// Publish 시작은 RTMPSource에서 SetStream 호출 시 이벤트 전송됨
 
 	// onStatus 이벤트 전송: NetStream.Publish.Start
 	statusObj := map[string]any{
@@ -238,7 +230,7 @@ func (s *session) handlePlay(values []any) {
 		Type:       RTMPSessionTypePlayer,
 	}
 	
-	rtmpSink := NewRTMPSink(sessionInfo, s.conn, s.conn.RemoteAddr().String())
+	rtmpSink := NewRTMPSink(sessionInfo, s.conn, s.conn.RemoteAddr().String(), s.externalChannel)
 	s.SetRTMPSink(rtmpSink)
 
 	// 1. NetStream.Play.Reset 전송
@@ -281,12 +273,8 @@ func (s *session) handlePlay(values []any) {
 		return
 	}
 
-	// 3. Play 시작 이벤트 전송
-	s.sendEvent(PlayStarted{
-		SessionId:  s.sessionId,
-		StreamName: fullStreamPath,
-		StreamId:   s.streamID,
-	})
+	// Play 시작은 RTMPSink Start() 메서드에서 이벤트 전송됨
+	rtmpSink.Start()
 
 	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
@@ -316,16 +304,11 @@ func (s *session) handleAudio(message *Message) {
 	
 	// RTMP 소스를 통해 오디오 프레임 전송
 	if err := s.rtmpSource.SendAudioFrame(frameType, message.messageHeader.Timestamp, message.payload); err != nil {
-		slog.Error("Failed to send audio frame through RTMP source", 
-			"sessionId", s.sessionId,
-			"err", err)
+		slog.Error("Failed to send audio frame through RTMP source", "sessionId", s.sessionId, "err", err)
 		return
 	}
 
-	slog.Debug("Audio frame processed through RTMP source", 
-		"sessionId", s.sessionId,
-		"frameType", string(frameType),
-		"timestamp", message.messageHeader.Timestamp)
+	slog.Debug("Audio frame processed through RTMP source", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
 }
 
 // 비디오 데이터 처리 (발행자 모드에서만)
@@ -353,16 +336,11 @@ func (s *session) handleVideo(message *Message) {
 	
 	// RTMP 소스를 통해 비디오 프레임 전송
 	if err := s.rtmpSource.SendVideoFrame(frameType, message.messageHeader.Timestamp, message.payload); err != nil {
-		slog.Error("Failed to send video frame through RTMP source", 
-			"sessionId", s.sessionId,
-			"err", err)
+		slog.Error("Failed to send video frame through RTMP source", "sessionId", s.sessionId, "err", err)
 		return
 	}
 
-	slog.Debug("Video frame processed through RTMP source", 
-		"sessionId", s.sessionId,
-		"frameType", string(frameType),
-		"timestamp", message.messageHeader.Timestamp)
+	slog.Debug("Video frame processed through RTMP source", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
 }
 
 // parseAudioFrameType 오디오 프레임 타입 파싱
@@ -483,15 +461,11 @@ func (s *session) handleOnMetaData(values []any) {
 
 	// RTMP 소스를 통해 메타데이터 전송
 	if err := s.rtmpSource.SendMetadata(metadata); err != nil {
-		slog.Error("Failed to send metadata through RTMP source", 
-			"sessionId", s.sessionId,
-			"err", err)
+		slog.Error("Failed to send metadata through RTMP source", "sessionId", s.sessionId, "err", err)
 		return
 	}
 
-	slog.Info("Metadata processed through RTMP source", 
-		"sessionId", s.sessionId,
-		"metadataKeys", len(metadata))
+	slog.Info("Metadata processed through RTMP source", "sessionId", s.sessionId, "metadataKeys", len(metadata))
 }
 
 // handleOnTextData 텍스트 데이터 처리
@@ -517,27 +491,15 @@ func (s *session) GetStreamInfo() (streamID uint32, streamName string, isPublish
 func (s *session) cleanup() {
 	fullStreamPath := s.GetFullStreamPath()
 	
-	// RTMP 소스 정리
+	// RTMP 소스 정리 (Stop에서 자동으로 이벤트 전송됨)
 	if s.rtmpSource != nil {
 		s.rtmpSource.Stop()
-		// Publish 종료 이벤트 전송
-		s.sendEvent(PublishStopped{
-			SessionId:  s.sessionId,
-			StreamName: fullStreamPath,
-			StreamId:   s.streamID,
-		})
 		s.rtmpSource = nil
 	}
 	
-	// RTMP 싱크 정리
+	// RTMP 싱크 정리 (Stop에서 자동으로 이벤트 전송됨)
 	if s.rtmpSink != nil {
 		s.rtmpSink.Stop()
-		// Play 종료 이벤트 전송
-		s.sendEvent(PlayStopped{
-			SessionId:  s.sessionId,
-			StreamName: fullStreamPath,
-			StreamId:   s.streamID,
-		})
 		s.rtmpSink = nil
 	}
 
@@ -598,8 +560,11 @@ func (s *session) handleRead() {
 				slog.Error("Error closing connection", "sessionId", s.sessionId, "err", err)
 			}
 		}
-		// 종료 이벤트 전송
-		s.sendEvent(Terminated{Id: s.sessionId})
+		// 세션 종료 이벤트 전송
+		s.sendEvent(media.SessionTerminated{
+			SessionId: s.sessionId,
+			NodeType:  media.MediaNodeTypeRTMP,
+		})
 	}()
 
 	if err := handshake(s.conn); err != nil {
