@@ -62,15 +62,3 @@ func convertRTMPFrameToMediaFrame(frameType RTMPFrameType, timestamp uint32, dat
 	}
 }
 
-// isKeyFrame 키프레임 여부 확인
-func isKeyFrame(frameType RTMPFrameType) bool {
-	return frameType == RTMPFrameTypeKeyFrame || 
-		   frameType == RTMPFrameTypeGeneratedKeyFrame ||
-		   frameType == RTMPFrameTypeAVCSequenceHeader
-}
-
-// isSequenceHeader 시퀀스 헤더 여부 확인  
-func isSequenceHeader(frameType RTMPFrameType) bool {
-	return frameType == RTMPFrameTypeAVCSequenceHeader ||
-		   frameType == RTMPFrameTypeAACSequenceHeader
-}

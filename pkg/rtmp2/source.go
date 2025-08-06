@@ -1,7 +1,6 @@
 package rtmp2
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"sol/pkg/media"
@@ -15,32 +14,49 @@ type RTMPSource struct {
 	sessionInfo RTMPSessionInfo
 	stream      *media.Stream
 	
+	// MediaServer와의 통신을 위한 채널
+	eventChannel chan<- interface{}
+	
 	// 상태 관리
 	isActive bool
 }
 
 // NewRTMPSource 새로운 RTMP 소스 생성
-func NewRTMPSource(sessionInfo RTMPSessionInfo, address string) *RTMPSource {
-	baseSource := media.NewBaseMediaSource(media.MediaTypeRTMP, address)
+func NewRTMPSource(sessionInfo RTMPSessionInfo, address string, eventChannel chan<- interface{}) *RTMPSource {
+	baseSource := media.NewBaseMediaSource(media.MediaNodeTypeRTMP, address)
 	
-	return &RTMPSource{
+	source := &RTMPSource{
 		BaseMediaSource: baseSource,
 		sessionInfo:     sessionInfo,
+		eventChannel:    eventChannel,
 		isActive:        false,
 	}
+	
+	// NodeConnected 이벤트 전송
+	source.sendEvent(media.NodeConnected{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  sessionInfo.SessionID,
+			StreamName: sessionInfo.AppName + "/" + sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId:  source.ID(),
+		Address: address,
+	})
+	
+	return source
 }
 
-// GetSourceId 소스 ID 반환 (MediaSource 인터페이스)
+// GetSourceId 소스 ID 반환 (내부 사용용)
 func (s *RTMPSource) GetSourceId() string {
 	return s.sessionInfo.SessionID
 }
 
-// GetSourceInfo 소스 정보 반환 (MediaSource 인터페이스)
+// GetSourceInfo 소스 정보 반환 (내부 사용용)
 func (s *RTMPSource) GetSourceInfo() string {
 	return fmt.Sprintf("RTMP Publisher: %s/%s", s.sessionInfo.AppName, s.sessionInfo.StreamName)
 }
 
-// IsActive 활성 상태 반환 (MediaSource 인터페이스)
+// IsActive 활성 상태 반환 (내부 사용용)
 func (s *RTMPSource) IsActive() bool {
 	return s.isActive
 }
@@ -50,20 +66,35 @@ func (s *RTMPSource) SetStream(stream *media.Stream) {
 	s.stream = stream
 	s.isActive = true
 	
-	slog.Info("RTMP source activated", 
-		"sourceId", s.GetSourceId(),
-		"streamId", stream.GetId(),
-		"sourceInfo", s.GetSourceInfo())
+	// PublishStarted 이벤트 전송
+	s.sendEvent(media.PublishStarted{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
+	slog.Info("RTMP source activated", "sourceId", s.GetSourceId(), "streamId", stream.GetId(), "sourceInfo", s.GetSourceInfo())
 }
 
 // RemoveStream 스트림 제거
 func (s *RTMPSource) RemoveStream() {
+	// PublishStopped 이벤트 전송
+	s.sendEvent(media.PublishStopped{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
 	s.stream = nil
 	s.isActive = false
 	
-	slog.Info("RTMP source deactivated", 
-		"sourceId", s.GetSourceId(),
-		"sourceInfo", s.GetSourceInfo())
+	slog.Info("RTMP source deactivated", "sourceId", s.GetSourceId(), "sourceInfo", s.GetSourceInfo())
 }
 
 // SendVideoFrame 비디오 프레임 전송
@@ -78,11 +109,7 @@ func (s *RTMPSource) SendVideoFrame(frameType RTMPFrameType, timestamp uint32, d
 	// 스트림에 전송
 	s.stream.SendFrame(frame)
 	
-	slog.Debug("Video frame sent from RTMP source", 
-		"sourceId", s.GetSourceId(),
-		"frameType", string(frameType),
-		"timestamp", timestamp,
-		"dataSize", s.calculateDataSize(data))
+	slog.Debug("Video frame sent from RTMP source", "sourceId", s.GetSourceId(), "frameType", string(frameType), "timestamp", timestamp, "dataSize", s.calculateDataSize(data))
 	
 	return nil
 }
@@ -99,11 +126,7 @@ func (s *RTMPSource) SendAudioFrame(frameType RTMPFrameType, timestamp uint32, d
 	// 스트림에 전송
 	s.stream.SendFrame(frame)
 	
-	slog.Debug("Audio frame sent from RTMP source", 
-		"sourceId", s.GetSourceId(),
-		"frameType", string(frameType),
-		"timestamp", timestamp,
-		"dataSize", s.calculateDataSize(data))
+	slog.Debug("Audio frame sent from RTMP source", "sourceId", s.GetSourceId(), "frameType", string(frameType), "timestamp", timestamp, "dataSize", s.calculateDataSize(data))
 	
 	return nil
 }
@@ -123,9 +146,7 @@ func (s *RTMPSource) SendMetadata(metadata map[string]any) error {
 	// 스트림에 메타데이터 전송
 	s.stream.SendMetadata(stringMetadata)
 	
-	slog.Info("Metadata sent from RTMP source", 
-		"sourceId", s.GetSourceId(),
-		"metadataKeys", len(metadata))
+	slog.Info("Metadata sent from RTMP source", "sourceId", s.GetSourceId(), "metadataKeys", len(metadata))
 	
 	return nil
 }
@@ -136,9 +157,7 @@ func (s *RTMPSource) Start() error {
 		return err
 	}
 	
-	slog.Info("RTMP source started", 
-		"sourceId", s.GetSourceId(),
-		"sourceInfo", s.GetSourceInfo())
+	slog.Info("RTMP source started", "sourceId", s.GetSourceId(), "sourceInfo", s.GetSourceInfo())
 	
 	return nil
 }
@@ -151,9 +170,17 @@ func (s *RTMPSource) Stop() error {
 	
 	s.RemoveStream()
 	
-	slog.Info("RTMP source stopped", 
-		"sourceId", s.GetSourceId(),
-		"sourceInfo", s.GetSourceInfo())
+	// NodeDisconnected 이벤트 전송
+	s.sendEvent(media.NodeDisconnected{
+		BaseNodeEvent: media.BaseNodeEvent{
+			SessionId:  s.sessionInfo.SessionID,
+			StreamName: s.sessionInfo.AppName + "/" + s.sessionInfo.StreamName,
+			NodeType:   media.MediaNodeTypeRTMP,
+		},
+		NodeId: s.ID(),
+	})
+	
+	slog.Info("RTMP source stopped", "sourceId", s.GetSourceId(), "sourceInfo", s.GetSourceInfo())
 	
 	return nil
 }
@@ -177,7 +204,18 @@ func (s *RTMPSource) calculateDataSize(data [][]byte) int {
 	return totalSize
 }
 
-// GetContext 컨텍스트 반환 (내부 사용)
-func (s *RTMPSource) GetContext() context.Context {
-	return s.Context()
+// sendEvent 이벤트를 MediaServer로 직접 전송
+func (s *RTMPSource) sendEvent(event interface{}) {
+	if s.eventChannel == nil {
+		return
+	}
+	
+	select {
+	case s.eventChannel <- event:
+		// 이벤트 전송 성공
+	default:
+		// 채널이 꽉 찬 경우 이벤트 드롭
+		slog.Warn("event channel full, dropping event", "sourceId", s.GetSourceId(), "eventType", fmt.Sprintf("%T", event))
+	}
 }
+

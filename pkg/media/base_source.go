@@ -7,14 +7,14 @@ import (
 
 // BaseMediaSource provides a basic implementation of the MediaSource interface
 type BaseMediaSource struct {
-	mediaType MediaType
+	mediaType MediaNodeType
 	address   string
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
 
 // NewBaseMediaSource creates a new base media source
-func NewBaseMediaSource(mediaType MediaType, address string) *BaseMediaSource {
+func NewBaseMediaSource(mediaType MediaNodeType, address string) *BaseMediaSource {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &BaseMediaSource{
@@ -30,8 +30,8 @@ func (s *BaseMediaSource) ID() uintptr {
 	return uintptr(unsafe.Pointer(s))
 }
 
-// MediaType returns the media type
-func (s *BaseMediaSource) MediaType() MediaType {
+// MediaType returns the media node type
+func (s *BaseMediaSource) MediaType() MediaNodeType {
 	return s.mediaType
 }
 

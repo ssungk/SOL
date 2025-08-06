@@ -7,14 +7,14 @@ import (
 
 // BaseMediaSink provides a basic implementation of the MediaSink interface
 type BaseMediaSink struct {
-	mediaType MediaType
+	mediaType MediaNodeType
 	address   string
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
 
 // NewBaseMediaSink creates a new base media sink
-func NewBaseMediaSink(mediaType MediaType, address string) *BaseMediaSink {
+func NewBaseMediaSink(mediaType MediaNodeType, address string) *BaseMediaSink {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &BaseMediaSink{
@@ -30,8 +30,8 @@ func (s *BaseMediaSink) ID() uintptr {
 	return uintptr(unsafe.Pointer(s))
 }
 
-// MediaType returns the media type
-func (s *BaseMediaSink) MediaType() MediaType {
+// MediaType returns the media node type
+func (s *BaseMediaSink) MediaType() MediaNodeType {
 	return s.mediaType
 }
 
