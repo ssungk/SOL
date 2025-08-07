@@ -29,7 +29,7 @@ func handshake(rw io.ReadWriter) error {
 		return fmt.Errorf("failed to read C0: %w", err)
 	}
 
-	if c0[0] != RTMP_VERSION {
+	if c0[0] != RTMPVersion {
 		return fmt.Errorf("unsupported RTMP version: %d", c0[0])
 	}
 
@@ -39,7 +39,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// S1
-	s1 := make([]byte, HANDSHAKE_SIZE)
+	s1 := make([]byte, HandshakeSize)
 	copy(s1[0:4], []byte{0, 0, 0, 0}) // time field
 	copy(s1[4:8], []byte{0, 0, 0, 0}) // zero field
 	_, _ = rand.Read(s1[8:])          // random field
@@ -49,7 +49,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// C1
-	c1 := make([]byte, HANDSHAKE_SIZE)
+	c1 := make([]byte, HandshakeSize)
 	if _, err := io.ReadFull(rw, c1); err != nil {
 		return fmt.Errorf("failed to read C1: %w", err)
 	}
@@ -60,7 +60,7 @@ func handshake(rw io.ReadWriter) error {
 	}
 
 	// C2
-	c2 := make([]byte, HANDSHAKE_SIZE)
+	c2 := make([]byte, HandshakeSize)
 	if _, err := io.ReadFull(rw, c2); err != nil {
 		return fmt.Errorf("failed to read C2: %w", err)
 	}
@@ -109,7 +109,7 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 	ms.readerContext.appendPayload(basicHeader.chunkStreamID, payload)
 
-	slog.Info("msg", "messageHeader", messageHeader.Timestamp)
+	slog.Info("msg", "messageHeader", messageHeader.timestamp)
 
 	return NewChunk(basicHeader, messageHeader, payload), nil
 }
@@ -166,7 +166,7 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 		slog.Info("chunkStreamId", "chunkStreamId", chunkStreamId)
 	}
 
-	return newBasicHeader(format, chunkStreamId), nil
+	return NewBasicHeader(format, chunkStreamId), nil
 }
 
 func readMessageHeader(r io.Reader, fmt byte, header *messageHeader) (*messageHeader, error) {
@@ -194,7 +194,7 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	typeId := buf[6]
 	streamId := binary.LittleEndian.Uint32(buf[7:11])
 
-	if timestamp == EXTENDED_TIMESTAMP_THRESHOLD {
+	if timestamp == ExtendedTimestampThreshold {
 		var err error
 		timestamp, err = readExtendedTimestamp(r)
 		if err != nil {
@@ -204,23 +204,23 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 
 	// Fmt0에서 타임스탬프 단조성 검증 및 수정 (이전 헤더가 있는 경우)
 	// H.264 B-frame을 고려하여 더 관대하게 처리
-	if header != nil && timestamp < header.Timestamp {
+	if header != nil && timestamp < header.timestamp {
 		// 32비트 오버플로우가 아닌 실제 역순 감지
-		timestampDiff := header.Timestamp - timestamp
+		timestampDiff := header.timestamp - timestamp
 		// B-frame에서는 약간의 역순이 정상일 수 있으므로, 큰 차이가 날 때만 수정
-		if timestampDiff > 5000 && (header.Timestamp < 0xF0000000 || timestamp > 0x10000000) {
+		if timestampDiff > 5000 && (header.timestamp < 0xF0000000 || timestamp > 0x10000000) {
 			// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
-			timestamp = header.Timestamp + 1
-			slog.Warn("Fixed large non-monotonic timestamp in Fmt0", "previousTimestamp", header.Timestamp, "originalTimestamp", readUint24BE(buf[0:3]), "correctedTimestamp", timestamp, "diff", timestampDiff)
+			timestamp = header.timestamp + 1
+			slog.Warn("Fixed large non-monotonic timestamp in Fmt0", "previousTimestamp", header.timestamp, "originalTimestamp", readUint24BE(buf[0:3]), "correctedTimestamp", timestamp, "diff", timestampDiff)
 		} else {
 			// 작은 역순은 B-frame으로 간주하고 허용
-			slog.Debug("Small timestamp reorder detected (likely B-frame)", "previousTimestamp", header.Timestamp, "currentTimestamp", timestamp, "diff", timestampDiff)
+			slog.Debug("Small timestamp reorder detected (likely B-frame)", "previousTimestamp", header.timestamp, "currentTimestamp", timestamp, "diff", timestampDiff)
 		}
 	}
 
 	slog.Info("Fmt0MessageHeade", "timestamp", timestamp, "MessageLength", length, "MessageTypeID", typeId, "MessageStreamID", streamId)
 
-	return newMessageHeader(timestamp, length, typeId, streamId), nil
+	return NewMessageHeader(timestamp, length, typeId, streamId), nil
 }
 
 func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -233,7 +233,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	length := readUint24BE(buf[3:6])
 	typeId := buf[6]
 
-	if timestampDelta == EXTENDED_TIMESTAMP_THRESHOLD {
+	if timestampDelta == ExtendedTimestampThreshold {
 		var err error
 		timestampDelta, err = readExtendedTimestamp(r)
 		if err != nil {
@@ -242,28 +242,28 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	}
 
 	// 올바른 타임스탬프 계산 (32비트 산술로 오버플로우 자동 처리)
-	newTimestamp := header.Timestamp + timestampDelta
+	newTimestamp := header.timestamp + timestampDelta
 
 	// 단조성 검증 및 수정 (델타가 0이 아닌 경우만)
 	if timestampDelta > 0 {
 		// 32비트 오버플로우는 정상적인 상황 (약 49일마다 발생)
 		// 실제 문제는 델타가 양수인데 타임스탬프가 감소하는 경우
 		// H.264 B-frame을 고려하여 더 관대하게 처리
-		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
-			timestampDiff := header.Timestamp - newTimestamp
+		if newTimestamp < header.timestamp && timestampDelta < 0x80000000 {
+			timestampDiff := header.timestamp - newTimestamp
 			// 큰 차이가 날 때만 수정 (B-frame 허용)
 			if timestampDiff > 5000 {
 				// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
-				newTimestamp = header.Timestamp + 1
-				slog.Warn("Fixed large non-monotonic timestamp in Fmt1", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
+				newTimestamp = header.timestamp + 1
+				slog.Warn("Fixed large non-monotonic timestamp in Fmt1", "previousTimestamp", header.timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
 			} else {
 				// 작은 역순은 B-frame으로 간주하고 허용
-				slog.Debug("Small timestamp reorder in Fmt1 (likely B-frame)", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
+				slog.Debug("Small timestamp reorder in Fmt1 (likely B-frame)", "previousTimestamp", header.timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
 			}
 		}
 	}
 
-	return newMessageHeader(newTimestamp, length, typeId, header.streamId), nil
+	return NewMessageHeader(newTimestamp, length, typeId, header.streamId), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -273,7 +273,7 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	}
 
 	timestampDelta := readUint24BE(buf[:])
-	if timestampDelta == EXTENDED_TIMESTAMP_THRESHOLD {
+	if timestampDelta == ExtendedTimestampThreshold {
 		var err error
 		timestampDelta, err = readExtendedTimestamp(r)
 		if err != nil {
@@ -282,30 +282,30 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	}
 
 	// 올바른 타임스탬프 계산
-	newTimestamp := header.Timestamp + timestampDelta
+	newTimestamp := header.timestamp + timestampDelta
 
 	// 단조성 검증 및 수정 (델타가 0이 아닌 경우만)
 	if timestampDelta > 0 {
-		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
-			timestampDiff := header.Timestamp - newTimestamp
+		if newTimestamp < header.timestamp && timestampDelta < 0x80000000 {
+			timestampDiff := header.timestamp - newTimestamp
 			// 큰 차이가 날 때만 수정 (B-frame 허용)
 			if timestampDiff > 5000 {
 				// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
-				newTimestamp = header.Timestamp + 1
-				slog.Warn("Fixed large non-monotonic timestamp in Fmt2", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
+				newTimestamp = header.timestamp + 1
+				slog.Warn("Fixed large non-monotonic timestamp in Fmt2", "previousTimestamp", header.timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
 			} else {
 				// 작은 역순은 B-frame으로 간주하고 허용
-				slog.Debug("Small timestamp reorder in Fmt2 (likely B-frame)", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
+				slog.Debug("Small timestamp reorder in Fmt2 (likely B-frame)", "previousTimestamp", header.timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
 			}
 		}
 	}
 
-	return newMessageHeader(newTimestamp, header.length, header.typeId, header.streamId), nil
+	return NewMessageHeader(newTimestamp, header.length, header.typeId, header.streamId), nil
 }
 
 func readFmt3MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
 	// FMT3은 이전 메시지의 헤더와 동일. 여기선 아무것도 읽지 않음
-	return newMessageHeader(header.Timestamp, header.length, header.typeId, header.streamId), nil
+	return NewMessageHeader(header.timestamp, header.length, header.typeId, header.streamId), nil
 }
 
 func readExtendedTimestamp(r io.Reader) (uint32, error) {

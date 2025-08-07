@@ -9,6 +9,7 @@ import (
 	"net"
 	"sol/pkg/amf"
 	"sol/pkg/media"
+	"sync"
 	"unsafe"
 )
 
@@ -32,7 +33,8 @@ type session struct {
 	// MediaServer로 직접 이벤트 전송
 	mediaServerChannel chan<- any
 
-	// 상태 관리
+	// 상태 관리 (동시성 안전성을 위한 뮤텍스)
+	mu           sync.RWMutex
 	isPublishing bool
 	isPlaying    bool
 	isActive     bool
@@ -47,6 +49,9 @@ func (s *session) GetID() string {
 
 // 노드 고유 ID 반환 (MediaNode 인터페이스)
 func (s *session) ID() uintptr {
+	if s == nil {
+		return 0
+	}
 	return uintptr(unsafe.Pointer(s))
 }
 
@@ -65,14 +70,18 @@ func (s *session) Address() string {
 
 // 세션 시작 (MediaNode 인터페이스)
 func (s *session) Start() error {
+	s.mu.Lock()
 	s.isActive = true
+	s.mu.Unlock()
 	slog.Info("RTMP session started", "sessionId", s.sessionId)
 	return nil
 }
 
 // 세션 중지 (MediaNode 인터페이스) 
 func (s *session) Stop() error {
+	s.mu.Lock()
 	s.isActive = false
+	s.mu.Unlock()
 	s.cleanup()
 	slog.Info("RTMP session stopped", "sessionId", s.sessionId)
 	return nil
@@ -82,7 +91,12 @@ func (s *session) Stop() error {
 
 // 미디어 프레임 전송 (MediaSink 인터페이스)
 func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
-	if !s.isPlaying || !s.isActive || s.conn == nil {
+	s.mu.RLock()
+	playing := s.isPlaying
+	active := s.isActive
+	s.mu.RUnlock()
+	
+	if !playing || !active || s.conn == nil {
 		return fmt.Errorf("session not playing or inactive")
 	}
 	
@@ -381,12 +395,12 @@ func (s *session) handleAudio(message *Message) {
 	// 스트림에 직접 오디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
 		// Pool 추적이 가능한 ManagedFrame 생성
-		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.Timestamp, message.payload, false, s.reader.readerContext.poolManager)
+		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, false, s.reader.readerContext.poolManager)
 		
 		// ManagedFrame을 직접 전송 (zero-copy 최적화)
 		s.stream.SendManagedFrame(managedFrame)
 		managedFrame.Release() // Stream에서 처리 후 pool 반납
-		slog.Debug("Audio frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
+		slog.Debug("Audio frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.timestamp)
 	} else {
 		slog.Warn("No stream connected for audio data", "sessionId", s.sessionId)
 	}
@@ -418,12 +432,12 @@ func (s *session) handleVideo(message *Message) {
 	// 스트림에 직접 비디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
 		// Pool 추적이 가능한 ManagedFrame 생성
-		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.Timestamp, message.payload, true, s.reader.readerContext.poolManager)
+		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, true, s.reader.readerContext.poolManager)
 		
 		// ManagedFrame을 직접 전송 (zero-copy 최적화)
 		s.stream.SendManagedFrame(managedFrame)
 		managedFrame.Release() // Stream에서 처리 후 pool 반납
-		slog.Debug("Video frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
+		slog.Debug("Video frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.timestamp)
 	} else {
 		slog.Warn("No stream connected for video data", "sessionId", s.sessionId)
 	}
@@ -607,9 +621,9 @@ func (s *session) cleanup() {
 func (s *session) sendVideoFrame(frame media.Frame) error {
 	message := &Message{
 		messageHeader: &messageHeader{
-			Timestamp: frame.Timestamp,
+			timestamp: frame.Timestamp,
 			length:    uint32(s.calculateDataSize(frame.Data)),
-			typeId:    MSG_TYPE_VIDEO,
+			typeId:    MsgTypeVideo,
 			streamId:  s.streamID,
 		},
 		payload: frame.Data,
@@ -622,9 +636,9 @@ func (s *session) sendVideoFrame(frame media.Frame) error {
 func (s *session) sendAudioFrame(frame media.Frame) error {
 	message := &Message{
 		messageHeader: &messageHeader{
-			Timestamp: frame.Timestamp,
+			timestamp: frame.Timestamp,
 			length:    uint32(s.calculateDataSize(frame.Data)),
-			typeId:    MSG_TYPE_AUDIO,
+			typeId:    MsgTypeAudio,
 			streamId:  s.streamID,
 		},
 		payload: frame.Data,
@@ -654,9 +668,9 @@ func (s *session) sendMetadataToClient(metadata map[string]string) error {
 	payload := [][]byte{encodedData}
 	message := &Message{
 		messageHeader: &messageHeader{
-			Timestamp: 0,
+			timestamp: 0,
 			length:    uint32(len(encodedData)),
-			typeId:    MSG_TYPE_AMF0_DATA,
+			typeId:    MsgTypeAMF0Data,
 			streamId:  s.streamID,
 		},
 		payload: payload,
@@ -756,7 +770,7 @@ func (s *session) handleRead() {
 		}
 
 		switch message.messageHeader.typeId {
-		case MSG_TYPE_SET_CHUNK_SIZE:
+		case MsgTypeSetChunkSize:
 			s.handleSetChunkSize(message)
 		default:
 			s.handleMessage(message)
@@ -778,29 +792,29 @@ func (s *session) handleEvent() {
 func (s *session) handleMessage(message *Message) {
 	slog.Debug("receive message", "sessionId", s.sessionId, "typeId", message.messageHeader.typeId)
 	switch message.messageHeader.typeId {
-	case MSG_TYPE_SET_CHUNK_SIZE:
+	case MsgTypeSetChunkSize:
 		s.handleSetChunkSize(message)
-	case MSG_TYPE_ABORT:
+	case MsgTypeAbort:
 		// Optional: ignore or log
-	case MSG_TYPE_ACKNOWLEDGEMENT:
+	case MsgTypeAcknowledgement:
 		// 서버용: 클라이언트의 ack 수신
-	case MSG_TYPE_USER_CONTROL:
+	case MsgTypeUserControl:
 		//s.handleUserControl(message)
-	case MSG_TYPE_WINDOW_ACK_SIZE:
+	case MsgTypeWindowAckSize:
 		// 클라이언트가 설정한 ack 윈도우 크기
-	case MSG_TYPE_SET_PEER_BW:
+	case MsgTypeSetPeerBW:
 		// bandwidth 제한에 대한 정보
-	case MSG_TYPE_AUDIO:
+	case MsgTypeAudio:
 		s.handleAudio(message)
-	case MSG_TYPE_VIDEO:
+	case MsgTypeVideo:
 		s.handleVideo(message)
-	case MSG_TYPE_AMF3_DATA:
+	case MsgTypeAMF3Data:
 		// AMF3 포맷. 대부분 Flash Player
-	case MSG_TYPE_AMF3_SHARED_OBJECT:
-	case MSG_TYPE_AMF3_COMMAND:
-	case MSG_TYPE_AMF0_DATA:
+	case MsgTypeAMF3SharedObject:
+	case MsgTypeAMF3Command:
+	case MsgTypeAMF0Data:
 		s.handleScriptData(message)
-	case MSG_TYPE_AMF0_COMMAND:
+	case MsgTypeAMF0Command:
 		s.handleAMF0Command(message)
 	default:
 		slog.Warn("unhandled RTMP message type", "sessionId", s.sessionId, "type", message.messageHeader.typeId)
@@ -847,7 +861,7 @@ func (s *session) handleSetChunkSize(message *Message) {
 	}
 
 	// RTMP 최대 청크 크기 제한 (1 ~ 16777215)
-	if newChunkSize < 1 || newChunkSize > EXTENDED_TIMESTAMP_THRESHOLD {
+	if newChunkSize < 1 || newChunkSize > ExtendedTimestampThreshold {
 		slog.Error("Set Chunk Size out of valid range", "value", newChunkSize, "sessionId", s.sessionId)
 		return
 	}
