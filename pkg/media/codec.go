@@ -27,3 +27,17 @@ func IsKeyFrame(frameType string) bool {
 		   strings.Contains(frameTypeLower, "i-frame") ||
 		   strings.Contains(frameTypeLower, "idr")
 }
+
+// IsBFrame determines if frame type represents a B-frame (bidirectional frame)
+func IsBFrame(frameType string) bool {
+	frameTypeLower := strings.ToLower(frameType)
+	return strings.Contains(frameTypeLower, "disposable inter frame") ||
+		   strings.Contains(frameTypeLower, "b-frame") ||
+		   strings.Contains(frameTypeLower, "bi-directional")
+}
+
+// IsPFrame determines if frame type represents a P-frame (predictive frame)  
+func IsPFrame(frameType string) bool {
+	frameTypeLower := strings.ToLower(frameType)
+	return strings.Contains(frameTypeLower, "inter frame") && !IsBFrame(frameType)
+}

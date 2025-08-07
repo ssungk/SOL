@@ -11,6 +11,17 @@ rtsp:
   port: 554                     # 기본값: 554
   timeout: 60                   # 기본값: 60 (초)
 
+# HLS 서버 설정
+hls:
+  port: 8081                    # 기본값: 8081
+  segment_duration: 6s          # 기본값: 6s (세그먼트 길이)
+  playlist_size: 5              # 기본값: 5 (플레이리스트 세그먼트 수)
+  format: ts                    # 기본값: ts (세그먼트 형식: ts 또는 fmp4)
+  cors_enabled: true            # 기본값: true (CORS 활성화)
+  low_latency: false            # 기본값: false (저지연 모드)
+  storage_path: /tmp/hls        # 기본값: /tmp/hls (세그먼트 저장 경로)
+  max_concurrent: 10            # 기본값: 10 (최대 동시 스트림 수)
+
 # API 서버 설정
 api:
   port: 8080                    # 기본값: 8080

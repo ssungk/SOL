@@ -177,11 +177,12 @@ func (sb *StreamBuffer) AddMetadata(metadata map[string]string) {
 }
 
 // 새로운 플레이어를 위해 적절한 순서로 모든 캐시된 프레임을 반환합니다
+// H.264 디코딩을 위해 키프레임부터 시작하는 GOP를 보장합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) GetCachedFrames() []Frame {
 	allFrames := make([]Frame, 0)
 
-	// 1. Video extra data first
+	// 1. Video extra data first (SPS/PPS)
 	if sb.videoExtraData != nil {
 		allFrames = append(allFrames, sb.videoExtraData.Frame)
 	}
@@ -191,8 +192,23 @@ func (sb *StreamBuffer) GetCachedFrames() []Frame {
 		allFrames = append(allFrames, sb.audioExtraData.Frame)
 	}
 
-	// 3. All cached frames (already in timestamp order)
-	allFrames = append(allFrames, sb.frames...)
+	// 3. 키프레임부터 시작하는 프레임들만 포함 (H.264 디코딩 보장)
+	if sb.lastKeyFrameIndex >= 0 && sb.lastKeyFrameIndex < len(sb.frames) {
+		// 마지막 키프레임부터 끝까지의 프레임들
+		keyFrameBasedFrames := sb.frames[sb.lastKeyFrameIndex:]
+		allFrames = append(allFrames, keyFrameBasedFrames...)
+		
+		slog.Debug("Cached frames prepared with key frame GOP", 
+			"totalFrames", len(keyFrameBasedFrames), 
+			"keyFrameIndex", sb.lastKeyFrameIndex,
+			"hasVideoSeq", sb.videoExtraData != nil,
+			"hasAudioSeq", sb.audioExtraData != nil)
+	} else if len(sb.frames) > 0 {
+		// 키프레임이 없는 경우 경고하고 모든 프레임 포함 (fallback)
+		slog.Warn("No key frame available for new player, this may cause decoding issues", 
+			"totalFrames", len(sb.frames))
+		allFrames = append(allFrames, sb.frames...)
+	}
 
 	return allFrames
 }

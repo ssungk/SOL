@@ -3,6 +3,7 @@ package rtmp
 import (
 	"fmt"
 	"log/slog"
+	"sol/pkg/media"
 	"sync"
 )
 
@@ -12,6 +13,7 @@ type messageReaderContext struct {
 	payloadLengths map[uint32]uint32
 	chunkSize      uint32
 	bufferPool     *sync.Pool
+	poolManager    *media.PoolManager // Pool manager 추가
 }
 
 func newMessageReaderContext() *messageReaderContext {
@@ -21,6 +23,7 @@ func newMessageReaderContext() *messageReaderContext {
 		payloadLengths: make(map[uint32]uint32),
 		chunkSize:      DEFAULT_CHUNK_SIZE,
 		bufferPool:     NewBufferPool(DEFAULT_CHUNK_SIZE),
+		poolManager:    media.NewPoolManager(), // Pool manager 초기화
 	}
 }
 

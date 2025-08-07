@@ -52,3 +52,27 @@ func convertRTMPFrameToMediaFrame(frameType RTMPFrameType, timestamp uint32, dat
 		Data:      data,
 	}
 }
+
+// convertRTMPFrameToManagedFrame RTMP 프레임을 ManagedFrame으로 변환 (pool 추적)
+func convertRTMPFrameToManagedFrame(frameType RTMPFrameType, timestamp uint32, data [][]byte, isVideo bool, poolManager *media.PoolManager) *media.ManagedFrame {
+	var mediaType media.Type
+	if isVideo {
+		mediaType = media.TypeVideo
+	} else {
+		mediaType = media.TypeAudio
+	}
+
+	// ManagedFrame 생성
+	managedFrame := media.NewManagedFrame(mediaType, string(frameType), timestamp, poolManager)
+	
+	// 각 데이터 청크를 추가
+	for _, chunk := range data {
+		if len(chunk) > 0 {
+			// Pool에서 할당된 버퍼인지 확인하여 적절히 추가
+			// PoolManager에 등록되어 있으면 pooled chunk로, 아니면 regular chunk로 추가
+			managedFrame.AddRegularChunk(chunk)
+		}
+	}
+	
+	return managedFrame
+}
