@@ -21,8 +21,8 @@ func newMessageReaderContext() *messageReaderContext {
 		messageHeaders: make(map[uint32]*messageHeader),
 		payloads:       make(map[uint32][][]byte),
 		payloadLengths: make(map[uint32]uint32),
-		chunkSize:      DEFAULT_CHUNK_SIZE,
-		bufferPool:     NewBufferPool(DEFAULT_CHUNK_SIZE),
+		chunkSize:      DefaultChunkSize,
+		bufferPool:     NewBufferPool(DefaultChunkSize),
 		poolManager:    media.NewPoolManager(), // Pool manager 초기화
 	}
 }

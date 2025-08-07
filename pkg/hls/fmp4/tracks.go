@@ -131,7 +131,7 @@ func (w *FMP4Writer) writeVideoMDHD() error {
 	now := uint32(0)
 	timescale := VideoTimeScale
 	if w.videoTrack != nil {
-		timescale = w.videoTrack.Timescale
+		timescale = int(w.videoTrack.Timescale)
 	}
 	
 	// Creation time

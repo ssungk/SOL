@@ -541,7 +541,7 @@ func (w *FMP4Writer) writeTFHD(traf *TrackFragment, baseDataOffset uint32) error
 		boxSize += 4
 	}
 	
-	if err := w.writeFullBoxHeader(boxSize, BoxTypeTFHD, 0, flags); err != nil {
+	if err := w.writeFullBoxHeader(boxSize, BoxTypeTFHD, 0, uint32(flags)); err != nil {
 		return err
 	}
 	
@@ -571,7 +571,7 @@ func (w *FMP4Writer) writeTRUN(traf *TrackFragment, dataOffset uint32) error {
 	// 박스 크기 계산
 	boxSize := uint32(8 + 4 + 4 + 4 + len(traf.Samples)*12) // 기본 + 샘플별 12바이트
 	
-	if err := w.writeFullBoxHeader(boxSize, BoxTypeTRUN, 0, flags); err != nil {
+	if err := w.writeFullBoxHeader(boxSize, BoxTypeTRUN, 0, uint32(flags)); err != nil {
 		return err
 	}
 	
