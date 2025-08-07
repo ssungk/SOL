@@ -12,7 +12,6 @@ import (
 
 type Config struct {
 	RTMP    RTMPConfig    `yaml:"rtmp"`
-	RTMP2   RTMP2Config   `yaml:"rtmp2"`
 	RTSP    RTSPConfig    `yaml:"rtsp"`
 	API     APIConfig     `yaml:"api"`
 	Logging LoggingConfig `yaml:"logging"`
@@ -23,9 +22,6 @@ type RTMPConfig struct {
 	Port int `yaml:"port"`
 }
 
-type RTMP2Config struct {
-	Port int `yaml:"port"`
-}
 
 type RTSPConfig struct {
 	Port    int `yaml:"port"`
@@ -50,9 +46,6 @@ func GetConfigWithDefaults() *Config {
 	return &Config{
 		RTMP: RTMPConfig{
 			Port: 1935,
-		},
-		RTMP2: RTMP2Config{
-			Port: 1936,
 		},
 		RTSP: RTSPConfig{
 			Port: 554,

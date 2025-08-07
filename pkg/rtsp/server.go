@@ -21,7 +21,6 @@ type Server struct {
 	port            int
 	timeout         int
 	sessions        map[string]*Session // sessionId -> session
-	streamManager   *StreamManager
 	rtpTransport    *rtp.RTPTransport
 	rtpStarted      bool
 	channel         chan interface{}    // 내부 채널
@@ -40,7 +39,6 @@ func NewServer(config RTSPConfig, externalChannel chan<- interface{}, wg *sync.W
 		port:          config.Port,
 		timeout:       config.Timeout,
 		sessions:      make(map[string]*Session),
-		streamManager: NewStreamManager(),
 		rtpTransport:  rtp.NewRTPTransport(),
 		channel:       make(chan interface{}, 100), // 내부 채널
 		externalChannel: externalChannel,             // 외부 송신 전용 채널
@@ -132,145 +130,23 @@ func (s *Server) eventLoop() {
 	}
 }
 
-// handleEvent handles different types of events
+// handleEvent handles different types of events and forwards to MediaServer
 func (s *Server) handleEvent(event interface{}) {
-	switch e := event.(type) {
-	case SessionTerminated:
-		s.handleSessionTerminated(e)
-	case DescribeRequested:
-		s.handleDescribeRequested(e)
-	case PlayStarted:
-		s.handlePlayStarted(e)
-	case PlayStopped:
-		s.handlePlayStopped(e)
-	case RecordStarted:
-		s.handleRecordStarted(e)
-	case RecordStopped:
-		s.handleRecordStopped(e)
-	case AnnounceReceived:
-		s.handleAnnounceReceived(e)
-	case RTPPacketReceived:
-		s.handleRTPPacketReceived(e)
-	default:
-		slog.Warn("Unknown RTSP event type", "eventType", fmt.Sprintf("%T", e))
-	}
-}
-
-// handleSessionTerminated handles session termination
-func (s *Server) handleSessionTerminated(event SessionTerminated) {
-	session := s.sessions[event.SessionId]
-	if session == nil {
-		slog.Warn("Session not found for termination", "sessionId", event.SessionId)
-		return
-	}
-
-	// Remove session from all streams
-	for _, stream := range s.streamManager.GetAllStreams() {
-		stream.RemoveSession(session)
-		
-		// Remove inactive streams
-		if stream.GetSessionCount() == 0 {
-			s.streamManager.RemoveStream(stream.name)
+	// 모든 이벤트를 MediaServer로 전달
+	if s.externalChannel != nil {
+		select {
+		case s.externalChannel <- event:
+			slog.Debug("Event forwarded to MediaServer", "eventType", fmt.Sprintf("%T", event))
+		default:
+			slog.Warn("Failed to forward event to MediaServer (channel full)", "eventType", fmt.Sprintf("%T", event))
 		}
 	}
-
-	// Remove session from server
-	delete(s.sessions, event.SessionId)
-	slog.Info("RTSP session terminated", "sessionId", event.SessionId)
 }
 
-// handleDescribeRequested handles DESCRIBE requests
-func (s *Server) handleDescribeRequested(event DescribeRequested) {
-	slog.Info("DESCRIBE requested", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Get or create stream
-	stream := s.streamManager.GetOrCreateStream(event.StreamPath)
-	
-	// Add session to stream
-	if session := s.sessions[event.SessionId]; session != nil {
-		stream.AddSession(session)
-	}
-}
-
-// handlePlayStarted handles PLAY requests
-func (s *Server) handlePlayStarted(event PlayStarted) {
-	slog.Info("PLAY started", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Get stream
-	stream := s.streamManager.GetStream(event.StreamPath)
-	if stream == nil {
-		slog.Warn("Stream not found for PLAY", "streamPath", event.StreamPath)
-		return
-	}
-	
-	// Add session as player
-	if session := s.sessions[event.SessionId]; session != nil {
-		stream.AddPlayer(session)
-	}
-}
-
-// handlePlayStopped handles PLAY stop/PAUSE/TEARDOWN
-func (s *Server) handlePlayStopped(event PlayStopped) {
-	slog.Info("PLAY stopped", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Get stream
-	stream := s.streamManager.GetStream(event.StreamPath)
-	if stream == nil {
-		return
-	}
-	
-	// Remove session as player
-	if session := s.sessions[event.SessionId]; session != nil {
-		stream.RemovePlayer(session)
-	}
-}
-
-// handleRecordStarted handles RECORD requests
-func (s *Server) handleRecordStarted(event RecordStarted) {
-	slog.Info("RECORD started", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Get or create stream
-	stream := s.streamManager.GetOrCreateStream(event.StreamPath)
-	
-	// Set session as publisher
-	if session := s.sessions[event.SessionId]; session != nil {
-		stream.SetPublisher(session, "")
-	}
-}
-
-// handleRecordStopped handles RECORD stop
-func (s *Server) handleRecordStopped(event RecordStopped) {
-	slog.Info("RECORD stopped", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Implementation would handle stopping recording
-}
-
-// handleAnnounceReceived handles ANNOUNCE with SDP
-func (s *Server) handleAnnounceReceived(event AnnounceReceived) {
-	slog.Info("ANNOUNCE received", "sessionId", event.SessionId, "streamPath", event.StreamPath)
-	
-	// Get or create stream
-	stream := s.streamManager.GetOrCreateStream(event.StreamPath)
-	
-	// Set session as publisher with SDP
-	if session := s.sessions[event.SessionId]; session != nil {
-		stream.SetPublisher(session, event.SDP)
-		stream.AddSession(session)
-	}
-}
-
-// handleRTPPacketReceived handles RTP packets
-func (s *Server) handleRTPPacketReceived(event RTPPacketReceived) {
-	slog.Debug("RTP packet received", "sessionId", event.SessionId, "streamPath", event.StreamPath, "dataSize", len(event.Data))
-	
-	// Get stream
-	stream := s.streamManager.GetStream(event.StreamPath)
-	if stream == nil {
-		return
-	}
-	
-	// Broadcast to all players
-	stream.BroadcastRTPPacket(event.Data)
+// 세션 종료 시 세션 맵에서 제거 (MediaServer에서 나머지 처리)
+func (s *Server) removeSession(sessionId string) {
+	delete(s.sessions, sessionId)
+	slog.Info("RTSP session removed from server", "sessionId", sessionId)
 }
 
 // createListener creates a TCP listener
@@ -311,8 +187,8 @@ func (s *Server) acceptConnections(ln net.Listener) {
 			}
 		}
 		
-		// Create new session
-		session := NewSession(conn, s.channel, s.rtpTransport)
+		// Create new session with MediaServer channel for direct event forwarding
+		session := NewSession(conn, s.externalChannel, s.rtpTransport)
 		s.sessions[session.sessionId] = session
 		
 		// Start session handling

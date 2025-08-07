@@ -37,7 +37,6 @@ go test -v ./...
 
 # 특정 패키지 테스트
 go test ./pkg/rtmp/
-go test ./pkg/rtmp2/
 go test ./pkg/media/
 ```
 
@@ -76,16 +75,17 @@ SOL은 Go로 구축된 멀티 프로토콜 스트리밍 서버로, RTMP와 RTSP 
    - 외부 제어 및 모니터링을 위한 REST API 서버
    - 스트림 관리 및 통계를 위한 엔드포인트 제공
 
-4. **프로토콜 구현** (`pkg/rtmp/`, `pkg/rtmp2/`, `pkg/rtsp/`)
+4. **프로토콜 구현** (`pkg/rtmp/`, `pkg/rtsp/`)
    - 각 프로토콜은 자체 서버, 세션, 메시지 처리를 가짐
    - 프로토콜별 파싱 및 인코딩
-   - `pkg/rtmp2/`는 새로운 MediaSource/MediaSink 패턴 적용
+   - 모든 프로토콜이 MediaSource/MediaSink 패턴 적용
    - 내부 채널을 사용한 이벤트 드리븐 아키텍처
 
 5. **공통 스트리밍 코어** (`pkg/media/`)
    - 프로토콜 독립적 스트림 관리 (MediaSource/MediaSink 패턴)
    - 미디어 프레임 추상화 및 스마트 버퍼링
    - 발행자-구독자 패턴 구현
+   - **프로토콜 간 스트림 공유**: RTMP 발행 → RTSP 재생, RTSP 발행 → RTMP 재생
 
 ### 스트림 관리 시스템
 
@@ -168,18 +168,27 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 - 설정 변경 시 서버 재시작 필요 (핫 리로드 미지원)
 
 
+## 완료된 주요 기능
+
+### ✅ 최근 완료된 기능들
+- [x] **RTMP 패키지 통합**: 기존 pkg/rtmp 삭제, pkg/rtmp2를 pkg/rtmp로 통합
+- [x] **RTSP pkg/media 아키텍처 적용**: RTSP 서버가 MediaSource/MediaSink 패턴 사용
+- [x] **프로토콜 간 스트림 공유**: RTMP ↔ RTSP 간 실시간 스트림 공유 가능
+- [x] **이벤트 시스템 통합**: 모든 프로토콜이 동일한 이벤트 시스템 사용
+- [x] **중앙집중식 스트림 관리**: MediaServer에서 모든 프로토콜의 스트림 통합 관리
+
 ## TODO 리스트
 
 ### 🚀 곧 작업 해야할 TODO 리스트
 - [ ] Stream에 Sink 없을 시 auto Release 구현
-- [ ] pkg/rtmp에서 pkg/rtmp2로 마이그레이션 작업
 - [ ] rtmp video tag header Frame으로 전달시 제거 필요
-- [ ] RTSP를 pkg/media 아키텍처로 리팩토링
+
+### 고민중인 TODO 리스트
+- [ ] keyframe 단위 캐시 on/off 기능 
 
 ### 향후 고려 해볼만한 TODO 리스트
 - [ ] **프로토콜 확장**
-   - [ ] RTSP 서버 구현
-   - [ ] HLS 출력 지원
+    - [ ] HLS 출력 지원
    - [ ] WebRTC 지원 검토
    - [ ] SRT 지원 검토
    - [ ] Transcoder 지원 검토
