@@ -4,7 +4,7 @@ import (
 	"log/slog"
 )
 
-// StreamBuffer 모든 유형의 미디어 캐싱을 관리합니다
+// 모든 유형의 미디어 캐싱을 관리합니다
 // 이벤트 드리븐 모델: 경쟁 상태를 피하기 위해 모든 접근은 이벤트 루프를 통해야 합니다
 type StreamBuffer struct {
 	// 시간순으로 정렬된 모든 프레임 (비디오/오디오 통합)
@@ -26,12 +26,12 @@ type StreamBuffer struct {
 	lastKeyFrameIndex int // 마지막 키프레임 위치
 }
 
-// NewStreamBuffer 새로운 스트림 버퍼를 생성합니다 (기본 설정)
+// 새로운 스트림 버퍼를 생성합니다 (기본 설정)
 func NewStreamBuffer() *StreamBuffer {
 	return NewStreamBufferWithConfig(2000, 10000, 1000) // 2-10초, 최대 1000프레임
 }
 
-// NewStreamBufferWithConfig 설정 가능한 스트림 버퍼를 생성합니다
+// 설정 가능한 스트림 버퍼를 생성합니다
 func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames int) *StreamBuffer {
 	return &StreamBuffer{
 		frames:              make([]Frame, 0),
@@ -42,7 +42,7 @@ func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames in
 	}
 }
 
-// AddFrame 프레임을 캐시에 추가합니다 (비디오/오디오 통합 처리)
+// 프레임을 캐시에 추가합니다 (비디오/오디오 통합 처리)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) AddFrame(frame Frame) {
 	// Handle extra data (sequence headers) separately
@@ -163,7 +163,7 @@ func (sb *StreamBuffer) getBufferDuration() uint32 {
 }
 
 
-// AddMetadata 메타데이터를 캐시에 추가합니다
+// 메타데이터를 캐시에 추가합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) AddMetadata(metadata map[string]string) {
 	// Make a copy of metadata to avoid reference issues
@@ -176,7 +176,7 @@ func (sb *StreamBuffer) AddMetadata(metadata map[string]string) {
 	slog.Debug("Metadata cached")
 }
 
-// GetCachedFrames 새로운 플레이어를 위해 적절한 순서로 모든 캐시된 프레임을 반환합니다
+// 새로운 플레이어를 위해 적절한 순서로 모든 캐시된 프레임을 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) GetCachedFrames() []Frame {
 	allFrames := make([]Frame, 0)
@@ -198,7 +198,7 @@ func (sb *StreamBuffer) GetCachedFrames() []Frame {
 }
 
 
-// GetMetadata 캐시된 메타데이터를 반환합니다
+// 캐시된 메타데이터를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) GetMetadata() map[string]string {
 	if sb.metadata == nil {
@@ -225,7 +225,7 @@ func (sb *StreamBuffer) Clear() {
 	slog.Debug("Stream buffer cleared")
 }
 
-// HasCachedData 캐시된 데이터가 있으면 true를 반환합니다
+// 캐시된 데이터가 있으면 true를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) HasCachedData() bool {
 	hasVideo := sb.videoExtraData != nil || len(sb.frames) > 0
@@ -235,7 +235,7 @@ func (sb *StreamBuffer) HasCachedData() bool {
 	return hasVideo || hasAudio || hasMetadata
 }
 
-// GetCacheStats 캐시 통계를 반환합니다 (개선된 버전)
+// 캐시 통계를 반환합니다 (개선된 버전)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) GetCacheStats() map[string]interface{} {
 	bufferDuration := sb.getBufferDuration()

@@ -1,4 +1,4 @@
-package rtmp2
+package rtmp
 
 import (
 	"sol/pkg/media"
@@ -20,20 +20,11 @@ const (
 	RTMPSessionTypePlayer    RTMPSessionType = "player"
 )
 
-// RTMPSessionInfo RTMP 세션 정보
-type RTMPSessionInfo struct {
-	SessionID  string
-	StreamName string
-	AppName    string
-	StreamID   uint32
-	Type       RTMPSessionType
-}
-
 // RTMPFrameType RTMP 프레임 타입 정의
 type RTMPFrameType string
 
 const (
-	RTMPFrameTypeKeyFrame              RTMPFrameType = "key frame"
+	RTMPFrameTypeKeyFrame             RTMPFrameType = "key frame"
 	RTMPFrameTypeInterFrame           RTMPFrameType = "inter frame"
 	RTMPFrameTypeDisposableInterFrame RTMPFrameType = "disposable inter frame"
 	RTMPFrameTypeGeneratedKeyFrame    RTMPFrameType = "generated key frame"
@@ -61,4 +52,3 @@ func convertRTMPFrameToMediaFrame(frameType RTMPFrameType, timestamp uint32, dat
 		Data:      data,
 	}
 }
-

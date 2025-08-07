@@ -1,7 +1,7 @@
 package media
 
 
-// MediaNode 모든 미디어 노드의 공통 인터페이스
+// 모든 미디어 노드의 공통 인터페이스
 type MediaNode interface {
 	// Basic identification
 	ID() uintptr
@@ -13,12 +13,12 @@ type MediaNode interface {
 	Stop() error
 }
 
-// MediaSource 미디어 데이터 소스 (publisher/encoder/file)
+// 미디어 데이터 소스 (publisher/encoder/file)
 type MediaSource interface {
 	MediaNode
 }
 
-// MediaSink 미디어 데이터 싱크 (viewer/decoder/file)
+// 미디어 데이터 싱크 (viewer/decoder/file)
 type MediaSink interface {
 	MediaNode
 

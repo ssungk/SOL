@@ -6,12 +6,11 @@ import (
 	"log/slog"
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
-	"sol/pkg/rtmp2"
 	"sol/pkg/rtsp"
 	"sync"
 )
 
-// StreamConfig represents stream configuration
+// represents stream configuration
 type StreamConfig struct {
 	GopCacheSize        int
 	MaxPlayersPerStream int
@@ -19,7 +18,6 @@ type StreamConfig struct {
 
 type MediaServer struct {
 	rtmp     *rtmp.Server
-	rtmp2    *rtmp2.Server
 	rtsp     *rtsp.Server
 	channel  chan interface{}
 	ctx      context.Context
@@ -31,7 +29,7 @@ type MediaServer struct {
 	nodes   map[uintptr]media.MediaNode  // nodeId -> MediaNode (Source|Sink)
 }
 
-func NewMediaServer(rtmpPort, rtmp2Port, rtspPort, rtspTimeout int, streamConfig StreamConfig) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig) *MediaServer {
 	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -44,16 +42,11 @@ func NewMediaServer(rtmpPort, rtmp2Port, rtspPort, rtspTimeout int, streamConfig
 	}
 
 	// RTMP 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
-	mediaServer.rtmp = rtmp.NewServer(rtmpPort, rtmp.StreamConfig{
+	mediaServer.rtmp = rtmp.NewServer(rtmpPort, rtmp.RTMPStreamConfig{
 		GopCacheSize:        streamConfig.GopCacheSize,
 		MaxPlayersPerStream: streamConfig.MaxPlayersPerStream,
 	}, mediaServer.channel, &mediaServer.wg)
 
-	// RTMP2 서버 생성 (MediaServer와 연동)
-	mediaServer.rtmp2 = rtmp2.NewServer(rtmp2Port, rtmp2.RTMPStreamConfig{
-		GopCacheSize:        streamConfig.GopCacheSize,
-		MaxPlayersPerStream: streamConfig.MaxPlayersPerStream,
-	}, mediaServer.channel, &mediaServer.wg)
 
 	// RTSP 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
 	mediaServer.rtsp = rtsp.NewServer(rtsp.RTSPConfig{
@@ -74,12 +67,6 @@ func (s *MediaServer) Start() error {
 	}
 	slog.Info("RTMP Server started")
 
-	// RTMP2 서버 시작
-	if err := s.rtmp2.Start(); err != nil {
-		slog.Error("Failed to start RTMP2 server", "err", err)
-		return err
-	}
-	slog.Info("RTMP2 Server started")
 
 	// RTSP 서버 시작
 	if err := s.rtsp.Start(); err != nil {
@@ -94,7 +81,7 @@ func (s *MediaServer) Start() error {
 	return nil
 }
 
-// Stop stops the server
+// stops the server
 func (s *MediaServer) Stop() {
 	slog.Info("Stopping Media Server...")
 	s.cancel()
@@ -124,12 +111,10 @@ func (s *MediaServer) channelHandler(data interface{}) {
 		s.handlePlayStarted(v)
 	case media.PlayStopped:
 		s.handlePlayStopped(v)
-	case media.NodeConnected:
-		s.handleNodeConnected(v)
-	case media.NodeDisconnected:
-		s.handleNodeDisconnected(v)
-	case media.SessionTerminated:
-		s.handleSessionTerminated(v)
+	case media.NodeCreated:
+		s.handleNodeCreated(v)
+	case media.NodeTerminated:
+		s.handleNodeTerminated(v)
 	default:
 		slog.Warn("Unknown event type", "eventType", fmt.Sprintf("%T", v))
 	}
@@ -142,8 +127,6 @@ func (s *MediaServer) shutdown() {
 	s.rtmp.Stop()
 	slog.Info("RTMP Server stopped")
 
-	s.rtmp2.Stop()
-	slog.Info("RTMP2 Server stopped")
 
 	s.rtsp.Stop()
 	slog.Info("RTSP Server stopped")
@@ -155,7 +138,7 @@ func (s *MediaServer) shutdown() {
 	slog.Info("Media Server stopped successfully")
 }
 
-// GetOrCreateStream 스트림을 가져오거나 생성
+// 스트림을 가져오거나 생성
 func (s *MediaServer) GetOrCreateStream(streamId string) *media.Stream {
 	stream, exists := s.streams[streamId]
 	if !exists {
@@ -167,10 +150,14 @@ func (s *MediaServer) GetOrCreateStream(streamId string) *media.Stream {
 	return stream
 }
 
-// RegisterNode 노드(Source 또는 Sink) 등록
+// 노드(Source 또는 Sink) 등록
 func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 	nodeId := node.ID()
-	s.nodes[nodeId] = node
+	
+	// 이미 nodes 맵에 있다면 스킵 (NodeCreated에서 이미 등록됨)
+	if _, exists := s.nodes[nodeId]; !exists {
+		s.nodes[nodeId] = node
+	}
 	
 	// 스트림 가져오거나 생성
 	stream := s.GetOrCreateStream(streamId)
@@ -198,7 +185,7 @@ func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 	}
 }
 
-// RemoveNode 노드 제거
+// 노드 제거
 func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	node, exists := s.nodes[nodeId]
 	if !exists {
@@ -239,17 +226,17 @@ func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	}
 }
 
-// GetStreamCount 스트림 개수 반환
+// 스트림 개수 반환
 func (s *MediaServer) GetStreamCount() int {
 	return len(s.streams)
 }
 
-// GetNodeCount 노드 개수 반환  
+// 노드 개수 반환  
 func (s *MediaServer) GetNodeCount() int {
 	return len(s.nodes)
 }
 
-// GetStreamStats 스트림 통계 반환
+// 스트림 통계 반환
 func (s *MediaServer) GetStreamStats() map[string]interface{} {
 	sourceCount := 0
 	sinkCount := 0
@@ -275,90 +262,119 @@ func (s *MediaServer) GetStreamStats() map[string]interface{} {
 
 // handlePublishStarted 발행 시작 이벤트 처리
 func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
-	slog.Info("Publish started", "sessionId", event.SessionId, "streamName", event.StreamName, "nodeType", event.NodeType.String())
-	
 	// 노드 ID를 통해 노드 찾기
-	node, exists := s.nodes[event.NodeId]
+	node, exists := s.nodes[event.NodeId()]
 	if !exists {
-		slog.Error("Node not found for publish started", "nodeId", event.NodeId)
+		slog.Error("Node not found for publish started", "nodeId", event.NodeId())
 		return
 	}
 	
 	// 소스인지 확인
-	source, ok := node.(media.MediaSource)
+	_, ok := node.(media.MediaSource)
 	if !ok {
-		slog.Error("Node is not a source", "nodeId", event.NodeId)
+		slog.Error("Node is not a source", "nodeId", event.NodeId())
 		return
 	}
 	
-	// 스트림에 소스 연결 (rtmp2 Source의 SetStream 호출)
-	stream := s.GetOrCreateStream(event.StreamName)
-	if rtmpSource, ok := source.(*rtmp2.RTMPSource); ok {
-		rtmpSource.SetStream(stream)
+	var stream *media.Stream
+	var streamId string
+	
+	// RTSP 노드의 경우 스트림 생성 및 연결
+	if event.NodeType == media.MediaNodeTypeRTSP {
+		if rtspSession, ok := node.(*rtsp.Session); ok {
+			streamId = rtspSession.GetStreamPath()
+			stream = s.GetOrCreateStream(streamId)
+			rtspSession.SetStream(stream)
+			slog.Info("Stream created and connected for RTSP publish", "streamId", streamId, "sessionId", rtspSession.GetStreamPath())
+		}
+	} else if event.Stream != nil {
+		// RTMP 등 다른 프로토콜의 경우 이미 생성된 스트림 사용
+		stream = event.Stream
+		streamId = stream.GetId()
+	} else {
+		slog.Error("No stream provided and unable to create for node type", "nodeType", event.NodeType.String())
+		return
 	}
 	
-	slog.Info("Source registered for publish", "streamName", event.StreamName, "sourceId", event.NodeId)
+	// 스트림을 MediaServer에 등록
+	s.streams[streamId] = stream
+	
+	slog.Info("Source registered for publish", "streamId", streamId, "sourceId", event.NodeId(), "nodeType", event.NodeType.String())
 }
 
 // handlePublishStopped 발행 중지 이벤트 처리  
 func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
-	slog.Info("Publish stopped", "sessionId", event.SessionId, "streamName", event.StreamName, "nodeType", event.NodeType.String())
+	slog.Info("Publish stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
 	// 노드 제거는 이미 RegisterNode/RemoveNode에서 처리됨
-	slog.Info("Source unregistered from publish", "streamName", event.StreamName, "sourceId", event.NodeId)
+	slog.Info("Source unregistered from publish", "streamId", event.StreamId, "sourceId", event.NodeId())
 }
 
 // handlePlayStarted 재생 시작 이벤트 처리
 func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
-	slog.Info("Play started", "sessionId", event.SessionId, "streamName", event.StreamName, "nodeType", event.NodeType.String())
+	slog.Info("Play started", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
 	// 노드 ID를 통해 노드 찾기
-	node, exists := s.nodes[event.NodeId]
+	node, exists := s.nodes[event.NodeId()]
 	if !exists {
-		slog.Error("Node not found for play started", "nodeId", event.NodeId)
+		slog.Error("Node not found for play started", "nodeId", event.NodeId())
 		return
 	}
 	
 	// 싱크인지 확인
 	sink, ok := node.(media.MediaSink)
 	if !ok {
-		slog.Error("Node is not a sink", "nodeId", event.NodeId)
+		slog.Error("Node is not a sink", "nodeId", event.NodeId())
 		return
 	}
 	
-	// 스트림에서 캐시된 데이터 전송 (RegisterNode에서 이미 처리되므로 생략 가능)
-	stream := s.GetOrCreateStream(event.StreamName)
-	if err := stream.SendCachedDataToSink(sink); err != nil {
-		slog.Error("Failed to send cached data to sink", "streamName", event.StreamName, "sinkId", event.NodeId, "err", err)
+	// 스트림 가져오거나 생성
+	stream := s.GetOrCreateStream(event.StreamId)
+	
+	// Sink를 스트림에 추가
+	if err := stream.AddSink(sink); err != nil {
+		slog.Error("Failed to add sink to stream", "streamId", event.StreamId, "sinkId", event.NodeId(), "err", err)
+		return
 	}
 	
-	slog.Info("Sink registered for play", "streamName", event.StreamName, "sinkId", event.NodeId)
+	// RTSP 세션인 경우 스트림 참조 설정
+	if event.NodeType == media.MediaNodeTypeRTSP {
+		if rtspSession, ok := sink.(*rtsp.Session); ok {
+			rtspSession.SetStream(stream)
+			slog.Info("Stream reference set for RTSP session", "streamId", event.StreamId, "sessionId", rtspSession.GetStreamPath())
+		}
+	}
+	
+	// 캐시된 데이터 전송
+	if err := stream.SendCachedDataToSink(sink); err != nil {
+		slog.Error("Failed to send cached data to sink", "streamId", event.StreamId, "sinkId", event.NodeId(), "err", err)
+	}
+	
+	slog.Info("Sink registered for play", "streamId", event.StreamId, "sinkId", event.NodeId())
 }
 
 // handlePlayStopped 재생 중지 이벤트 처리
 func (s *MediaServer) handlePlayStopped(event media.PlayStopped) {
-	slog.Info("Play stopped", "sessionId", event.SessionId, "streamName", event.StreamName, "nodeType", event.NodeType.String())
+	slog.Info("Play stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
 	// 노드 제거는 이미 RegisterNode/RemoveNode에서 처리됨
-	slog.Info("Sink unregistered from play", "streamName", event.StreamName, "sinkId", event.NodeId)
+	slog.Info("Sink unregistered from play", "streamId", event.StreamId, "sinkId", event.NodeId())
 }
 
-// handleNodeConnected 노드 연결 이벤트 처리
-func (s *MediaServer) handleNodeConnected(event media.NodeConnected) {
-	slog.Info("Node connected", "sessionId", event.SessionId, "nodeId", event.NodeId, "nodeType", event.NodeType.String(), "address", event.Address)
-	// 노드 연결 시 추가 로직이 필요한 경우 여기서 처리
-}
-
-// handleNodeDisconnected 노드 연결 해제 이벤트 처리
-func (s *MediaServer) handleNodeDisconnected(event media.NodeDisconnected) {
-	slog.Info("Node disconnected", "sessionId", event.SessionId, "nodeId", event.NodeId, "nodeType", event.NodeType.String())
+// handleNodeCreated 노드 생성 이벤트 처리 (연결만 된 상태)
+func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
+	slog.Info("Node created", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
 	
-	// 노드 제거
-	s.RemoveNode(event.NodeId)
+	// 노드를 nodes 맵에 등록 (아직 스트림에는 연결하지 않음)
+	s.nodes[event.NodeId()] = event.Node
+	slog.Info("Node registered in nodes map", "nodeId", event.NodeId())
 }
 
-// handleSessionTerminated 세션 종료 이벤트 처리
-func (s *MediaServer) handleSessionTerminated(event media.SessionTerminated) {
-	slog.Info("Session terminated", "sessionId", event.SessionId, "nodeType", event.NodeType.String())
-	// 세션 종료 시 추가 정리 작업이 필요한 경우 여기서 처리
+
+// handleNodeTerminated 노드 종료 이벤트 처리
+func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
+	slog.Info("Node terminated", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
+	
+	// 노드 제거 및 정리
+	s.RemoveNode(event.NodeId())
 }
