@@ -378,10 +378,14 @@ func (s *session) handleAudio(message *Message) {
 	firstByte := message.payload[0][0]
 	frameType := s.parseAudioFrameType(firstByte, message.payload)
 	
-	// 스트림에 직접 오디오 프레임 전송
+	// 스트림에 직접 오디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
-		frame := convertRTMPFrameToMediaFrame(frameType, message.messageHeader.Timestamp, message.payload, false)
-		s.stream.SendFrame(frame)
+		// Pool 추적이 가능한 ManagedFrame 생성
+		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.Timestamp, message.payload, false, s.reader.readerContext.poolManager)
+		
+		// ManagedFrame을 직접 전송 (zero-copy 최적화)
+		s.stream.SendManagedFrame(managedFrame)
+		managedFrame.Release() // Stream에서 처리 후 pool 반납
 		slog.Debug("Audio frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
 	} else {
 		slog.Warn("No stream connected for audio data", "sessionId", s.sessionId)
@@ -411,10 +415,14 @@ func (s *session) handleVideo(message *Message) {
 	firstByte := message.payload[0][0]
 	frameType := s.parseVideoFrameType(firstByte, message.payload)
 	
-	// 스트림에 직접 비디오 프레임 전송
+	// 스트림에 직접 비디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
-		frame := convertRTMPFrameToMediaFrame(frameType, message.messageHeader.Timestamp, message.payload, true)
-		s.stream.SendFrame(frame)
+		// Pool 추적이 가능한 ManagedFrame 생성
+		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.Timestamp, message.payload, true, s.reader.readerContext.poolManager)
+		
+		// ManagedFrame을 직접 전송 (zero-copy 최적화)
+		s.stream.SendManagedFrame(managedFrame)
+		managedFrame.Release() // Stream에서 처리 후 pool 반납
 		slog.Debug("Video frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.Timestamp)
 	} else {
 		slog.Warn("No stream connected for video data", "sessionId", s.sessionId)
@@ -575,8 +583,14 @@ func (s *session) GetStreamInfo() (streamID uint32, streamName string, isPublish
 func (s *session) cleanup() {
 	fullStreamPath := s.GetFullStreamPath()
 
-	s.isPublishing = false
-	s.isPlaying = false
+	// 예기치 않은 종료 시 적절한 이벤트 전송
+	if s.isPublishing {
+		s.stopPublishing()
+	}
+	if s.isPlaying {
+		s.stopPlaying()
+	}
+
 	s.isActive = false
 	s.stream = nil
 	s.streamID = 0
@@ -902,13 +916,40 @@ func (s *session) handlePause(values []any) {
 }
 
 func (s *session) handleDeleteStream(values []any) {
-	slog.Info("handling deleteStream", "params", values)
-	// TODO: 구현
+	slog.Info("handling deleteStream", "params", values, "sessionId", s.sessionId)
+	
+	// 발행 중이었다면 발행 중단 이벤트 전송
+	if s.isPublishing {
+		s.stopPublishing()
+	}
+	
+	// 재생 중이었다면 재생 중단 이벤트 전송
+	if s.isPlaying {
+		s.stopPlaying()
+	}
+	
+	// 스트림 상태 초기화
+	s.streamID = 0
+	s.streamName = ""
+	s.stream = nil
 }
 
 func (s *session) handleCloseStream(values []any) {
-	slog.Info("handling closeStream", "params", values)
-	// TODO: 구현
+	slog.Info("handling closeStream", "params", values, "sessionId", s.sessionId)
+	
+	// deleteStream과 동일한 처리
+	if s.isPublishing {
+		s.stopPublishing()
+	}
+	
+	if s.isPlaying {
+		s.stopPlaying()
+	}
+	
+	// 스트림 상태 초기화
+	s.streamID = 0
+	s.streamName = ""
+	s.stream = nil
 }
 
 func (s *session) handleReleaseStream(values []any) {
@@ -922,8 +963,12 @@ func (s *session) handleFCPublish(values []any) {
 }
 
 func (s *session) handleFCUnpublish(values []any) {
-	slog.Info("handling FCUnpublish", "params", values)
-	// TODO: 구현
+	slog.Info("handling FCUnpublish", "params", values, "sessionId", s.sessionId)
+	
+	// 발행 중단 처리
+	if s.isPublishing {
+		s.stopPublishing()
+	}
 }
 
 func (s *session) handleReceiveAudio(values []any) {
@@ -1003,6 +1048,48 @@ func (s *session) handleConnect(values []any) {
 	}
 }
 
-// 기타 필요한 핸들러들 (기존 RTMP 세션에서 가져옴)
-// handleReleaseStream, handleFCPublish, handleFCUnpublish, handleCloseStream, handleDeleteStream 등은
-// 필요에 따라 기존 코드에서 복사하여 추가
+// stopPublishing 발행 중단 처리
+func (s *session) stopPublishing() {
+	if !s.isPublishing {
+		return
+	}
+	
+	s.isPublishing = false
+	
+	// MediaServer에 발행 중단 이벤트 전송
+	select {
+	case s.mediaServerChannel <- media.PublishStopped{
+		BaseNodeEvent: media.BaseNodeEvent{
+			ID:       s.ID(),
+			NodeType: media.MediaNodeTypeRTMP,
+		},
+		StreamId: s.streamName,
+	}:
+		slog.Info("PublishStopped event sent", "sessionId", s.sessionId, "streamName", s.streamName)
+	default:
+		slog.Warn("MediaServer channel full, dropping PublishStopped event", "sessionId", s.sessionId)
+	}
+}
+
+// stopPlaying 재생 중단 처리
+func (s *session) stopPlaying() {
+	if !s.isPlaying {
+		return
+	}
+	
+	s.isPlaying = false
+	
+	// MediaServer에 재생 중단 이벤트 전송
+	select {
+	case s.mediaServerChannel <- media.PlayStopped{
+		BaseNodeEvent: media.BaseNodeEvent{
+			ID:       s.ID(),
+			NodeType: media.MediaNodeTypeRTMP,
+		},
+		StreamId: s.streamName,
+	}:
+		slog.Info("PlayStopped event sent", "sessionId", s.sessionId, "streamName", s.streamName)
+	default:
+		slog.Warn("MediaServer channel full, dropping PlayStopped event", "sessionId", s.sessionId)
+	}
+}

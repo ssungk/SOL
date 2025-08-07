@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sol/pkg/media"
 	"sync"
 )
 
@@ -101,7 +102,7 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 	// 모든 경우에 헤더를 업데이트 (Fmt1/2/3의 경우 상속받은 완전한 헤더로 업데이트)
 	ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, messageHeader)
 
-	payload, err := readPayload(r, ms.readerContext.bufferPool, ms.readerContext.nextChunkSize(basicHeader.chunkStreamID))
+	payload, err := readPooledPayload(r, ms.readerContext.bufferPool, ms.readerContext.poolManager, ms.readerContext.nextChunkSize(basicHeader.chunkStreamID))
 	if err != nil {
 		return nil, err
 	}
@@ -202,12 +203,18 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	}
 
 	// Fmt0에서 타임스탬프 단조성 검증 및 수정 (이전 헤더가 있는 경우)
+	// H.264 B-frame을 고려하여 더 관대하게 처리
 	if header != nil && timestamp < header.Timestamp {
 		// 32비트 오버플로우가 아닌 실제 역순 감지
-		if header.Timestamp < 0xF0000000 || timestamp > 0x10000000 {
-			// 비정상적인 역순 - 강제로 단조 증가 유지
+		timestampDiff := header.Timestamp - timestamp
+		// B-frame에서는 약간의 역순이 정상일 수 있으므로, 큰 차이가 날 때만 수정
+		if timestampDiff > 5000 && (header.Timestamp < 0xF0000000 || timestamp > 0x10000000) {
+			// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
 			timestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt0", "previousTimestamp", header.Timestamp, "originalTimestamp", readUint24BE(buf[0:3]), "correctedTimestamp", timestamp)
+			slog.Warn("Fixed large non-monotonic timestamp in Fmt0", "previousTimestamp", header.Timestamp, "originalTimestamp", readUint24BE(buf[0:3]), "correctedTimestamp", timestamp, "diff", timestampDiff)
+		} else {
+			// 작은 역순은 B-frame으로 간주하고 허용
+			slog.Debug("Small timestamp reorder detected (likely B-frame)", "previousTimestamp", header.Timestamp, "currentTimestamp", timestamp, "diff", timestampDiff)
 		}
 	}
 
@@ -241,10 +248,18 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	if timestampDelta > 0 {
 		// 32비트 오버플로우는 정상적인 상황 (약 49일마다 발생)
 		// 실제 문제는 델타가 양수인데 타임스탬프가 감소하는 경우
+		// H.264 B-frame을 고려하여 더 관대하게 처리
 		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
-			// 비정상적인 역순 - 강제로 단조 증가 유지
-			newTimestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt1", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp)
+			timestampDiff := header.Timestamp - newTimestamp
+			// 큰 차이가 날 때만 수정 (B-frame 허용)
+			if timestampDiff > 5000 {
+				// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
+				newTimestamp = header.Timestamp + 1
+				slog.Warn("Fixed large non-monotonic timestamp in Fmt1", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
+			} else {
+				// 작은 역순은 B-frame으로 간주하고 허용
+				slog.Debug("Small timestamp reorder in Fmt1 (likely B-frame)", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
+			}
 		}
 	}
 
@@ -272,9 +287,16 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	// 단조성 검증 및 수정 (델타가 0이 아닌 경우만)
 	if timestampDelta > 0 {
 		if newTimestamp < header.Timestamp && timestampDelta < 0x80000000 {
-			// 비정상적인 역순 - 강제로 단조 증가 유지
-			newTimestamp = header.Timestamp + 1
-			slog.Warn("Fixed non-monotonic timestamp in Fmt2", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp)
+			timestampDiff := header.Timestamp - newTimestamp
+			// 큰 차이가 날 때만 수정 (B-frame 허용)
+			if timestampDiff > 5000 {
+				// 5초 이상의 큰 역순은 비정상 - 강제로 단조 증가 유지
+				newTimestamp = header.Timestamp + 1
+				slog.Warn("Fixed large non-monotonic timestamp in Fmt2", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "correctedTimestamp", newTimestamp, "diff", timestampDiff)
+			} else {
+				// 작은 역순은 B-frame으로 간주하고 허용
+				slog.Debug("Small timestamp reorder in Fmt2 (likely B-frame)", "previousTimestamp", header.Timestamp, "timestampDelta", timestampDelta, "newTimestamp", newTimestamp, "diff", timestampDiff)
+			}
 		}
 	}
 
@@ -307,6 +329,21 @@ func readPayload(r io.Reader, bufferPool *sync.Pool, size uint32) ([]byte, error
 	bufferPool.Put(buf[:cap(buf)]) // 버퍼 풀에 반환
 
 	return result, nil
+}
+
+// readPooledPayload reads payload using pool manager for tracking
+func readPooledPayload(r io.Reader, bufferPool *sync.Pool, poolManager *media.PoolManager, size uint32) ([]byte, error) {
+	// PoolManager를 통해 버퍼 할당
+	pb := poolManager.AllocateBuffer(bufferPool, size)
+	
+	if _, err := io.ReadFull(r, pb.Data); err != nil {
+		// 오류 시 pool manager를 통해 반환
+		poolManager.ReleaseBuffer(pb.Data)
+		return nil, err
+	}
+
+	// 추적되는 버퍼를 그대로 반환 (복사하지 않음)
+	return pb.Data, nil
 }
 
 func readUint24BE(buf []byte) uint32 {

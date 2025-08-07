@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sol/pkg/hls"
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
@@ -19,6 +20,7 @@ type StreamConfig struct {
 type MediaServer struct {
 	rtmp     *rtmp.Server
 	rtsp     *rtsp.Server
+	hls      *hls.Server
 	channel  chan interface{}
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -27,9 +29,10 @@ type MediaServer struct {
 	// 통합 스트림 및 노드 관리
 	streams map[string]*media.Stream     // streamId -> Stream
 	nodes   map[uintptr]media.MediaNode  // nodeId -> MediaNode (Source|Sink)
+	streamSources map[string]uintptr     // streamId -> sourceNodeId (소스 추적용)
 }
 
-func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig, streamConfig StreamConfig) *MediaServer {
 	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -39,6 +42,7 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConf
 		cancel:  cancel,
 		streams: make(map[string]*media.Stream),
 		nodes:   make(map[uintptr]media.MediaNode),
+		streamSources: make(map[string]uintptr),
 	}
 
 	// RTMP 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
@@ -53,6 +57,9 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConf
 		Port:    rtspPort,
 		Timeout: rtspTimeout,
 	}, mediaServer.channel, &mediaServer.wg)
+	
+	// HLS 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
+	mediaServer.hls = hls.NewServer(hlsConfig, mediaServer.channel, &mediaServer.wg)
 	
 	return mediaServer
 }
@@ -74,6 +81,13 @@ func (s *MediaServer) Start() error {
 		return err
 	}
 	slog.Info("RTSP Server started")
+	
+	// HLS 서버 시작
+	if err := s.hls.Start(); err != nil {
+		slog.Error("Failed to start HLS server", "err", err)
+		return err
+	}
+	slog.Info("HLS Server started")
 
 	// 이벤트 루프 시작
 	go s.eventLoop()
@@ -130,6 +144,9 @@ func (s *MediaServer) shutdown() {
 
 	s.rtsp.Stop()
 	slog.Info("RTSP Server stopped")
+	
+	s.hls.Stop()
+	slog.Info("HLS Server stopped")
 
 	// 모든 송신자(eventLoop)가 완료될 때까지 대기
 	s.wg.Wait()
@@ -192,36 +209,62 @@ func (s *MediaServer) RemoveNode(nodeId uintptr) {
 		return
 	}
 	
-	// 노드를 포함하는 스트림 찾기
-	var targetStreamId string
-	for streamId, stream := range s.streams {
-		// Sink인 경우
-		if _, ok := node.(media.MediaSink); ok {
-			for _, sink := range stream.GetSinks() {
-				if sink.ID() == nodeId {
-					stream.RemoveSink(sink)
-					targetStreamId = streamId
+	// 노드를 포함하는 스트림 찾기 및 제거
+	var targetStreamIds []string
+	
+	// Source(발행자) 노드인 경우 처리
+	if _, ok := node.(media.MediaSource); ok {
+		// 이 소스가 어떤 스트림들을 만들었는지 찾기
+		for streamId, sourceNodeId := range s.streamSources {
+			if sourceNodeId == nodeId {
+				targetStreamIds = append(targetStreamIds, streamId)
+				// 소스 맵핑도 제거
+				delete(s.streamSources, streamId)
+				slog.Info("Source node removed, marking stream for cleanup", "nodeId", nodeId, "streamId", streamId)
+			}
+		}
+	}
+	
+	// Sink(재생자) 노드인 경우 처리
+	if _, ok := node.(media.MediaSink); ok {
+		for streamId, stream := range s.streams {
+			for _, existingSink := range stream.GetSinks() {
+				if existingSink.ID() == nodeId {
+					stream.RemoveSink(existingSink)
+					targetStreamIds = append(targetStreamIds, streamId)
+					slog.Info("Sink node removed from stream", "nodeId", nodeId, "streamId", streamId)
 					break
 				}
 			}
-		}
-		
-		if targetStreamId != "" {
-			break
 		}
 	}
 	
 	// 노드 제거
 	delete(s.nodes, nodeId)
 	
-	slog.Info("Removed node", "nodeId", nodeId, "streamId", targetStreamId, "nodeType", node.MediaType())
+	slog.Info("Removed node", "nodeId", nodeId, "streamIds", targetStreamIds, "nodeType", node.MediaType())
 	
-	// 스트림에 더 이상 sink가 없으면 스트림 정리
-	if targetStreamId != "" {
-		if stream := s.streams[targetStreamId]; stream != nil && stream.GetSinkCount() == 0 {
-			stream.Stop()
-			delete(s.streams, targetStreamId)
-			slog.Info("Removed empty stream", "streamId", targetStreamId)
+	// 스트림 정리 로직 개선
+	for _, streamId := range targetStreamIds {
+		if stream := s.streams[streamId]; stream != nil {
+			// Source가 제거된 경우 또는 Sink가 모두 제거된 경우 스트림 삭제
+			// 소스가 제거된 스트림인지 확인
+			_, wasSourceStream := s.streamSources[streamId]
+			if _, wasSource := node.(media.MediaSource); wasSource && wasSourceStream {
+				// Source가 제거되면 스트림 무조건 삭제
+				stream.Stop()
+				delete(s.streams, streamId)
+				// streamSources 맵핑도 제거 (이미 위에서 제거되었을 수도 있음)
+				delete(s.streamSources, streamId)
+				slog.Info("Removed stream due to source removal", "streamId", streamId)
+			} else if stream.GetSinkCount() == 0 {
+				// Sink만 제거된 경우, 다른 Sink가 없으면 스트림 삭제
+				stream.Stop()
+				delete(s.streams, streamId)
+				// 혹시 소스 맵핑도 제거
+				delete(s.streamSources, streamId)
+				slog.Info("Removed stream due to no remaining sinks", "streamId", streamId)
+			}
 		}
 	}
 }
@@ -259,6 +302,28 @@ func (s *MediaServer) GetStreamStats() map[string]interface{} {
 }
 
 // 공통 이벤트 핸들러들
+
+// CreateHLSStream HLS 스트림 생성
+func (s *MediaServer) CreateHLSStream(streamID string) error {
+	if err := s.hls.CreateStream(streamID); err != nil {
+		return fmt.Errorf("failed to create HLS stream: %w", err)
+	}
+	
+	// HLS 패키저를 MediaSink으로 등록
+	packager, exists := s.hls.GetPackager(streamID)
+	if exists {
+		s.RegisterNode(streamID, packager)
+		slog.Info("HLS packager registered as MediaSink", "streamID", streamID)
+	}
+	
+	return nil
+}
+
+// RemoveHLSStream HLS 스트림 제거
+func (s *MediaServer) RemoveHLSStream(streamID string) {
+	s.hls.RemoveStream(streamID)
+	slog.Info("HLS stream removed", "streamID", streamID)
+}
 
 // handlePublishStarted 발행 시작 이벤트 처리
 func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
@@ -298,6 +363,15 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	
 	// 스트림을 MediaServer에 등록
 	s.streams[streamId] = stream
+	// 소스 맵핑 등록
+	s.streamSources[streamId] = event.NodeId()
+	
+	// HLS 스트림 자동 생성 (선택사항 - 설정에 따라)
+	if err := s.CreateHLSStream(streamId); err != nil {
+		slog.Warn("Failed to create HLS stream", "streamId", streamId, "err", err)
+	} else {
+		slog.Info("HLS stream created for publish", "streamId", streamId)
+	}
 	
 	slog.Info("Source registered for publish", "streamId", streamId, "sourceId", event.NodeId(), "nodeType", event.NodeType.String())
 }
@@ -306,8 +380,17 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 	slog.Info("Publish stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
-	// 노드 제거는 이미 RegisterNode/RemoveNode에서 처리됨
-	slog.Info("Source unregistered from publish", "streamId", event.StreamId, "sourceId", event.NodeId())
+	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리
+	if _, exists := s.nodes[event.NodeId()]; exists {
+		// HLS 스트림 제거
+		s.RemoveHLSStream(event.StreamId)
+		
+		// Source 노드 제거 및 스트림 정리
+		s.RemoveNode(event.NodeId())
+		slog.Info("Source node removed due to publish stop", "streamId", event.StreamId, "sourceId", event.NodeId())
+	} else {
+		slog.Debug("Publish stopped event for already removed node", "nodeId", event.NodeId())
+	}
 }
 
 // handlePlayStarted 재생 시작 이벤트 처리
@@ -357,8 +440,14 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 func (s *MediaServer) handlePlayStopped(event media.PlayStopped) {
 	slog.Info("Play stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
-	// 노드 제거는 이미 RegisterNode/RemoveNode에서 처리됨
-	slog.Info("Sink unregistered from play", "streamId", event.StreamId, "sinkId", event.NodeId())
+	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리
+	if _, exists := s.nodes[event.NodeId()]; exists {
+		// Sink 노드 제거 및 스트림 정리
+		s.RemoveNode(event.NodeId())
+		slog.Info("Sink node removed due to play stop", "streamId", event.StreamId, "sinkId", event.NodeId())
+	} else {
+		slog.Debug("Play stopped event for already removed node", "nodeId", event.NodeId())
+	}
 }
 
 // handleNodeCreated 노드 생성 이벤트 처리 (연결만 된 상태)

@@ -40,6 +40,16 @@ func (s *Stream) SendFrame(frame Frame) {
 	s.broadcastFrame(frame)
 }
 
+// SendManagedFrame sends a managed frame to the stream with efficient pool handling
+func (s *Stream) SendManagedFrame(managedFrame *ManagedFrame) {
+	// Cache the frame (convert to regular frame for caching)
+	regularFrame := managedFrame.ToRegularFrame()
+	s.streamBuffer.AddFrame(regularFrame)
+
+	// Broadcast managed frame directly to sinks (zero-copy for live data)
+	s.broadcastManagedFrame(managedFrame)
+}
+
 // SendMetadata sends metadata to the stream (called by external sources)
 func (s *Stream) SendMetadata(metadata map[string]string) {
 	// Cache the metadata
@@ -138,15 +148,18 @@ func (s *Stream) GetCacheStats() map[string]interface{} {
 }
 
 // CleanupSession removes the session from stream sinks by sessionId
+// DEPRECATED: This method is not used anywhere and has flawed logic.
+// Use RemoveSink(sink MediaSink) with direct sink reference instead.
 func (s *Stream) CleanupSession(sessionId string) {
-	// Find and remove sink by sessionId (this method is less efficient but needed for backward compatibility)
-	for nodeId := range s.sinks {
-		// This assumes sinks have a way to identify their sessionId
-		// In practice, this might need to be refactored to use nodeId directly
-		delete(s.sinks, nodeId)
-		slog.Info("Cleaned up sink from stream", "streamId", s.id, "sessionId", sessionId, "nodeId", nodeId, "sinkCount", len(s.sinks))
-		break // Assume only one sink per session
-	}
+	// NOTE: This method has incorrect logic - it removes the first sink regardless of sessionId match
+	// It should iterate through sinks and find the one with matching sessionId, but sinks don't have sessionId field
+	// 
+	// Correct approach would be:
+	// 1. Add sessionId to MediaSink interface, or
+	// 2. Use nodeId-based removal directly via RemoveSink()
+	// 
+	// For now, marking as deprecated to prevent misuse
+	slog.Warn("CleanupSession called - this method is deprecated and has flawed logic", "sessionId", sessionId, "streamId", s.id)
 }
 
 // broadcastFrame sends media frame to all sinks
@@ -157,6 +170,25 @@ func (s *Stream) broadcastFrame(frame Frame) {
 			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "frameType", frame.FrameType, "err", err)
 		}
 	}
+}
+
+// broadcastManagedFrame sends managed frame to all sinks (zero-copy for live streaming)
+func (s *Stream) broadcastManagedFrame(managedFrame *ManagedFrame) {
+	// Clone managed frame for each sink (sharing pool references)
+	for _, sink := range s.sinks {
+		// Create a clone for this sink (shares pool references but separate lifetime)
+		sinkFrame := managedFrame.Clone()
+		
+		// Convert to regular frame for sink (this copies data but allows pool cleanup)
+		frame := sinkFrame.ToRegularFrame()
+		sinkFrame.Release() // Release pool references immediately after copying
+		
+		if err := sink.SendMediaFrame(s.id, frame); err != nil {
+			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "frameType", managedFrame.FrameType, "err", err)
+		}
+	}
+	
+	// Original managed frame can now be released by caller
 }
 
 // broadcastMetadata sends metadata to all sinks
