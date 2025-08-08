@@ -84,7 +84,7 @@ func (s *Server) createListener() (net.Listener, error) {
 	addr := fmt.Sprintf(":%d", s.port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		slog.Info("Error starting RTMP server", "err", err)
+		slog.Error("Error starting RTMP server", "err", err)
 		return nil, err
 	}
 
@@ -97,7 +97,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			slog.Info("RTMP accept loop stopped", "err", err)
+			slog.Error("RTMP accept failed", "err", err)
 			return
 		}
 

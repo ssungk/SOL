@@ -741,7 +741,7 @@ func (s *session) handleRead() {
 	}()
 
 	if err := handshake(s.conn); err != nil {
-		slog.Info("Handshake failed:", "err", err)
+		slog.Error("Handshake failed", "err", err)
 		return
 	}
 
