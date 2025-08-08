@@ -147,9 +147,9 @@ func (s *Server) handleEvent(event interface{}) {
 	if s.externalChannel != nil {
 		select {
 		case s.externalChannel <- event:
-			slog.Debug("Event forwarded to MediaServer", "eventType", fmt.Sprintf("%T", event))
+			slog.Debug("Event forwarded to MediaServer", "eventType", utils.TypeName(event))
 		default:
-			slog.Warn("Failed to forward event to MediaServer (channel full)", "eventType", fmt.Sprintf("%T", event))
+			slog.Warn("Failed to forward event to MediaServer (channel full)", "eventType", utils.TypeName(event))
 		}
 	}
 }

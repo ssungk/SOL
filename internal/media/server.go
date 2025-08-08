@@ -8,6 +8,7 @@ import (
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
+	"sol/pkg/utils"
 	"sync"
 )
 
@@ -113,7 +114,7 @@ func (s *MediaServer) channelHandler(data interface{}) {
 	case media.NodeTerminated:
 		s.handleNodeTerminated(v)
 	default:
-		slog.Warn("Unknown event type", "eventType", fmt.Sprintf("%T", v))
+		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 // pkg/media를 활용하는 RTMP 서버
 type Server struct {
+	channel chan interface{}
 	// 서버 설정
 	port int
 
@@ -21,6 +22,8 @@ type Server struct {
 	listener net.Listener       // 리스너 참조 저장
 	ctx      context.Context    // 컨텍스트
 	cancel   context.CancelFunc // 컨텍스트 취소 함수
+
+	wg *sync.WaitGroup
 }
 
 // 새로운 RTMP 서버 생성
@@ -28,10 +31,12 @@ func NewServer(port int, mediaServerChannel chan<- any, wg *sync.WaitGroup) *Ser
 	ctx, cancel := context.WithCancel(context.Background())
 
 	server := &Server{
+		channel:            make(chan interface{}, 10),
 		port:               port,
 		mediaServerChannel: mediaServerChannel,
 		ctx:                ctx,
 		cancel:             cancel,
+		wg:                 wg,
 	}
 
 	return server
@@ -39,14 +44,19 @@ func NewServer(port int, mediaServerChannel chan<- any, wg *sync.WaitGroup) *Ser
 
 // Start 서버 시작 (ProtocolServer 인터페이스 구현)
 func (s *Server) Start() error {
-	ln, err := s.createListener()
+	//s.wg.Add(1)
+	//defer s.wg.Done()
+
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
+		slog.Error("Error starting RTMP server", "err", err)
 		return err
 	}
 	s.listener = ln
 
 	// 연결 수락 시작
 	go s.acceptConnections(ln)
+	go s.eventLoop()
 
 	slog.Info("RTMP server started", "port", s.port)
 	return nil
@@ -56,20 +66,7 @@ func (s *Server) Start() error {
 func (s *Server) Stop() {
 	slog.Info("RTMP server stopping...")
 
-	// 1. 컨텍스트 취소 (모든 고루틴에 종료 신호)
 	s.cancel()
-
-	// 2. 새로운 연결 차단 (리스너 종료)
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
-			slog.Error("Error closing listener", "err", err)
-		} else {
-			slog.Info("Listener closed")
-		}
-		s.listener = nil // 상태 초기화
-	}
-
-	// 세션 관리는 MediaServer에서 중앙 처리됨
 
 	slog.Info("RTMP server stopped successfully")
 }
@@ -79,16 +76,28 @@ func (s *Server) Name() string {
 	return "rtmp"
 }
 
-// createListener 리스너 생성
-func (s *Server) createListener() (net.Listener, error) {
-	addr := fmt.Sprintf(":%d", s.port)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		slog.Error("Error starting RTMP server", "err", err)
-		return nil, err
+func (s *Server) eventLoop() {
+	defer utils.CloseWithLog(s.listener)
+	for {
+		select {
+		case data := <-s.channel:
+			s.channelHandler(data)
+		case <-s.ctx.Done():
+			s.shutdown()
+			return
+		}
 	}
+}
 
-	return ln, nil
+func (s *Server) channelHandler(data interface{}) {
+	switch v := data.(type) {
+	default:
+		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
+	}
+}
+
+func (s *Server) shutdown() {
+
 }
 
 // acceptConnections 연결 수락
@@ -101,15 +110,7 @@ func (s *Server) acceptConnections(ln net.Listener) {
 			return
 		}
 
-		// 세션 생성 시 MediaServer 채널을 전달
-		_ = s.newSessionWithChannel(conn) // session은 독립적으로 동작
+		session := newSession(conn, s.mediaServerChannel)
+		slog.Info("New RTMP session created", "sessionId", session.sessionId, "remoteAddr", conn.RemoteAddr())
 	}
-}
-
-// newSessionWithChannel 채널을 연결한 세션 생성
-func (s *Server) newSessionWithChannel(conn net.Conn) *session {
-	session := newSession(conn, s.mediaServerChannel) // MediaServer 채널 직접 전달
-
-	slog.Info("New RTMP session created", "sessionId", session.sessionId, "remoteAddr", conn.RemoteAddr())
-	return session
 }

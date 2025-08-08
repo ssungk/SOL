@@ -9,6 +9,7 @@ import (
 	"net"
 	"sol/pkg/amf"
 	"sol/pkg/media"
+	"sol/pkg/utils"
 	"sync"
 	"unsafe"
 )
@@ -169,7 +170,7 @@ func (s *session) handleCreateStream(values []any) {
 
 	transactionID, ok := values[1].(float64)
 	if !ok {
-		slog.Error("createStream: invalid transaction ID", "type", fmt.Sprintf("%T", values[1]))
+		slog.Error("createStream: invalid transaction ID", "type", utils.TypeName(values[1]))
 		return
 	}
 
@@ -202,14 +203,14 @@ func (s *session) handlePublish(values []any) {
 
 	transactionID, ok := values[1].(float64)
 	if !ok {
-		slog.Error("publish: invalid transaction ID", "type", fmt.Sprintf("%T", values[1]))
+		slog.Error("publish: invalid transaction ID", "type", utils.TypeName(values[1]))
 		return
 	}
 
 	// 스트림 이름
 	streamName, ok := values[3].(string)
 	if !ok {
-		slog.Error("publish: invalid stream name", "type", fmt.Sprintf("%T", values[3]))
+		slog.Error("publish: invalid stream name", "type", utils.TypeName(values[3]))
 		return
 	}
 
@@ -284,14 +285,14 @@ func (s *session) handlePlay(values []any) {
 
 	transactionID, ok := values[1].(float64)
 	if !ok {
-		slog.Error("play: invalid transaction ID", "type", fmt.Sprintf("%T", values[1]))
+		slog.Error("play: invalid transaction ID", "type", utils.TypeName(values[1]))
 		return
 	}
 
 	// 스트림 이름
 	streamName, ok := values[3].(string)
 	if !ok {
-		slog.Error("play: invalid stream name", "type", fmt.Sprintf("%T", values[3]))
+		slog.Error("play: invalid stream name", "type", utils.TypeName(values[3]))
 		return
 	}
 
@@ -510,7 +511,7 @@ func (s *session) handleScriptData(message *Message) {
 	// 첫 번째 값은 보통 명령어 이름
 	commandName, ok := values[0].(string)
 	if !ok {
-		slog.Error("invalid script command name", "type", fmt.Sprintf("%T", values[0]))
+		slog.Error("invalid script command name", "type", utils.TypeName(values[0]))
 		return
 	}
 
@@ -546,7 +547,7 @@ func (s *session) handleOnMetaData(values []any) {
 	// 두 번째 값은 메타데이터 객체
 	metadata, ok := values[1].(map[string]any)
 	if !ok {
-		slog.Error("onMetaData: invalid metadata object", "type", fmt.Sprintf("%T", values[1]))
+		slog.Error("onMetaData: invalid metadata object", "type", utils.TypeName(values[1]))
 		return
 	}
 
@@ -864,7 +865,7 @@ func (s *session) handleAMF0Command(message *Message) {
 
 	commandName, ok := values[0].(string)
 	if !ok {
-		slog.Error("Invalid command name type", "sessionId", s.sessionId, "actual", fmt.Sprintf("%T", values[0]))
+		slog.Error("Invalid command name type", "sessionId", s.sessionId, "actual", utils.TypeName(values[0]))
 		return
 	}
 
@@ -979,7 +980,7 @@ func (s *session) handleConnect(values []any) {
 
 	transactionID, ok := values[1].(float64)
 	if !ok {
-		slog.Error("connect: invalid transaction ID", "type", fmt.Sprintf("%T", values[1]))
+		slog.Error("connect: invalid transaction ID", "type", utils.TypeName(values[1]))
 		return
 	}
 
@@ -987,7 +988,7 @@ func (s *session) handleConnect(values []any) {
 	// command object (map)
 	commandObj, ok := values[2].(map[string]any)
 	if !ok {
-		slog.Error("connect: invalid command object", "type", fmt.Sprintf("%T", values[2]))
+		slog.Error("connect: invalid command object", "type", utils.TypeName(values[2]))
 		return
 	}
 
