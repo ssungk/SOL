@@ -107,7 +107,7 @@ func (s *Stream) SendCachedDataToSink(sink MediaSink) error {
 
 		for _, frame := range cachedFrames {
 			if err := sink.SendMediaFrame(s.id, frame); err != nil {
-				slog.Error("Failed to send cached frame to sink", "streamId", s.id, "nodeId", nodeId, "frameType", frame.FrameType, "err", err)
+				slog.Error("Failed to send cached frame to sink", "streamId", s.id, "nodeId", nodeId, "subType", frame.SubType, "err", err)
 				// Continue with next frame even if one fails
 			}
 		}
@@ -167,7 +167,7 @@ func (s *Stream) broadcastFrame(frame Frame) {
 	// Send to all sinks with stream ID
 	for _, sink := range s.sinks {
 		if err := sink.SendMediaFrame(s.id, frame); err != nil {
-			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "frameType", frame.FrameType, "err", err)
+			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", frame.SubType, "err", err)
 		}
 	}
 }
@@ -184,7 +184,7 @@ func (s *Stream) broadcastManagedFrame(managedFrame *ManagedFrame) {
 		sinkFrame.Release() // Release pool references immediately after copying
 		
 		if err := sink.SendMediaFrame(s.id, frame); err != nil {
-			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "frameType", managedFrame.FrameType, "err", err)
+			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", managedFrame.SubType, "err", err)
 		}
 	}
 	

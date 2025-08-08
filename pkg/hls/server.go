@@ -22,6 +22,7 @@ type Server struct {
 	ctx          context.Context              // 컨텍스트
 	cancel       context.CancelFunc           // 취소 함수
 	wg           sync.WaitGroup               // WaitGroup
+	running      bool                         // 서버 실행 상태
 
 	// MediaServer와의 통합을 위한 채널
 	mediaServerChannel chan<- interface{}     // MediaServer로 이벤트 전송
@@ -55,9 +56,10 @@ func NewServer(config HLSConfig, mediaServerChannel chan<- interface{}, serverWg
 	return server
 }
 
-// Start 서버 시작
+// Start 서버 시작 (ProtocolServer 인터페이스 구현)
 func (s *Server) Start() error {
 	slog.Info("Starting HLS server", "port", s.config.Port)
+	s.running = true
 	
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -71,9 +73,10 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop 서버 중지
-func (s *Server) Stop() error {
+// Stop 서버 중지 (ProtocolServer 인터페이스 구현)
+func (s *Server) Stop() {
 	slog.Info("Stopping HLS server")
+	s.running = false
 	
 	s.cancel()
 	s.wg.Wait()
@@ -84,7 +87,6 @@ func (s *Server) Stop() error {
 	
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		slog.Error("Failed to shutdown HLS server gracefully", "err", err)
-		return err
 	}
 	
 	// 리소스 정리
@@ -96,8 +98,14 @@ func (s *Server) Stop() error {
 	}
 	
 	slog.Info("HLS server stopped")
-	return nil
 }
+
+// Name 서버 이름 반환 (ProtocolServer 인터페이스 구현)
+func (s *Server) Name() string {
+	return "hls"
+}
+
+
 
 // setupRoutes HTTP 라우트 설정
 func (s *Server) setupRoutes(mux *http.ServeMux) {

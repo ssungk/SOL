@@ -269,7 +269,7 @@ func (s *Session) handleInterleavedData() error {
 			slog.Debug("RTP frame sent to stream", 
 				"sessionId", s.sessionId, 
 				"streamPath", s.streamPath, 
-				"frameType", frame.FrameType,
+				"subType", frame.SubType,
 				"mediaType", frame.Type)
 		} else {
 			slog.Debug("RTP frame converted but not sent (no stream or not recording)", 
@@ -867,24 +867,27 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 
 	// 페이로드 타입에 따른 미디어 타입 결정
 	var mediaType media.Type
-	var frameType string
 
 	switch payloadType {
 	case 96: // H.264
 		mediaType = media.TypeVideo
-		frameType = "h264"
 	case 97: // AAC
 		mediaType = media.TypeAudio
-		frameType = "aac"
 	default:
 		mediaType = media.TypeVideo
-		frameType = "unknown"
 	}
 
 	// media.Frame 생성
+	var subType media.FrameSubType
+	if mediaType == media.TypeVideo {
+		subType = media.VideoInterFrame // 기본값으로 Inter Frame
+	} else {
+		subType = media.AudioRawData    // 기본값으로 Raw Data
+	}
+	
 	frame := media.Frame{
 		Type:      mediaType,
-		FrameType: frameType,
+		SubType:   subType,
 		Timestamp: timestamp,
 		Data:      [][]byte{payload}, // 단일 청크로 저장
 	}

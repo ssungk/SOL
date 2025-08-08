@@ -13,13 +13,11 @@ import (
 	"unsafe"
 )
 
-
-// session RTMP2에서 사용하는 세션 구조체 (MediaSource/MediaSink 직접 구현)
+// session RTMP에서 사용하는 세션 구조체 (MediaSource/MediaSink 직접 구현)
 type session struct {
-	reader         *messageReader
-	writer         *messageWriter
-	conn           net.Conn
-	messageChannel chan *Message
+	reader *messageReader
+	writer *messageWriter
+	conn   net.Conn
 
 	// 세션 식별자 - 포인터 주소값 기반
 	sessionId string
@@ -77,7 +75,7 @@ func (s *session) Start() error {
 	return nil
 }
 
-// 세션 중지 (MediaNode 인터페이스) 
+// 세션 중지 (MediaNode 인터페이스)
 func (s *session) Stop() error {
 	s.mu.Lock()
 	s.isActive = false
@@ -95,11 +93,11 @@ func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
 	playing := s.isPlaying
 	active := s.isActive
 	s.mu.RUnlock()
-	
+
 	if !playing || !active || s.conn == nil {
 		return fmt.Errorf("session not playing or inactive")
 	}
-	
+
 	// pkg/media Frame을 RTMP 메시지로 변환하여 전송
 	var err error
 	switch frame.Type {
@@ -111,14 +109,14 @@ func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
 		slog.Warn("Unknown frame type", "type", frame.Type, "sessionId", s.sessionId)
 		return nil
 	}
-	
+
 	if err != nil {
-		slog.Error("Failed to send frame to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "frameType", frame.FrameType, "err", err)
+		slog.Error("Failed to send frame to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "subType", frame.SubType, "err", err)
 		return err
 	}
-	
-	slog.Debug("Media frame sent to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "frameType", frame.FrameType, "timestamp", frame.Timestamp)
-	
+
+	slog.Debug("Media frame sent to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "subType", frame.SubType, "timestamp", frame.Timestamp)
+
 	return nil
 }
 
@@ -127,16 +125,16 @@ func (s *session) SendMetadata(streamId string, metadata map[string]string) erro
 	if !s.isPlaying || !s.isActive || s.conn == nil {
 		return fmt.Errorf("session not playing or inactive")
 	}
-	
+
 	// pkg/media metadata를 RTMP onMetaData 메시지로 변환하여 전송
 	err := s.sendMetadataToClient(metadata)
 	if err != nil {
 		slog.Error("Failed to send metadata to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "err", err)
 		return err
 	}
-	
+
 	slog.Info("Metadata sent to RTMP session", "sessionId", s.sessionId, "streamId", streamId, "metadataKeys", len(metadata))
-	
+
 	return nil
 }
 
@@ -163,7 +161,6 @@ func (s *session) IsPlayer() bool {
 
 // createStream 명령어 처리
 func (s *session) handleCreateStream(values []any) {
-	slog.Info("handling createStream", "params", values)
 
 	if len(values) < 2 {
 		slog.Error("createStream: not enough parameters", "length", len(values))
@@ -197,7 +194,6 @@ func (s *session) handleCreateStream(values []any) {
 
 // publish 명령어 처리 (소스 모드 활성화)
 func (s *session) handlePublish(values []any) {
-	slog.Info("handling publish", "params", values)
 
 	if len(values) < 3 {
 		slog.Error("publish: not enough parameters", "length", len(values))
@@ -280,7 +276,6 @@ func (s *session) handlePublish(values []any) {
 
 // play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(values []any) {
-	slog.Info("handling play", "params", values)
 
 	if len(values) < 3 {
 		slog.Error("play: not enough parameters", "length", len(values))
@@ -391,16 +386,15 @@ func (s *session) handleAudio(message *Message) {
 	// 첫 번째 청크의 첫 번째 바이트로 오디오 정보 추출
 	firstByte := message.payload[0][0]
 	frameType := s.parseAudioFrameType(firstByte, message.payload)
-	
+
 	// 스트림에 직접 오디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
 		// Pool 추적이 가능한 ManagedFrame 생성
 		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, false, s.reader.readerContext.poolManager)
-		
+
 		// ManagedFrame을 직접 전송 (zero-copy 최적화)
 		s.stream.SendManagedFrame(managedFrame)
 		managedFrame.Release() // Stream에서 처리 후 pool 반납
-		slog.Debug("Audio frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.timestamp)
 	} else {
 		slog.Warn("No stream connected for audio data", "sessionId", s.sessionId)
 	}
@@ -428,16 +422,15 @@ func (s *session) handleVideo(message *Message) {
 	// 첫 번째 청크의 첫 번째 바이트로 비디오 정보 추출
 	firstByte := message.payload[0][0]
 	frameType := s.parseVideoFrameType(firstByte, message.payload)
-	
+
 	// 스트림에 직접 비디오 프레임 전송 (ManagedFrame 사용)
 	if s.stream != nil {
 		// Pool 추적이 가능한 ManagedFrame 생성
 		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, true, s.reader.readerContext.poolManager)
-		
+
 		// ManagedFrame을 직접 전송 (zero-copy 최적화)
 		s.stream.SendManagedFrame(managedFrame)
 		managedFrame.Release() // Stream에서 처리 후 pool 반납
-		slog.Debug("Video frame sent to stream", "sessionId", s.sessionId, "frameType", string(frameType), "timestamp", message.messageHeader.timestamp)
 	} else {
 		slog.Warn("No stream connected for video data", "sessionId", s.sessionId)
 	}
@@ -454,12 +447,12 @@ func (s *session) parseAudioFrameType(firstByte byte, payload [][]byte) RTMPFram
 			return RTMPFrameTypeAACRaw
 		}
 	}
-	
+
 	// 기본적으로는 raw 오디오로 처리
 	return RTMPFrameTypeAACRaw
 }
 
-// parseVideoFrameType 비디오 프레임 타입 파싱  
+// parseVideoFrameType 비디오 프레임 타입 파싱
 func (s *session) parseVideoFrameType(firstByte byte, payload [][]byte) RTMPFrameType {
 	// 프레임 타입 (4비트)
 	frameTypeFlag := (firstByte >> 4) & 0x0F
@@ -500,7 +493,6 @@ func (s *session) parseVideoFrameType(firstByte byte, payload [][]byte) RTMPFram
 
 // handleScriptData 스크립트 데이터 처리 (메타데이터 등)
 func (s *session) handleScriptData(message *Message) {
-	slog.Info("received script data")
 
 	// AMF 데이터 디코딩
 	reader := ConcatByteSlicesReader(message.payload)
@@ -534,7 +526,6 @@ func (s *session) handleScriptData(message *Message) {
 
 // handleOnMetaData 메타데이터 처리
 func (s *session) handleOnMetaData(values []any) {
-	slog.Info("received onMetaData")
 
 	if len(values) < 2 {
 		slog.Warn("onMetaData: insufficient data")
@@ -566,7 +557,7 @@ func (s *session) handleOnMetaData(values []any) {
 		for k, v := range metadata {
 			stringMetadata[k] = fmt.Sprintf("%v", v)
 		}
-		
+
 		s.stream.SendMetadata(stringMetadata)
 		slog.Info("Metadata sent to stream", "sessionId", s.sessionId, "metadataKeys", len(metadata))
 	} else {
@@ -576,7 +567,6 @@ func (s *session) handleOnMetaData(values []any) {
 
 // handleOnTextData 텍스트 데이터 처리
 func (s *session) handleOnTextData(values []any) {
-	slog.Info("received onTextData", "values", values)
 	// TODO: 텍스트 데이터 처리
 }
 
@@ -614,7 +604,6 @@ func (s *session) cleanup() {
 	slog.Info("session cleanup completed", "sessionId", s.sessionId, "fullStreamPath", fullStreamPath)
 }
 
-
 // 구현을 위한 헬퍼 메서드들
 
 // sendVideoFrame 비디오 프레임을 RTMP 메시지로 전송
@@ -628,7 +617,7 @@ func (s *session) sendVideoFrame(frame media.Frame) error {
 		},
 		payload: frame.Data,
 	}
-	
+
 	return s.writer.writeVideoMessage(s.conn, message)
 }
 
@@ -643,7 +632,7 @@ func (s *session) sendAudioFrame(frame media.Frame) error {
 		},
 		payload: frame.Data,
 	}
-	
+
 	return s.writer.writeAudioMessage(s.conn, message)
 }
 
@@ -654,16 +643,16 @@ func (s *session) sendMetadataToClient(metadata map[string]string) error {
 	for k, v := range metadata {
 		interfaceMetadata[k] = v
 	}
-	
+
 	// AMF0 onMetaData 시퀀스로 인코딩
 	values := []interface{}{"onMetaData", interfaceMetadata}
-	
+
 	// AMF0 시퀀스를 바이트로 인코딩
 	encodedData, err := amf.EncodeAMF0Sequence(values...)
 	if err != nil {
 		return fmt.Errorf("failed to encode metadata: %w", err)
 	}
-	
+
 	// script data 메시지로 전송
 	payload := [][]byte{encodedData}
 	message := &Message{
@@ -675,7 +664,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string) error {
 		},
 		payload: payload,
 	}
-	
+
 	return s.writer.writeScriptMessage(s.conn, message)
 }
 
@@ -697,15 +686,14 @@ func ConcatByteSlicesReader(slices [][]byte) io.Reader {
 	return io.MultiReader(readers...)
 }
 
-// newSession 새로운 세션 생성 (내부 사용)  
+// newSession 새로운 세션 생성 (내부 사용)
 func newSession(conn net.Conn, mediaServerChannel chan<- any) *session {
 	s := &session{
-		reader:         newMessageReader(),
-		writer:         newMessageWriter(),
-		conn:           conn,
-		messageChannel: make(chan *Message, 10),
+		reader:             newMessageReader(),
+		writer:             newMessageWriter(),
+		conn:               conn,
 		mediaServerChannel: mediaServerChannel,
-		isActive:       true,
+		isActive:           true,
 	}
 
 	// 포인터 주소값을 sessionId로 사용
@@ -725,7 +713,6 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any) *session {
 	}
 
 	go s.handleRead()
-	go s.handleEvent()
 
 	return s
 }
@@ -739,7 +726,7 @@ func (s *session) handleRead() {
 				slog.Error("Error closing connection", "sessionId", s.sessionId, "err", err)
 			}
 		}
-		
+
 		// MediaServer에 session 종료 알림
 		select {
 		case s.mediaServerChannel <- media.NodeTerminated{
@@ -773,16 +760,6 @@ func (s *session) handleRead() {
 		case MsgTypeSetChunkSize:
 			s.handleSetChunkSize(message)
 		default:
-			s.handleMessage(message)
-		}
-	}
-}
-
-// handleEvent 이벤트 처리
-func (s *session) handleEvent() {
-	for {
-		select {
-		case message := <-s.messageChannel:
 			s.handleMessage(message)
 		}
 	}
@@ -925,23 +902,21 @@ func (s *session) handleAMF0Command(message *Message) {
 
 // 기타 핸들러들 (기존 RTMP에서 가져옴)
 func (s *session) handlePause(values []any) {
-	slog.Info("handling pause", "params", values)
 	// TODO: 구현
 }
 
 func (s *session) handleDeleteStream(values []any) {
-	slog.Info("handling deleteStream", "params", values, "sessionId", s.sessionId)
-	
+
 	// 발행 중이었다면 발행 중단 이벤트 전송
 	if s.isPublishing {
 		s.stopPublishing()
 	}
-	
+
 	// 재생 중이었다면 재생 중단 이벤트 전송
 	if s.isPlaying {
 		s.stopPlaying()
 	}
-	
+
 	// 스트림 상태 초기화
 	s.streamID = 0
 	s.streamName = ""
@@ -949,17 +924,16 @@ func (s *session) handleDeleteStream(values []any) {
 }
 
 func (s *session) handleCloseStream(values []any) {
-	slog.Info("handling closeStream", "params", values, "sessionId", s.sessionId)
-	
+
 	// deleteStream과 동일한 처리
 	if s.isPublishing {
 		s.stopPublishing()
 	}
-	
+
 	if s.isPlaying {
 		s.stopPlaying()
 	}
-	
+
 	// 스트림 상태 초기화
 	s.streamID = 0
 	s.streamName = ""
@@ -967,18 +941,15 @@ func (s *session) handleCloseStream(values []any) {
 }
 
 func (s *session) handleReleaseStream(values []any) {
-	slog.Info("handling releaseStream", "params", values)
 	// TODO: 구현
 }
 
 func (s *session) handleFCPublish(values []any) {
-	slog.Info("handling FCPublish", "params", values)
 	// TODO: 구현
 }
 
 func (s *session) handleFCUnpublish(values []any) {
-	slog.Info("handling FCUnpublish", "params", values, "sessionId", s.sessionId)
-	
+
 	// 발행 중단 처리
 	if s.isPublishing {
 		s.stopPublishing()
@@ -986,23 +957,19 @@ func (s *session) handleFCUnpublish(values []any) {
 }
 
 func (s *session) handleReceiveAudio(values []any) {
-	slog.Info("handling receiveAudio", "params", values)
 	// TODO: 구현
 }
 
 func (s *session) handleReceiveVideo(values []any) {
-	slog.Info("handling receiveVideo", "params", values)
 	// TODO: 구현
 }
 
 func (s *session) handleOnBWDone(values []any) {
-	slog.Info("handling onBWDone", "params", values)
 	// TODO: 구현
 }
 
 // handleConnect connect 명령어 처리
 func (s *session) handleConnect(values []any) {
-	slog.Info("handling connect", "params", values)
 
 	// 최소 3개 요소: "connect", transaction ID, command object
 	if len(values) < 3 {
@@ -1016,7 +983,6 @@ func (s *session) handleConnect(values []any) {
 		return
 	}
 
-	slog.Info("handling connect", "transactionID", transactionID)
 
 	// command object (map)
 	commandObj, ok := values[2].(map[string]any)
@@ -1025,7 +991,6 @@ func (s *session) handleConnect(values []any) {
 		return
 	}
 
-	slog.Info("object", "commandObj", commandObj)
 
 	// app 이름 추출
 	if app, ok := commandObj["app"]; ok {
@@ -1047,7 +1012,6 @@ func (s *session) handleConnect(values []any) {
 		return
 	}
 
-	slog.Info("encoded _result sequence", "sequence", sequence)
 	err = s.writer.writeSetChunkSize(s.conn, 4096)
 	if err != nil {
 		return
@@ -1067,9 +1031,9 @@ func (s *session) stopPublishing() {
 	if !s.isPublishing {
 		return
 	}
-	
+
 	s.isPublishing = false
-	
+
 	// MediaServer에 발행 중단 이벤트 전송
 	select {
 	case s.mediaServerChannel <- media.PublishStopped{
@@ -1090,9 +1054,9 @@ func (s *session) stopPlaying() {
 	if !s.isPlaying {
 		return
 	}
-	
+
 	s.isPlaying = false
-	
+
 	// MediaServer에 재생 중단 이벤트 전송
 	select {
 	case s.mediaServerChannel <- media.PlayStopped{

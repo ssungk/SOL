@@ -74,11 +74,10 @@ func (ms *messageReader) setChunkSize(size uint32) {
 
 func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
 	for {
-		chunk, err := ms.readChunk(r)
+		_, err := ms.readChunk(r)
 		if err != nil {
 			return nil, err
 		}
-		slog.Info("read chunk", "chunk.messageHeader", chunk.messageHeader)
 
 		message, err := ms.readerContext.popMessageIfPossible()
 		if err == nil {
@@ -109,8 +108,6 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 	ms.readerContext.appendPayload(basicHeader.chunkStreamID, payload)
 
-	slog.Info("msg", "messageHeader", messageHeader.timestamp)
-
 	return NewChunk(basicHeader, messageHeader, payload), nil
 }
 
@@ -124,8 +121,6 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 	firstByte := buf[0] & 0x3F
 	var chunkStreamId uint32
 
-	slog.Info("fmt", "fmt", format)
-
 	switch firstByte {
 	case 0:
 		// 2바이트 basic header: chunk stream ID = 64 + 다음 바이트 값
@@ -134,12 +129,12 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 			return nil, fmt.Errorf("failed to read 2-byte basic header: %w", err)
 		}
 		chunkStreamId = 64 + uint32(secondByte[0])
-		
+
 		// 범위 검증 (64-319)
 		if chunkStreamId > 319 {
 			return nil, fmt.Errorf("invalid chunk stream ID %d for 2-byte header (must be 64-319)", chunkStreamId)
 		}
-		
+
 	case 1:
 		// 3바이트 basic header: chunk stream ID = 64 + 리틀엔디안 16비트
 		extraBytes := [2]byte{}
@@ -148,22 +143,21 @@ func readBasicHeader(r io.Reader) (*basicHeader, error) {
 		}
 		value := uint32(binary.LittleEndian.Uint16(extraBytes[:]))
 		chunkStreamId = 64 + value
-		
+
 		// 범위 검증 (320-65599)
 		if chunkStreamId < 320 || chunkStreamId > 65599 {
 			return nil, fmt.Errorf("invalid chunk stream ID %d for 3-byte header (must be 320-65599)", chunkStreamId)
 		}
-		
+
 	default:
 		// 1바이트 basic header: chunk stream ID = 2-63 (직접 사용)
 		chunkStreamId = uint32(firstByte)
-		
+
 		// 유효한 범위 검증 (2-63)
 		if chunkStreamId < 2 {
 			return nil, fmt.Errorf("invalid chunk stream ID %d (must be >= 2)", chunkStreamId)
 		}
-		
-		slog.Info("chunkStreamId", "chunkStreamId", chunkStreamId)
+
 	}
 
 	return NewBasicHeader(format, chunkStreamId), nil
@@ -217,8 +211,6 @@ func readFmt0MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 			slog.Debug("Small timestamp reorder detected (likely B-frame)", "previousTimestamp", header.timestamp, "currentTimestamp", timestamp, "diff", timestampDiff)
 		}
 	}
-
-	slog.Info("Fmt0MessageHeade", "timestamp", timestamp, "MessageLength", length, "MessageTypeID", typeId, "MessageStreamID", streamId)
 
 	return NewMessageHeader(timestamp, length, typeId, streamId), nil
 }
@@ -316,26 +308,11 @@ func readExtendedTimestamp(r io.Reader) (uint32, error) {
 	return binary.BigEndian.Uint32(buf[:]), nil
 }
 
-func readPayload(r io.Reader, bufferPool *sync.Pool, size uint32) ([]byte, error) {
-	buf := bufferPool.Get().([]byte)[:size]
-	if _, err := io.ReadFull(r, buf); err != nil {
-		bufferPool.Put(buf[:cap(buf)]) // 오류 시에도 버퍼 반환
-		return nil, err
-	}
-
-	// 데이터를 복사해서 반환 (버퍼 풀 안전성 보장)
-	result := make([]byte, size)
-	copy(result, buf)
-	bufferPool.Put(buf[:cap(buf)]) // 버퍼 풀에 반환
-
-	return result, nil
-}
-
 // readPooledPayload reads payload using pool manager for tracking
 func readPooledPayload(r io.Reader, bufferPool *sync.Pool, poolManager *media.PoolManager, size uint32) ([]byte, error) {
 	// PoolManager를 통해 버퍼 할당
 	pb := poolManager.AllocateBuffer(bufferPool, size)
-	
+
 	if _, err := io.ReadFull(r, pb.Data); err != nil {
 		// 오류 시 pool manager를 통해 반환
 		poolManager.ReleaseBuffer(pb.Data)

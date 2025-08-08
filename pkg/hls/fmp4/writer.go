@@ -146,7 +146,7 @@ func (w *FMP4Writer) createTrackFragment(trackID uint32, frames []media.Frame) T
 		sample := w.frameToSample(frame, trackID)
 		
 		// 첫 번째 비디오 프레임이 키프레임인지 확인
-		if trackID == VideoTrackID && i == 0 && media.IsKeyFrame(frame.FrameType) {
+		if trackID == VideoTrackID && i == 0 && media.IsVideoKeyFrame(frame.SubType) {
 			sample.Flags = SampleFlagKeyFrame
 		}
 		

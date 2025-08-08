@@ -78,11 +78,11 @@ type ManagedFrame struct {
 }
 
 // NewManagedFrame creates a new managed frame
-func NewManagedFrame(frameType Type, frameTypeStr string, timestamp uint32, poolManager *PoolManager) *ManagedFrame {
+func NewManagedFrame(frameType Type, subType FrameSubType, timestamp uint32, poolManager *PoolManager) *ManagedFrame {
 	return &ManagedFrame{
 		Frame: Frame{
 			Type:      frameType,
-			FrameType: frameTypeStr,
+			SubType:   subType,
 			Timestamp: timestamp,
 			Data:      make([][]byte, 0),
 		},
@@ -126,7 +126,7 @@ func (mf *ManagedFrame) ToRegularFrame() Frame {
 	
 	return Frame{
 		Type:      mf.Frame.Type,
-		FrameType: mf.Frame.FrameType,
+		SubType:   mf.Frame.SubType,
 		Timestamp: mf.Frame.Timestamp,
 		Data:      newData,
 	}
@@ -137,7 +137,7 @@ func (mf *ManagedFrame) Clone() *ManagedFrame {
 	clone := &ManagedFrame{
 		Frame: Frame{
 			Type:      mf.Frame.Type,
-			FrameType: mf.Frame.FrameType,
+			SubType:   mf.Frame.SubType,
 			Timestamp: mf.Frame.Timestamp,
 			Data:      make([][]byte, len(mf.Frame.Data)),
 		},

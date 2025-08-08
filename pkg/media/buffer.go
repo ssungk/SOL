@@ -45,30 +45,30 @@ func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames in
 // 프레임을 캐시에 추가합니다 (비디오/오디오 통합 처리)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) AddFrame(frame Frame) {
-	// Handle extra data (sequence headers) separately
-	if frame.Type == TypeVideo && IsVideoSequenceHeader(frame.FrameType) {
+	// Handle extra data (config frames) separately
+	if frame.Type == TypeVideo && IsVideoConfigFrame(frame.SubType) {
 		videoFrame := VideoFrame{
-			Frame:            frame,
-			IsKeyFrame:       IsKeyFrame(frame.FrameType),
-			IsSequenceHeader: true,
+			Frame:         frame,
+			IsKeyFrame:    IsVideoKeyFrame(frame.SubType),
+			IsConfigFrame: true,
 		}
 		sb.videoExtraData = &videoFrame
-		slog.Debug("Video extra data cached", "frameType", frame.FrameType, "timestamp", frame.Timestamp)
+		slog.Debug("Video extra data cached", "subType", frame.SubType, "timestamp", frame.Timestamp)
 		return
 	}
 	
-	if frame.Type == TypeAudio && IsAudioSequenceHeader(frame.FrameType) {
+	if frame.Type == TypeAudio && IsAudioConfigFrame(frame.SubType) {
 		audioFrame := AudioFrame{
-			Frame:            frame,
-			IsSequenceHeader: true,
+			Frame:         frame,
+			IsConfigFrame: true,
 		}
 		sb.audioExtraData = &audioFrame
-		slog.Debug("Audio extra data cached", "frameType", frame.FrameType, "timestamp", frame.Timestamp)
+		slog.Debug("Audio extra data cached", "subType", frame.SubType, "timestamp", frame.Timestamp)
 		return
 	}
 
 	// 키프레임 추적 및 위치 기록
-	if frame.Type == TypeVideo && IsKeyFrame(frame.FrameType) {
+	if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
 		sb.lastKeyFrameIndex = len(sb.frames)
 		slog.Debug("New key frame detected", "timestamp", frame.Timestamp, "index", sb.lastKeyFrameIndex)
 	}
@@ -98,7 +98,7 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 		}
 		
 		// 키프레임이면서 최소 시간 내에 다른 키프레임이 있으면 제거 가능
-		if frame.Type == TypeVideo && IsKeyFrame(frame.FrameType) {
+		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
 			if sb.hasKeyFrameAfter(i, minTime) {
 				cleanupIndex = i + 1
 			}
@@ -147,7 +147,7 @@ func (sb *StreamBuffer) getCurrentTimestamp() uint32 {
 func (sb *StreamBuffer) hasKeyFrameAfter(index int, minTime uint32) bool {
 	for i := index + 1; i < len(sb.frames); i++ {
 		frame := sb.frames[i]
-		if frame.Type == TypeVideo && IsKeyFrame(frame.FrameType) && frame.Timestamp >= minTime {
+		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) && frame.Timestamp >= minTime {
 			return true
 		}
 	}
@@ -292,7 +292,7 @@ func (sb *StreamBuffer) GetCacheStats() map[string]interface{} {
 func (sb *StreamBuffer) getKeyFrameCount() int {
 	count := 0
 	for _, frame := range sb.frames {
-		if frame.Type == TypeVideo && IsKeyFrame(frame.FrameType) {
+		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
 			count++
 		}
 	}
@@ -304,7 +304,7 @@ func (sb *StreamBuffer) getAverageKeyFrameInterval() uint32 {
 	keyFrameTimes := make([]uint32, 0)
 	
 	for _, frame := range sb.frames {
-		if frame.Type == TypeVideo && IsKeyFrame(frame.FrameType) {
+		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
 			keyFrameTimes = append(keyFrameTimes, frame.Timestamp)
 		}
 	}
