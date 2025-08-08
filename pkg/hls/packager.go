@@ -119,7 +119,7 @@ func (p *Packager) SendMediaFrame(streamId string, frame media.Frame) error {
 	p.lastFrameTime = time.Now()
 	
 	// 키프레임 감지
-	isKeyFrame := media.IsKeyFrame(frame.FrameType)
+	isKeyFrame := media.IsVideoKeyFrame(frame.SubType)
 	if isKeyFrame && frame.Type == media.TypeVideo {
 		p.lastKeyFrame = time.Now()
 	}
@@ -146,7 +146,7 @@ func (p *Packager) SendMediaFrame(streamId string, frame media.Frame) error {
 	
 	slog.Debug("Frame added to HLS packager", 
 		"streamID", p.streamID,
-		"frameType", frame.FrameType,
+		"subType", frame.SubType,
 		"timestamp", frame.Timestamp,
 		"isKeyFrame", isKeyFrame)
 	
@@ -288,7 +288,7 @@ func (b *TSSegmentBuilder) AddFrame(frame media.Frame) error {
 	}
 	
 	// 키프레임 감지
-	if media.IsKeyFrame(frame.FrameType) && frame.Type == media.TypeVideo {
+	if media.IsVideoKeyFrame(frame.SubType) && frame.Type == media.TypeVideo {
 		if !b.hasKeyFrame {
 			b.segment.SetKeyFrameStart(true)
 			b.hasKeyFrame = true

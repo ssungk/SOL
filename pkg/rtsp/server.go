@@ -3,10 +3,10 @@ package rtsp
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"sol/pkg/rtp"
+	"sol/pkg/utils"
 	"sync"
 )
 
@@ -29,6 +29,7 @@ type Server struct {
 	listener        net.Listener
 	ctx             context.Context
 	cancel          context.CancelFunc
+	running         bool              // 서버 실행 상태
 }
 
 // NewServer creates a new RTSP server
@@ -49,12 +50,14 @@ func NewServer(config RTSPConfig, externalChannel chan<- interface{}, wg *sync.W
 }
 
 // Start starts the RTSP server
+// Start 서버 시작 (ProtocolServer 인터페이스 구현)
 func (s *Server) Start() error {
 	ln, err := s.createListener()
 	if err != nil {
 		return err
 	}
 	s.listener = ln
+	s.running = true
 	
 	// RTP transport는 첫 번째 SETUP 요청시에 시작됩니다
 	
@@ -67,9 +70,10 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop stops the RTSP server
+// Stop 서버 중지 (ProtocolServer 인터페이스 구현)
 func (s *Server) Stop() {
 	slog.Info("RTSP Server stopping...")
+	s.running = false
 	
 	// Cancel context
 	s.cancel()
@@ -112,6 +116,13 @@ cleanup_done:
 	close(s.channel)
 	slog.Info("RTSP Server stopped successfully")
 }
+
+// Name 서버 이름 반환 (ProtocolServer 인터페이스 구현)
+func (s *Server) Name() string {
+	return "rtsp"
+}
+
+
 
 // eventLoop processes events
 func (s *Server) eventLoop() {
@@ -163,7 +174,7 @@ func (s *Server) createListener() (net.Listener, error) {
 
 // acceptConnections accepts incoming connections
 func (s *Server) acceptConnections(ln net.Listener) {
-	defer closeWithLog(ln)
+	defer utils.CloseWithLog(ln)
 	
 	for {
 		// Check for context cancellation
@@ -198,12 +209,6 @@ func (s *Server) acceptConnections(ln net.Listener) {
 	}
 }
 
-// closeWithLog closes a resource with logging
-func closeWithLog(c io.Closer) {
-	if err := c.Close(); err != nil {
-		slog.Error("Error closing resource", "err", err)
-	}
-}
 
 // ensureRTPTransport starts RTP transport if not already started
 func (s *Server) ensureRTPTransport() error {

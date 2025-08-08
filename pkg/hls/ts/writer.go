@@ -139,7 +139,7 @@ func (w *TSWriter) writeFrame(frame media.Frame, isFirst bool) error {
 	pesData := w.generatePES(streamID, frameData, frame.Timestamp)
 
 	// PCR 추가 (필요시)
-	needPCR := isFirst || (frame.Type == media.TypeVideo && media.IsKeyFrame(frame.FrameType))
+	needPCR := isFirst || (frame.Type == media.TypeVideo && media.IsVideoKeyFrame(frame.SubType))
 
 	// PES 데이터를 TS 패킷들로 분할
 	return w.writePESPackets(pid, pesData, needPCR, frame.Timestamp)

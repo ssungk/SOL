@@ -18,9 +18,7 @@ type StreamConfig struct {
 }
 
 type MediaServer struct {
-	rtmp     *rtmp.Server
-	rtsp     *rtsp.Server
-	hls      *hls.Server
+	servers  map[string]ProtocolServer   // serverName -> ProtocolServer (rtmp, rtsp, hls)
 	channel  chan interface{}
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -37,6 +35,7 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mediaServer := &MediaServer{
+		servers: make(map[string]ProtocolServer),
 		channel: make(chan interface{}, 10),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -45,21 +44,18 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 		streamSources: make(map[string]uintptr),
 	}
 
-	// RTMP 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
-	mediaServer.rtmp = rtmp.NewServer(rtmpPort, rtmp.RTMPStreamConfig{
-		GopCacheSize:        streamConfig.GopCacheSize,
-		MaxPlayersPerStream: streamConfig.MaxPlayersPerStream,
-	}, mediaServer.channel, &mediaServer.wg)
+	// 각 서버를 생성하고 맵에 등록
+	rtmpServer := rtmp.NewServer(rtmpPort, mediaServer.channel, &mediaServer.wg)
+	mediaServer.servers["rtmp"] = rtmpServer
 
-
-	// RTSP 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
-	mediaServer.rtsp = rtsp.NewServer(rtsp.RTSPConfig{
+	rtspServer := rtsp.NewServer(rtsp.RTSPConfig{
 		Port:    rtspPort,
 		Timeout: rtspTimeout,
 	}, mediaServer.channel, &mediaServer.wg)
+	mediaServer.servers["rtsp"] = rtspServer
 	
-	// HLS 서버 생성 시 MediaServer의 채널과 WaitGroup 전달
-	mediaServer.hls = hls.NewServer(hlsConfig, mediaServer.channel, &mediaServer.wg)
+	hlsServer := hls.NewServer(hlsConfig, mediaServer.channel, &mediaServer.wg)
+	mediaServer.servers["hls"] = hlsServer
 	
 	return mediaServer
 }
@@ -67,27 +63,14 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 func (s *MediaServer) Start() error {
 	slog.Info("Media servers starting...")
 
-	// RTMP 서버 시작
-	if err := s.rtmp.Start(); err != nil {
-		slog.Error("Failed to start RTMP server", "err", err)
-		return err
+	// 모든 서버들을 순차적으로 시작
+	for name, server := range s.servers {
+		if err := server.Start(); err != nil {
+			slog.Error("Failed to start server", "serverName", name, "err", err)
+			return fmt.Errorf("failed to start %s server: %w", name, err)
+		}
+		slog.Info("Server started", "serverName", name, "protocol", server.Name())
 	}
-	slog.Info("RTMP Server started")
-
-
-	// RTSP 서버 시작
-	if err := s.rtsp.Start(); err != nil {
-		slog.Error("Failed to start RTSP server", "err", err)
-		return err
-	}
-	slog.Info("RTSP Server started")
-	
-	// HLS 서버 시작
-	if err := s.hls.Start(); err != nil {
-		slog.Error("Failed to start HLS server", "err", err)
-		return err
-	}
-	slog.Info("HLS Server started")
 
 	// 이벤트 루프 시작
 	go s.eventLoop()
@@ -138,15 +121,11 @@ func (s *MediaServer) channelHandler(data interface{}) {
 func (s *MediaServer) shutdown() {
 	slog.Info("Media event loop stopping...")
 
-	s.rtmp.Stop()
-	slog.Info("RTMP Server stopped")
-
-
-	s.rtsp.Stop()
-	slog.Info("RTSP Server stopped")
-	
-	s.hls.Stop()
-	slog.Info("HLS Server stopped")
+	// 모든 서버들을 순차적으로 중지
+	for name, server := range s.servers {
+		server.Stop()
+		slog.Info("Server stopped", "serverName", name)
+	}
 
 	// 모든 송신자(eventLoop)가 완료될 때까지 대기
 	s.wg.Wait()
@@ -303,14 +282,72 @@ func (s *MediaServer) GetStreamStats() map[string]interface{} {
 
 // 공통 이벤트 핸들러들
 
+// getHLSServer HLS 서버 반환
+func (s *MediaServer) getHLSServer() (*hls.Server, bool) {
+	server, exists := s.servers["hls"]
+	if !exists {
+		return nil, false
+	}
+	hlsServer, ok := server.(*hls.Server)
+	return hlsServer, ok
+}
+
+// RegisterServer 새 서버를 동적으로 등록
+func (s *MediaServer) RegisterServer(name string, server ProtocolServer) error {
+	if _, exists := s.servers[name]; exists {
+		return fmt.Errorf("server %s already exists", name)
+	}
+	
+	s.servers[name] = server
+	slog.Info("Server registered", "serverName", name, "protocol", server.Name())
+	return nil
+}
+
+// UnregisterServer 서버를 동적으로 제거
+func (s *MediaServer) UnregisterServer(name string) error {
+	server, exists := s.servers[name]
+	if !exists {
+		return fmt.Errorf("server %s not found", name)
+	}
+	
+	// 서버 중지 (멱등적이므로 상태 체크 불필요)
+	server.Stop()
+	slog.Info("Server stopped during unregistration", "serverName", name)
+	
+	delete(s.servers, name)
+	slog.Info("Server unregistered", "serverName", name)
+	return nil
+}
+
+// GetServer 서버 반환
+func (s *MediaServer) GetServer(name string) (ProtocolServer, bool) {
+	server, exists := s.servers[name]
+	return server, exists
+}
+
+// GetServerNames 등록된 모든 서버 이름 반환
+func (s *MediaServer) GetServerNames() []string {
+	names := make([]string, 0, len(s.servers))
+	for name := range s.servers {
+		names = append(names, name)
+	}
+	return names
+}
+
+
 // CreateHLSStream HLS 스트림 생성
 func (s *MediaServer) CreateHLSStream(streamID string) error {
-	if err := s.hls.CreateStream(streamID); err != nil {
+	hlsServer, ok := s.getHLSServer()
+	if !ok {
+		return fmt.Errorf("HLS server not found")
+	}
+	
+	if err := hlsServer.CreateStream(streamID); err != nil {
 		return fmt.Errorf("failed to create HLS stream: %w", err)
 	}
 	
 	// HLS 패키저를 MediaSink으로 등록
-	packager, exists := s.hls.GetPackager(streamID)
+	packager, exists := hlsServer.GetPackager(streamID)
 	if exists {
 		s.RegisterNode(streamID, packager)
 		slog.Info("HLS packager registered as MediaSink", "streamID", streamID)
@@ -321,7 +358,13 @@ func (s *MediaServer) CreateHLSStream(streamID string) error {
 
 // RemoveHLSStream HLS 스트림 제거
 func (s *MediaServer) RemoveHLSStream(streamID string) {
-	s.hls.RemoveStream(streamID)
+	hlsServer, ok := s.getHLSServer()
+	if !ok {
+		slog.Warn("HLS server not found for stream removal", "streamID", streamID)
+		return
+	}
+	
+	hlsServer.RemoveStream(streamID)
 	slog.Info("HLS stream removed", "streamID", streamID)
 }
 
@@ -366,12 +409,12 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	// 소스 맵핑 등록
 	s.streamSources[streamId] = event.NodeId()
 	
-	// HLS 스트림 자동 생성 (선택사항 - 설정에 따라)
-	if err := s.CreateHLSStream(streamId); err != nil {
-		slog.Warn("Failed to create HLS stream", "streamId", streamId, "err", err)
-	} else {
-		slog.Info("HLS stream created for publish", "streamId", streamId)
-	}
+	// HLS 스트림 자동 생성 비활성화됨 (수동으로 API를 통해 생성 필요)
+	// if err := s.CreateHLSStream(streamId); err != nil {
+	// 	slog.Warn("Failed to create HLS stream", "streamId", streamId, "err", err)
+	// } else {
+	// 	slog.Info("HLS stream created for publish", "streamId", streamId)
+	// }
 	
 	slog.Info("Source registered for publish", "streamId", streamId, "sourceId", event.NodeId(), "nodeType", event.NodeType.String())
 }
@@ -382,8 +425,8 @@ func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 	
 	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리
 	if _, exists := s.nodes[event.NodeId()]; exists {
-		// HLS 스트림 제거
-		s.RemoveHLSStream(event.StreamId)
+		// HLS 스트림 자동 제거 비활성화됨 (수동으로 API를 통해 관리 필요)
+		// s.RemoveHLSStream(event.StreamId)
 		
 		// Source 노드 제거 및 스트림 정리
 		s.RemoveNode(event.NodeId())
