@@ -8,8 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sol/pkg/amf"
 	"sol/pkg/media"
+	"sol/pkg/rtmp/amf"
 	"sol/pkg/utils"
 	"sync"
 	"unsafe"
@@ -23,8 +23,8 @@ type session struct {
 
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
 	streamID     uint32
-	streamKey    string // streamkey
-	appName      string // appname
+	streamKey    string // streamKey
+	appName      string // appName
 	stream       *media.Stream
 	isPublishing bool
 
@@ -52,7 +52,7 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		wg:                 wg,
 	}
 
-	// NodeCreated 이벤트를 MediaServer로 전송 (blocking - 중요한 이벤트)
+	// NodeCreated 이벤트를 MediaServer로 전송
 	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), media.MediaNodeTypeRTMP, s)
 
 	// 세션의 두 주요 고루틴 시작
@@ -70,8 +70,8 @@ func (s *session) eventLoop() {
 
 	for {
 		select {
-		case event := <-s.channel:
-			s.channelHandler(event)
+		case data := <-s.channel:
+			s.channelHandler(data)
 		case <-s.ctx.Done():
 			return
 		}
@@ -92,16 +92,9 @@ func (s *session) readLoop() {
 	slog.Info("Handshake successful with", "addr", s.conn.RemoteAddr())
 
 	for {
-		// 컨텍스트가 취소되었는지 확인
-		if s.ctx.Err() != nil {
-			break
-		}
 		message, err := s.reader.readNextMessage(s.conn)
 		if err != nil {
-			if err != io.EOF && s.ctx.Err() == nil {
-				slog.Error("Error reading message", "sessionId", s.ID(), "err", err)
-			}
-			return // 루프 종료
+			return // 에러 발생 시 루프 종료
 		}
 
 		// SetChunkSize와 Abort 메시지는 즉시 처리 (레이스 컨디션 방지)
@@ -136,9 +129,7 @@ func (s *session) channelHandler(data any) {
 
 // cleanup 세션 종료 시 모든 리소스를 정리
 func (s *session) cleanup() {
-	if s.conn != nil {
-		_ = s.conn.Close()
-	}
+	utils.CloseWithLog(s.conn)
 
 	// 발행자 또는 플레이어였다면, MediaServer에 종료 이벤트를 보냄
 	if s.isPublishing {
@@ -178,9 +169,6 @@ func (s *session) SendMetadata(streamId string, metadata map[string]string) erro
 
 // handleSendFrame MediaSink로부터 받은 프레임을 클라이언트로 전송
 func (s *session) handleSendFrame(e sendFrameEvent) {
-	if s.conn == nil {
-		return // 연결이 없으면 무시 (이미 종료된 세션)
-	}
 
 	var err error
 	switch e.frame.Type {
@@ -200,9 +188,6 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 
 // handleSendMetadata MediaSink로부터 받은 메타데이터를 클라이언트로 전송
 func (s *session) handleSendMetadata(e sendMetadataEvent) {
-	if s.conn == nil {
-		return // 연결이 없으면 무시 (이미 종료된 세션)
-	}
 
 	if err := s.sendMetadataToClient(e.metadata); err != nil {
 		slog.Error("Failed to send metadata to RTMP session", "sessionId", s.ID(), "err", err)
@@ -227,10 +212,14 @@ func (s *session) handleCommand(message *Message) {
 		s.handleAudio(message)
 	case MsgTypeVideo:
 		s.handleVideo(message)
-	case MsgTypeAMF0Data, MsgTypeAMF3Data:
-		s.handleScriptData(message)
-	case MsgTypeAMF0Command, MsgTypeAMF3Command:
-		s.handleAMFCommand(message)
+	case MsgTypeAMF0Data:
+		s.handleAMF0ScriptData(message)
+	case MsgTypeAMF3Data:
+		s.handleAMF3ScriptData(message)
+	case MsgTypeAMF0Command:
+		s.handleAMF0Command(message)
+	case MsgTypeAMF3Command:
+		s.handleAMF3Command(message)
 	default:
 		slog.Warn("unhandled RTMP message type", "sessionId", s.ID(), "type", message.messageHeader.typeId)
 	}
@@ -247,10 +236,7 @@ func (s *session) MediaType() media.MediaNodeType {
 }
 
 func (s *session) Address() string {
-	if s.conn != nil {
-		return s.conn.RemoteAddr().String()
-	}
-	return ""
+	return s.conn.RemoteAddr().String()
 }
 
 func (s *session) Start() error {
@@ -602,8 +588,8 @@ func (s *session) parseVideoFrameType(firstByte byte, payload [][]byte) RTMPFram
 	}
 }
 
-// handleScriptData 스크립트 데이터 처리 (메타데이터 등)
-func (s *session) handleScriptData(message *Message) {
+// handleAMF0ScriptData 스크립트 데이터 처리 (메타데이터 등)
+func (s *session) handleAMF0ScriptData(message *Message) {
 
 	// AMF 데이터 디코딩
 	reader := ConcatByteSlicesReader(message.payload)
@@ -864,8 +850,8 @@ func (s *session) handleAbort(message *Message) {
 	slog.Info("Chunk stream aborted", "chunkStreamId", chunkStreamId, "sessionId", s.ID())
 }
 
-// handleAMFCommand AMF0/3 명령어 처리
-func (s *session) handleAMFCommand(message *Message) {
+// handleAMF0Command AMF0 명령어 처리
+func (s *session) handleAMF0Command(message *Message) {
 	slog.Debug("handleAMFCommand", "sessionId", s.ID())
 	reader := ConcatByteSlicesReader(message.payload)
 	values, err := amf.DecodeAMF0Sequence(reader)
@@ -1048,9 +1034,7 @@ func (s *session) stopPublishing() {
 	// MediaServer에 발행 중단 이벤트 전송
 	select {
 	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
-		slog.Info("PublishStopped event sent", "sessionId", s.ID(), "streamKey", s.streamKey)
-	default:
-		slog.Warn("MediaServer channel full, dropping PublishStopped event", "sessionId", s.ID())
+	case <-s.ctx.Done():
 	}
 }
 
@@ -1061,8 +1045,92 @@ func (s *session) stopPlaying() {
 	// MediaServer에 재생 중단 이벤트 전송
 	select {
 	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
-		slog.Info("PlayStopped event sent", "sessionId", s.ID(), "streamKey", s.streamKey)
+	case <-s.ctx.Done():
+	}
+}
+
+// handleAMF3ScriptData AMF3 스크립트 데이터 처리
+func (s *session) handleAMF3ScriptData(message *Message) {
+	// AMF3 데이터 디코딩
+	reader := ConcatByteSlicesReader(message.payload)
+
+	// AMF3 컨텍스트를 사용하여 디코딩
+	values, err := amf.DecodeAMF3Sequence(reader)
+	if err != nil {
+		slog.Error("failed to decode AMF3 script data", "sessionId", s.ID(), "err", err)
+		return
+	}
+
+	if len(values) == 0 {
+		slog.Warn("empty AMF3 script data", "sessionId", s.ID())
+		return
+	}
+
+	// 첫 번째 값이 "onMetaData"인지 확인
+	if len(values) >= 2 {
+		if cmd, ok := values[0].(string); ok && cmd == "onMetaData" {
+			slog.Debug("received AMF3 onMetaData", "sessionId", s.ID())
+			// 메타데이터를 스트림으로 전달
+			if s.stream != nil {
+				if metadata, ok := values[1].(map[string]any); ok {
+					stringMetadata := make(map[string]string)
+					for k, v := range metadata {
+						stringMetadata[k] = fmt.Sprintf("%v", v)
+					}
+					s.stream.SendMetadata(stringMetadata)
+				}
+			}
+		}
+	}
+}
+
+// handleAMF3Command AMF3 커맨드 처리
+func (s *session) handleAMF3Command(message *Message) {
+	slog.Debug("handleAMF3Command", "sessionId", s.ID())
+
+	reader := ConcatByteSlicesReader(message.payload)
+
+	// AMF3 컨텍스트를 사용하여 디코딩
+	values, err := amf.DecodeAMF3Sequence(reader)
+	if err != nil {
+		slog.Error("Failed to decode AMF3 sequence", "sessionId", s.ID(), "err", err)
+		return
+	}
+
+	if len(values) == 0 {
+		slog.Error("Empty AMF3 sequence", "sessionId", s.ID())
+		return
+	}
+
+	// 첫 번째 값이 커맨드 이름
+	commandName, ok := values[0].(string)
+	if !ok {
+		slog.Error("Invalid AMF3 command name", "sessionId", s.ID(), "type", utils.TypeName(values[0]))
+		return
+	}
+
+	slog.Debug("AMF3 command received", "sessionId", s.ID(), "command", commandName)
+
+	switch commandName {
+	case "connect":
+		s.handleConnect(values)
+	case "releaseStream":
+		s.handleReleaseStream(values)
+	case "FCPublish":
+		s.handleFCPublish(values)
+	case "createStream":
+		s.handleCreateStream(values)
+	case "publish":
+		s.handlePublish(values)
+	case "play":
+		s.handlePlay(values)
+	case "closeStream":
+		s.handleCloseStream(values)
+	case "FCUnpublish":
+		s.handleFCUnpublish(values)
+	case "deleteStream":
+		s.handleDeleteStream(values)
 	default:
-		slog.Warn("MediaServer channel full, dropping PlayStopped event", "sessionId", s.ID())
+		slog.Warn("Unsupported AMF3 command", "sessionId", s.ID(), "command", commandName)
 	}
 }

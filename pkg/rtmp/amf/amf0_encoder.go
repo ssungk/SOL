@@ -3,7 +3,7 @@ package amf
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -64,17 +64,17 @@ func encodeValue(w io.Writer, value any) error {
 	case time.Time:
 		return encodeDate(w, v)
 	default:
-		return errors.New("unsupported AMF0 type")
+		return fmt.Errorf("unsupported AMF0 type: %T", value)
 	}
 }
 
 func encodeString(w io.Writer, s string) error {
-	length := len(s)
-	if length < 65536 {
+	byteLen := len([]byte(s)) // UTF-8 바이트 길이로 정확히 측정
+	if byteLen < 65536 {
 		if err := writeByte(w, stringMarker); err != nil {
 			return err
 		}
-		if err := binary.Write(w, binary.BigEndian, uint16(length)); err != nil {
+		if err := binary.Write(w, binary.BigEndian, uint16(byteLen)); err != nil {
 			return err
 		}
 		_, err := io.WriteString(w, s)
@@ -83,7 +83,7 @@ func encodeString(w io.Writer, s string) error {
 		if err := writeByte(w, longStringMarker); err != nil {
 			return err
 		}
-		if err := binary.Write(w, binary.BigEndian, uint32(length)); err != nil {
+		if err := binary.Write(w, binary.BigEndian, uint32(byteLen)); err != nil {
 			return err
 		}
 		_, err := io.WriteString(w, s)
@@ -106,11 +106,11 @@ func encodeObject(w io.Writer, obj map[string]any) error {
 }
 
 func encodeObjectProperty(w io.Writer, key string, val any) error {
-	keyLen := len(key)
-	if keyLen > 65535 {
-		return errors.New("object key too long")
+	keyByteLen := len([]byte(key)) // UTF-8 바이트 길이로 정확히 측정
+	if keyByteLen > 65535 {
+		return fmt.Errorf("object key too long: %d bytes (max 65535)", keyByteLen)
 	}
-	if err := binary.Write(w, binary.BigEndian, uint16(keyLen)); err != nil {
+	if err := binary.Write(w, binary.BigEndian, uint16(keyByteLen)); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(w, key); err != nil {
@@ -146,7 +146,4 @@ func encodeDate(w io.Writer, t time.Time) error {
 	return binary.Write(w, binary.BigEndian, int16(0))
 }
 
-func writeByte(w io.Writer, b byte) error {
-	_, err := w.Write([]byte{b})
-	return err
-}
+

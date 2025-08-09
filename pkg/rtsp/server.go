@@ -11,12 +11,6 @@ import (
 	"sync"
 )
 
-// RTSPConfig represents RTSP server configuration
-type RTSPConfig struct {
-	Port    int
-	Timeout int // seconds
-}
-
 // Server represents an RTSP server
 type Server struct {
 	port            int

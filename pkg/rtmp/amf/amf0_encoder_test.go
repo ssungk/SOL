@@ -341,8 +341,8 @@ func TestEncodeObjectProperty_KeyTooLong(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for key too long")
 	}
-	if err.Error() != "object key too long" {
-		t.Errorf("expected 'object key too long', got %v", err.Error())
+	if !strings.Contains(err.Error(), "object key too long") {
+		t.Errorf("expected error to contain 'object key too long', got %v", err.Error())
 	}
 }
 
@@ -370,8 +370,8 @@ func TestEncodeObjectProperty_ValueError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected value encode error")
 	}
-	if err.Error() != "unsupported AMF0 type" {
-		t.Errorf("expected 'unsupported AMF0 type', got %v", err.Error())
+	if !strings.Contains(err.Error(), "unsupported AMF0 type") {
+		t.Errorf("expected error to contain 'unsupported AMF0 type', got %v", err.Error())
 	}
 }
 
@@ -509,8 +509,8 @@ func TestEncodeAMF0_UnsupportedType(t *testing.T) {
 		t.Fatal("expected error for unsupported type")
 	}
 
-	if err.Error() != "unsupported AMF0 type" {
-		t.Errorf("expected 'unsupported AMF0 type', got %v", err.Error())
+	if !strings.Contains(err.Error(), "unsupported AMF0 type") {
+		t.Errorf("expected error to contain 'unsupported AMF0 type', got %v", err.Error())
 	}
 }
 

@@ -20,7 +20,7 @@ type StreamConfig struct {
 
 type MediaServer struct {
 	servers  map[string]ProtocolServer   // serverName -> ProtocolServer (rtmp, rtsp, hls)
-	channel  chan any
+	mediaServerChannel  chan any
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
@@ -37,7 +37,7 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 
 	mediaServer := &MediaServer{
 		servers: make(map[string]ProtocolServer),
-		channel: make(chan any, media.DefaultChannelBufferSize),
+		mediaServerChannel: make(chan any, media.DefaultChannelBufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
 		streams: make(map[string]*media.Stream),
@@ -46,16 +46,13 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 	}
 
 	// 각 서버를 생성하고 맵에 등록
-	rtmpServer := rtmp.NewServer(rtmpPort, mediaServer.channel, &mediaServer.wg)
+	rtmpServer := rtmp.NewServer(rtmpPort, mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["rtmp"] = rtmpServer
 
-	rtspServer := rtsp.NewServer(rtsp.RTSPConfig{
-		Port:    rtspPort,
-		Timeout: rtspTimeout,
-	}, mediaServer.channel, &mediaServer.wg)
+	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["rtsp"] = rtspServer
 	
-	hlsServer := hls.NewServer(hlsConfig, mediaServer.channel, &mediaServer.wg)
+	hlsServer := hls.NewServer(hlsConfig, mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["hls"] = hlsServer
 	
 	return mediaServer
@@ -89,7 +86,7 @@ func (s *MediaServer) Stop() {
 func (s *MediaServer) eventLoop() {
 	for {
 		select {
-		case data := <-s.channel:
+		case data := <-s.mediaServerChannel:
 			s.channelHandler(data)
 		case <-s.ctx.Done():
 			s.shutdown()
