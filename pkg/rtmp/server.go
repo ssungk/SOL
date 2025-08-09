@@ -11,7 +11,6 @@ import (
 
 // pkg/media를 활용하는 RTMP 서버
 type Server struct {
-	channel chan interface{}
 	// 서버 설정
 	port int
 
@@ -31,9 +30,9 @@ func NewServer(port int, mediaServerChannel chan<- any, wg *sync.WaitGroup) *Ser
 	ctx, cancel := context.WithCancel(context.Background())
 
 	server := &Server{
-		channel:            make(chan interface{}, 10),
 		port:               port,
 		mediaServerChannel: mediaServerChannel,
+		listener:           nil,
 		ctx:                ctx,
 		cancel:             cancel,
 		wg:                 wg,
@@ -42,10 +41,11 @@ func NewServer(port int, mediaServerChannel chan<- any, wg *sync.WaitGroup) *Ser
 	return server
 }
 
-// Start 서버 시작 (ProtocolServer 인터페이스 구현)
-func (s *Server) Start() error {
-	//s.wg.Add(1)
-	//defer s.wg.Done()
+// setupListener 리스너 설정 (중복 시작 체크 포함)
+func (s *Server) setupListener() error {
+	if s.listener != nil {
+		return fmt.Errorf("server already started")
+	}
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
@@ -53,9 +53,18 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.listener = ln
+	return nil
+}
+
+// Start 서버 시작 (ProtocolServer 인터페이스 구현)
+func (s *Server) Start() error {
+	err := s.setupListener()
+	if err != nil {
+		return err
+	}
 
 	// 연결 수락 시작
-	go s.acceptConnections(ln)
+	go s.acceptConnections()
 	go s.eventLoop()
 
 	slog.Info("RTMP server started", "port", s.port)
@@ -65,10 +74,7 @@ func (s *Server) Start() error {
 // Stop 서버 중지 (ProtocolServer 인터페이스 구현)
 func (s *Server) Stop() {
 	slog.Info("RTMP server stopping...")
-
 	s.cancel()
-
-	slog.Info("RTMP server stopped successfully")
 }
 
 // Name 서버 이름 반환 (ProtocolServer 인터페이스 구현)
@@ -77,11 +83,11 @@ func (s *Server) Name() string {
 }
 
 func (s *Server) eventLoop() {
+	s.wg.Add(1)
+	defer s.wg.Done()
 	defer utils.CloseWithLog(s.listener)
 	for {
 		select {
-		case data := <-s.channel:
-			s.channelHandler(data)
 		case <-s.ctx.Done():
 			s.shutdown()
 			return
@@ -89,22 +95,15 @@ func (s *Server) eventLoop() {
 	}
 }
 
-func (s *Server) channelHandler(data interface{}) {
-	switch v := data.(type) {
-	default:
-		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
-	}
-}
-
 func (s *Server) shutdown() {
-
+	slog.Info("RTMP server shutdown completed")
 }
 
 // acceptConnections 연결 수락
-func (s *Server) acceptConnections(ln net.Listener) {
-	defer utils.CloseWithLog(ln)
+func (s *Server) acceptConnections() {
+	defer s.cancel()
 	for {
-		conn, err := ln.Accept()
+		conn, err := s.listener.Accept()
 		if err != nil {
 			slog.Error("RTMP accept failed", "err", err)
 			return
