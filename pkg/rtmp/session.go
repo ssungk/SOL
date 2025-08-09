@@ -48,9 +48,6 @@ func (s *session) GetID() string {
 
 // 노드 고유 ID 반환 (MediaNode 인터페이스)
 func (s *session) ID() uintptr {
-	if s == nil {
-		return 0
-	}
 	return uintptr(unsafe.Pointer(s))
 }
 
@@ -984,14 +981,12 @@ func (s *session) handleConnect(values []any) {
 		return
 	}
 
-
 	// command object (map)
 	commandObj, ok := values[2].(map[string]any)
 	if !ok {
 		slog.Error("connect: invalid command object", "type", utils.TypeName(values[2]))
 		return
 	}
-
 
 	// app 이름 추출
 	if app, ok := commandObj["app"]; ok {
