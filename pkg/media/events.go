@@ -49,3 +49,52 @@ type PlayStopped struct {
 type NodeTerminated struct {
 	BaseNodeEvent
 }
+
+// 이벤트 생성자 함수들
+
+// NewNodeCreated 노드 생성 이벤트 생성자
+func NewNodeCreated(id uintptr, nodeType MediaNodeType, node MediaNode) NodeCreated {
+	return NodeCreated{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+		Node:          node,
+	}
+}
+
+// NewPublishStarted 발행 시작 이벤트 생성자
+func NewPublishStarted(id uintptr, nodeType MediaNodeType, stream *Stream) PublishStarted {
+	return PublishStarted{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+		Stream:        stream,
+	}
+}
+
+// NewPublishStopped 발행 중지 이벤트 생성자
+func NewPublishStopped(id uintptr, nodeType MediaNodeType, streamId string) PublishStopped {
+	return PublishStopped{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+		StreamId:      streamId,
+	}
+}
+
+// NewPlayStarted 재생 시작 이벤트 생성자
+func NewPlayStarted(id uintptr, nodeType MediaNodeType, streamId string) PlayStarted {
+	return PlayStarted{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+		StreamId:      streamId,
+	}
+}
+
+// NewPlayStopped 재생 중지 이벤트 생성자
+func NewPlayStopped(id uintptr, nodeType MediaNodeType, streamId string) PlayStopped {
+	return PlayStopped{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+		StreamId:      streamId,
+	}
+}
+
+// NewNodeTerminated 노드 종료 이벤트 생성자
+func NewNodeTerminated(id uintptr, nodeType MediaNodeType) NodeTerminated {
+	return NodeTerminated{
+		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
+	}
+}
