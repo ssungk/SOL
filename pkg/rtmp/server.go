@@ -110,6 +110,6 @@ func (s *Server) acceptConnections() {
 		}
 
 		session := newSession(conn, s.mediaServerChannel)
-		slog.Info("New RTMP session created", "sessionId", session.sessionId, "remoteAddr", conn.RemoteAddr())
+		slog.Info("New RTMP session created", "sessionId", session.ID(), "remoteAddr", conn.RemoteAddr())
 	}
 }
