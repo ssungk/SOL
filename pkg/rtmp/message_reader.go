@@ -326,3 +326,8 @@ func readPooledPayload(r io.Reader, bufferPool *sync.Pool, poolManager *media.Po
 func readUint24BE(buf []byte) uint32 {
 	return uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])
 }
+
+// abortChunkStream aborts a specific chunk stream
+func (mr *messageReader) abortChunkStream(chunkStreamId uint32) {
+	mr.readerContext.abortChunkStream(chunkStreamId)
+}

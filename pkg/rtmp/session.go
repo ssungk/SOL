@@ -11,33 +11,15 @@ import (
 	"sol/pkg/amf"
 	"sol/pkg/media"
 	"sol/pkg/utils"
+	"sync"
 	"unsafe"
 )
-
-// sessionEvent 세션에서 처리할 이벤트를 위한 인터페이스
-type sessionEvent interface{}
-
-// sendFrameEvent MediaSink로부터 미디어 프레임을 수신했을 때 발생하는 이벤트
-type sendFrameEvent struct {
-	frame media.Frame
-}
-
-// sendMetadataEvent MediaSink로부터 메타데이터를 수신했을 때 발생하는 이벤트
-type sendMetadataEvent struct {
-	metadata map[string]string
-}
-
-// commandEvent handleRead 고루틴에서 디코딩된 RTMP 메시지를 받았을 때 발생하는 이벤트
-type commandEvent struct {
-	message *Message
-}
 
 // session RTMP에서 사용하는 세션 구조체 (이벤트 루프 기반)
 type session struct {
 	reader *messageReader
 	writer *messageWriter
 	conn   net.Conn
-
 
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
 	streamID     uint32
@@ -50,33 +32,28 @@ type session struct {
 	mediaServerChannel chan<- any
 
 	// 동시성 및 생명주기 관리
-	eventCh chan sessionEvent
+	channel chan any
 	ctx     context.Context
 	cancel  context.CancelFunc
+	wg      *sync.WaitGroup
 }
 
 // newSession 새로운 세션 생성 (내부 사용)
-func newSession(conn net.Conn, mediaServerChannel chan<- any) *session {
+func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup) *session {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{
 		reader:             newMessageReader(),
 		writer:             newMessageWriter(),
 		conn:               conn,
 		mediaServerChannel: mediaServerChannel,
-		eventCh:            make(chan sessionEvent, 20), // 버퍼 크기 20으로 설정
+		channel:            make(chan any, 20), // 버퍼 크기 20으로 설정
 		ctx:                ctx,
 		cancel:             cancel,
+		wg:                 wg,
 	}
 
-	// NodeCreated 이벤트를 MediaServer로 전송
-	select {
-	case s.mediaServerChannel <- media.NodeCreated{
-		BaseNodeEvent: media.BaseNodeEvent{ID: s.ID(), NodeType: media.MediaNodeTypeRTMP},
-		Node:          s,
-	}:
-	default:
-		slog.Warn("MediaServer channel full, dropping NodeCreated event")
-	}
+	// NodeCreated 이벤트를 MediaServer로 전송 (blocking - 중요한 이벤트)
+	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), media.MediaNodeTypeRTMP, s)
 
 	// 세션의 두 주요 고루틴 시작
 	go s.eventLoop()
@@ -87,12 +64,14 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any) *session {
 
 // eventLoop 세션의 모든 상태 변경과 I/O 쓰기를 처리하는 메인 루프
 func (s *session) eventLoop() {
+	s.wg.Add(1)
+	defer s.wg.Done()
 	defer s.cleanup()
 
 	for {
 		select {
-		case event := <-s.eventCh:
-			s.handleEvent(event)
+		case event := <-s.channel:
+			s.channelHandler(event)
 		case <-s.ctx.Done():
 			return
 		}
@@ -101,6 +80,8 @@ func (s *session) eventLoop() {
 
 // readLoop 클라이언트로부터 들어오는 RTMP 메시지를 읽는 루프
 func (s *session) readLoop() {
+	s.wg.Add(1)
+	defer s.wg.Done()
 	// readLoop가 종료되면 (연결 끊김 등) 전체 세션을 종료하도록 cancel 호출
 	defer s.cancel()
 
@@ -123,20 +104,25 @@ func (s *session) readLoop() {
 			return // 루프 종료
 		}
 
-		// SetChunkSize 메시지는 즉시 처리 (레이스 컨디션 방지)
+		// SetChunkSize와 Abort 메시지는 즉시 처리 (레이스 컨디션 방지)
 		if message.messageHeader.typeId == MsgTypeSetChunkSize {
 			s.handleSetChunkSize(message)
 			continue // eventCh로 보내지 않음
 		}
 
+		if message.messageHeader.typeId == MsgTypeAbort {
+			s.handleAbort(message)
+			continue // eventCh로 보내지 않음
+		}
+
 		// 다른 메시지들은 이벤트로 변환하여 이벤트 루프로 전송
-		s.eventCh <- commandEvent{message: message}
+		s.channel <- commandEvent{message: message}
 	}
 }
 
-// handleEvent 이벤트 종류에 따라 적절한 핸들러 호출
-func (s *session) handleEvent(event sessionEvent) {
-	switch e := event.(type) {
+// channelHandler 이벤트 종류에 따라 적절한 핸들러 호출
+func (s *session) channelHandler(data any) {
+	switch e := data.(type) {
 	case sendFrameEvent:
 		s.handleSendFrame(e)
 	case sendMetadataEvent:
@@ -144,7 +130,7 @@ func (s *session) handleEvent(event sessionEvent) {
 	case commandEvent:
 		s.handleCommand(e.message)
 	default:
-		slog.Warn("Unknown session event type", "type", utils.TypeName(event))
+		slog.Warn("Unknown session data type", "type", utils.TypeName(data))
 	}
 }
 
@@ -160,13 +146,8 @@ func (s *session) cleanup() {
 	}
 	s.stopPlaying() // 플레이어 상태 체크 없이 항상 호출 (MediaServer에서 중복 처리 방지)
 
-	// MediaServer에 최종 종료 알림
-	select {
-	case s.mediaServerChannel <- media.NodeTerminated{
-		BaseNodeEvent: media.BaseNodeEvent{ID: s.ID(), NodeType: media.MediaNodeTypeRTMP},
-	}:
-	case <-s.ctx.Done(): // 이미 컨텍스트가 닫혔으면 무시
-	}
+	// MediaServer에 최종 종료 알림 (blocking - 중요한 이벤트)
+	s.mediaServerChannel <- media.NewNodeTerminated(s.ID(), media.MediaNodeTypeRTMP)
 
 	slog.Info("session cleanup completed", "sessionId", s.ID())
 }
@@ -176,7 +157,7 @@ func (s *session) cleanup() {
 func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
 	event := sendFrameEvent{frame: frame}
 	select {
-	case s.eventCh <- event:
+	case s.channel <- event:
 		return nil
 	case <-s.ctx.Done():
 		return fmt.Errorf("session closed, cannot send frame: %w", s.ctx.Err())
@@ -186,7 +167,7 @@ func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
 func (s *session) SendMetadata(streamId string, metadata map[string]string) error {
 	event := sendMetadataEvent{metadata: metadata}
 	select {
-	case s.eventCh <- event:
+	case s.channel <- event:
 		return nil
 	case <-s.ctx.Done():
 		return fmt.Errorf("session closed, cannot send metadata: %w", s.ctx.Err())
@@ -236,6 +217,8 @@ func (s *session) handleCommand(message *Message) {
 		// SetChunkSize는 readLoop에서 직접 처리됨 (레이스 컨디션 방지)
 		// 이 케이스는 도달하지 않음
 	case MsgTypeAbort:
+		// Abort는 readLoop에서 직접 처리됨 (레이스 컨디션 방지)
+		// 이 케이스는 도달하지 않음
 	case MsgTypeAcknowledgement:
 	case MsgTypeUserControl:
 	case MsgTypeWindowAckSize:
@@ -280,7 +263,6 @@ func (s *session) Stop() error {
 	slog.Info("RTMP session stopping", "sessionId", s.ID())
 	return nil
 }
-
 
 func (s *session) SetStream(stream *media.Stream) {
 	s.stream = stream
@@ -387,13 +369,7 @@ func (s *session) handlePublish(values []any) {
 
 	// MediaServer에 publish 시작 알림
 	select {
-	case s.mediaServerChannel <- media.PublishStarted{
-		BaseNodeEvent: media.BaseNodeEvent{
-			ID:       s.ID(),
-			NodeType: media.MediaNodeTypeRTMP,
-		},
-		Stream: stream,
-	}:
+	case s.mediaServerChannel <- media.NewPublishStarted(s.ID(), media.MediaNodeTypeRTMP, stream):
 	case <-s.ctx.Done():
 	}
 
@@ -452,13 +428,7 @@ func (s *session) handlePlay(values []any) {
 
 	// MediaServer에 play 시작 알림
 	select {
-	case s.mediaServerChannel <- media.PlayStarted{
-		BaseNodeEvent: media.BaseNodeEvent{
-			ID:       s.ID(),
-			NodeType: media.MediaNodeTypeRTMP,
-		},
-		StreamId: fullStreamPath,
-	}:
+	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.MediaNodeTypeRTMP, fullStreamPath):
 	case <-s.ctx.Done():
 	}
 
@@ -855,6 +825,45 @@ func (s *session) handleSetChunkSize(message *Message) {
 	s.reader.setChunkSize(newChunkSize)
 }
 
+// handleAbort 청크 스트림 중단 처리
+func (s *session) handleAbort(message *Message) {
+	slog.Debug("handleAbort", "sessionId", s.ID())
+
+	// 전체 payload 길이 계산
+	totalLength := 0
+	for _, chunk := range message.payload {
+		totalLength += len(chunk)
+	}
+
+	if totalLength != 4 {
+		slog.Error("Invalid Abort message length", "length", totalLength, "sessionId", s.ID())
+		return
+	}
+
+	// 첫 번째 청크에서 4바이트 읽기 (big endian)
+	var chunkStreamIdBytes []byte
+	if len(message.payload) > 0 && len(message.payload[0]) >= 4 {
+		chunkStreamIdBytes = message.payload[0][:4]
+	} else {
+		// 여러 청크에 걸쳐있는 경우 합치기
+		chunkStreamIdBytes = make([]byte, 0, 4)
+		for _, chunk := range message.payload {
+			chunkStreamIdBytes = append(chunkStreamIdBytes, chunk...)
+			if len(chunkStreamIdBytes) >= 4 {
+				chunkStreamIdBytes = chunkStreamIdBytes[:4]
+				break
+			}
+		}
+	}
+
+	chunkStreamId := binary.BigEndian.Uint32(chunkStreamIdBytes)
+
+	// Reader에서 해당 청크 스트림 상태 초기화
+	s.reader.abortChunkStream(chunkStreamId)
+
+	slog.Info("Chunk stream aborted", "chunkStreamId", chunkStreamId, "sessionId", s.ID())
+}
+
 // handleAMFCommand AMF0/3 명령어 처리
 func (s *session) handleAMFCommand(message *Message) {
 	slog.Debug("handleAMFCommand", "sessionId", s.ID())
@@ -1038,13 +1047,7 @@ func (s *session) stopPublishing() {
 
 	// MediaServer에 발행 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.PublishStopped{
-		BaseNodeEvent: media.BaseNodeEvent{
-			ID:       s.ID(),
-			NodeType: media.MediaNodeTypeRTMP,
-		},
-		StreamId: s.streamName,
-	}:
+	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamName):
 		slog.Info("PublishStopped event sent", "sessionId", s.ID(), "streamName", s.streamName)
 	default:
 		slog.Warn("MediaServer channel full, dropping PublishStopped event", "sessionId", s.ID())
@@ -1057,13 +1060,7 @@ func (s *session) stopPlaying() {
 
 	// MediaServer에 재생 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.PlayStopped{
-		BaseNodeEvent: media.BaseNodeEvent{
-			ID:       s.ID(),
-			NodeType: media.MediaNodeTypeRTMP,
-		},
-		StreamId: s.streamName,
-	}:
+	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamName):
 		slog.Info("PlayStopped event sent", "sessionId", s.ID(), "streamName", s.streamName)
 	default:
 		slog.Warn("MediaServer channel full, dropping PlayStopped event", "sessionId", s.ID())

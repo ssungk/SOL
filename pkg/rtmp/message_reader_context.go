@@ -32,6 +32,13 @@ func (mrc *messageReaderContext) setChunkSize(size uint32) {
 	mrc.bufferPool = NewBufferPool(mrc.chunkSize)
 }
 
+func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
+	// 해당 청크 스트림의 모든 상태 제거
+	delete(mrc.messageHeaders, chunkStreamId)
+	delete(mrc.payloads, chunkStreamId)
+	delete(mrc.payloadLengths, chunkStreamId)
+}
+
 func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *messageHeader) {
 	ms.messageHeaders[chunkStreamId] = messageHeader
 }
