@@ -253,11 +253,11 @@ func (sb *StreamBuffer) HasCachedData() bool {
 
 // 캐시 통계를 반환합니다 (개선된 버전)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (sb *StreamBuffer) GetCacheStats() map[string]interface{} {
+func (sb *StreamBuffer) GetCacheStats() map[string]any {
 	bufferDuration := sb.getBufferDuration()
 	keyFrameCount := sb.getKeyFrameCount()
 	
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		// 기본 정보
 		"total_frame_count": len(sb.frames),
 		"video_extra_data":  sb.videoExtraData != nil,

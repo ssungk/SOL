@@ -223,7 +223,7 @@ func (p *Playlist) Clear() {
 }
 
 // GetStats 플레이리스트 통계 정보 반환
-func (p *Playlist) GetStats() map[string]interface{} {
+func (p *Playlist) GetStats() map[string]any {
 	totalSize := int64(0)
 	totalDuration := time.Duration(0)
 	keyFrameCount := 0
@@ -236,7 +236,7 @@ func (p *Playlist) GetStats() map[string]interface{} {
 		}
 	}
 	
-	return map[string]interface{}{
+	return map[string]any{
 		"stream_id":        p.streamID,
 		"playlist_type":    p.playlistType.String(),
 		"segment_count":    len(p.segments),

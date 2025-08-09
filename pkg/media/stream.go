@@ -139,7 +139,7 @@ func (s *Stream) HasCachedData() bool {
 }
 
 // GetCacheStats returns cache statistics
-func (s *Stream) GetCacheStats() map[string]interface{} {
+func (s *Stream) GetCacheStats() map[string]any {
 	stats := s.streamBuffer.GetCacheStats()
 
 	stats["sink_count"] = len(s.sinks)
