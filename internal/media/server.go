@@ -20,7 +20,7 @@ type StreamConfig struct {
 
 type MediaServer struct {
 	servers  map[string]ProtocolServer   // serverName -> ProtocolServer (rtmp, rtsp, hls)
-	channel  chan interface{}
+	channel  chan any
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
@@ -37,7 +37,7 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 
 	mediaServer := &MediaServer{
 		servers: make(map[string]ProtocolServer),
-		channel: make(chan interface{}, 10),
+		channel: make(chan any, media.DefaultChannelBufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
 		streams: make(map[string]*media.Stream),
@@ -98,7 +98,7 @@ func (s *MediaServer) eventLoop() {
 	}
 }
 
-func (s *MediaServer) channelHandler(data interface{}) {
+func (s *MediaServer) channelHandler(data any) {
 	switch v := data.(type) {
 	// 공통 이벤트 처리
 	case media.PublishStarted:
@@ -260,7 +260,7 @@ func (s *MediaServer) GetNodeCount() int {
 }
 
 // 스트림 통계 반환
-func (s *MediaServer) GetStreamStats() map[string]interface{} {
+func (s *MediaServer) GetStreamStats() map[string]any {
 	sourceCount := 0
 	sinkCount := 0
 	
@@ -273,7 +273,7 @@ func (s *MediaServer) GetStreamStats() map[string]interface{} {
 		}
 	}
 	
-	return map[string]interface{}{
+	return map[string]any{
 		"total_streams": len(s.streams),
 		"total_nodes":   len(s.nodes),
 		"source_count":  sourceCount,

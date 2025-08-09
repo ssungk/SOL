@@ -133,7 +133,7 @@ func TestDecodeAMF0_Object(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, ok := val.(map[string]interface{})
+	obj, ok := val.(map[string]any)
 	if !ok || obj["foo"] != "bar" {
 		t.Errorf("expected foo=bar, got %v", obj)
 	}
@@ -216,7 +216,7 @@ func TestDecodeAMF0_ECMAArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := val.(map[string]interface{})
+	m, ok := val.(map[string]any)
 	if !ok || m["key"] != "val" {
 		t.Errorf("expected key=val, got %v", m)
 	}
@@ -241,7 +241,7 @@ func TestDecodeAMF0_StrictArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arr, ok := val.([]interface{})
+	arr, ok := val.([]any)
 	if !ok || len(arr) != 2 || arr[0] != "a" || arr[1] != "b" {
 		t.Errorf("expected [a b], got %v", val)
 	}

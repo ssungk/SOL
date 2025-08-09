@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sol/pkg/media"
 	"sol/pkg/rtp"
 	"sol/pkg/utils"
 	"sync"
@@ -23,8 +24,8 @@ type Server struct {
 	sessions        map[string]*Session // sessionId -> session
 	rtpTransport    *rtp.RTPTransport
 	rtpStarted      bool
-	channel         chan interface{}    // 내부 채널
-	externalChannel chan<- interface{} // 외부 송신 전용 채널
+	channel         chan any    // 내부 채널
+	externalChannel chan<- any // 외부 송신 전용 채널
 	wg              *sync.WaitGroup     // 외부 WaitGroup 참조
 	listener        net.Listener
 	ctx             context.Context
@@ -33,7 +34,7 @@ type Server struct {
 }
 
 // NewServer creates a new RTSP server
-func NewServer(config RTSPConfig, externalChannel chan<- interface{}, wg *sync.WaitGroup) *Server {
+func NewServer(config RTSPConfig, externalChannel chan<- any, wg *sync.WaitGroup) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	return &Server{
@@ -41,7 +42,7 @@ func NewServer(config RTSPConfig, externalChannel chan<- interface{}, wg *sync.W
 		timeout:       config.Timeout,
 		sessions:      make(map[string]*Session),
 		rtpTransport:  rtp.NewRTPTransport(),
-		channel:       make(chan interface{}, 100), // 내부 채널
+		channel:       make(chan any, media.DefaultChannelBufferSize), // 내부 채널
 		externalChannel: externalChannel,             // 외부 송신 전용 채널
 		wg:            wg,                           // 외부 WaitGroup 참조
 		ctx:           ctx,
@@ -142,7 +143,7 @@ func (s *Server) eventLoop() {
 }
 
 // handleEvent handles different types of events and forwards to MediaServer
-func (s *Server) handleEvent(event interface{}) {
+func (s *Server) handleEvent(event any) {
 	// 모든 이벤트를 MediaServer로 전달
 	if s.externalChannel != nil {
 		select {

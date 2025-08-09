@@ -25,12 +25,12 @@ type Server struct {
 	running      bool                         // 서버 실행 상태
 
 	// MediaServer와의 통합을 위한 채널
-	mediaServerChannel chan<- interface{}     // MediaServer로 이벤트 전송
+	mediaServerChannel chan<- any     // MediaServer로 이벤트 전송
 	serverWg          *sync.WaitGroup         // MediaServer WaitGroup
 }
 
 // NewServer HLS 서버 생성
-func NewServer(config HLSConfig, mediaServerChannel chan<- interface{}, serverWg *sync.WaitGroup) *Server {
+func NewServer(config HLSConfig, mediaServerChannel chan<- any, serverWg *sync.WaitGroup) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	server := &Server{
@@ -338,7 +338,7 @@ func (s *Server) handleStreamList(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"streams": streams,
 		"total":   len(streams),
 	})
@@ -352,7 +352,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if streamID == "" {
 		// 전체 통계
 		s.mutex.RLock()
-		stats := make(map[string]interface{})
+		stats := make(map[string]any)
 		stats["total_streams"] = len(s.playlists)
 		stats["active_streams"] = len(s.playlists) // TODO: 활성 스트림 카운트
 		s.mutex.RUnlock()

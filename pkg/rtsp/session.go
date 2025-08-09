@@ -33,7 +33,7 @@ type Session struct {
 	rtpTransport    *rtp.RTPTransport // Reference to RTP transport
 	timeout         time.Duration
 	lastActivity    time.Time
-	externalChannel chan<- interface{}
+	externalChannel chan<- any
 	ctx             context.Context
 	cancel          context.CancelFunc
 	
@@ -97,7 +97,7 @@ func (s SessionState) String() string {
 }
 
 // NewSession creates a new RTSP session
-func NewSession(conn net.Conn, externalChannel chan<- interface{}, rtpTransport *rtp.RTPTransport) *Session {
+func NewSession(conn net.Conn, externalChannel chan<- any, rtpTransport *rtp.RTPTransport) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	session := &Session{

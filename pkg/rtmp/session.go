@@ -23,7 +23,7 @@ type session struct {
 
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
 	streamID     uint32
-	streamName   string // streamkey
+	streamKey    string // streamkey
 	appName      string // appname
 	stream       *media.Stream
 	isPublishing bool
@@ -46,7 +46,7 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		writer:             newMessageWriter(),
 		conn:               conn,
 		mediaServerChannel: mediaServerChannel,
-		channel:            make(chan any, 20), // 버퍼 크기 20으로 설정
+		channel:            make(chan any, media.DefaultChannelBufferSize),
 		ctx:                ctx,
 		cancel:             cancel,
 		wg:                 wg,
@@ -351,10 +351,10 @@ func (s *session) handlePublish(values []any) {
 		}
 	}
 
-	s.streamName = streamName
+	s.streamKey = streamName
 	fullStreamPath := s.GetFullStreamPath()
 	if fullStreamPath == "" {
-		slog.Error("publish: invalid stream path", "appName", s.appName, "streamName", streamName)
+		slog.Error("publish: invalid stream path", "appName", s.appName, "streamKey", streamName)
 		return
 	}
 
@@ -417,10 +417,10 @@ func (s *session) handlePlay(values []any) {
 		return
 	}
 
-	s.streamName = streamName
+	s.streamKey = streamName
 	fullStreamPath := s.GetFullStreamPath()
 	if fullStreamPath == "" {
-		slog.Error("play: invalid stream path", "appName", s.appName, "streamName", streamName)
+		slog.Error("play: invalid stream path", "appName", s.appName, "streamKey", streamName)
 		return
 	}
 
@@ -683,15 +683,15 @@ func (s *session) handleOnTextData(values []any) {
 
 // appname/streamkey 조합의 전체 스트림 경로를 반환
 func (s *session) GetFullStreamPath() string {
-	if s.appName == "" || s.streamName == "" {
+	if s.appName == "" || s.streamKey == "" {
 		return ""
 	}
-	return s.appName + "/" + s.streamName
+	return s.appName + "/" + s.streamKey
 }
 
 // 세션 정보를 반환
 func (s *session) GetStreamInfo() (streamID uint32, streamName string, isPublishing bool, isPlaying bool) {
-	return s.streamID, s.streamName, s.isPublishing, false // isPlaying은 항상 false (MediaServer에서 관리)
+	return s.streamID, s.streamKey, s.isPublishing, false // isPlaying은 항상 false (MediaServer에서 관리)
 }
 
 // 구현을 위한 헬퍼 메서드들
@@ -728,14 +728,14 @@ func (s *session) sendAudioFrame(frame media.Frame) error {
 
 // sendMetadataToClient 메타데이터를 RTMP onMetaData 메시지로 전송
 func (s *session) sendMetadataToClient(metadata map[string]string) error {
-	// string을 interface{} map으로 변환 (AMF 인코딩을 위해)
-	interfaceMetadata := make(map[string]interface{})
+	// string을 any map으로 변환 (AMF 인코딩을 위해)
+	interfaceMetadata := make(map[string]any)
 	for k, v := range metadata {
 		interfaceMetadata[k] = v
 	}
 
 	// AMF0 onMetaData 시퀀스로 인코딩
-	values := []interface{}{"onMetaData", interfaceMetadata}
+	values := []any{"onMetaData", interfaceMetadata}
 
 	// AMF0 시퀀스를 바이트로 인코딩
 	encodedData, err := amf.EncodeAMF0Sequence(values...)
@@ -934,7 +934,7 @@ func (s *session) handleDeleteStream(values []any) {
 
 	// 스트림 상태 초기화
 	s.streamID = 0
-	s.streamName = ""
+	s.streamKey = ""
 	s.stream = nil
 }
 
@@ -949,7 +949,7 @@ func (s *session) handleCloseStream(values []any) {
 
 	// 스트림 상태 초기화
 	s.streamID = 0
-	s.streamName = ""
+	s.streamKey = ""
 	s.stream = nil
 }
 
@@ -1047,8 +1047,8 @@ func (s *session) stopPublishing() {
 
 	// MediaServer에 발행 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamName):
-		slog.Info("PublishStopped event sent", "sessionId", s.ID(), "streamName", s.streamName)
+	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
+		slog.Info("PublishStopped event sent", "sessionId", s.ID(), "streamKey", s.streamKey)
 	default:
 		slog.Warn("MediaServer channel full, dropping PublishStopped event", "sessionId", s.ID())
 	}
@@ -1060,8 +1060,8 @@ func (s *session) stopPlaying() {
 
 	// MediaServer에 재생 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamName):
-		slog.Info("PlayStopped event sent", "sessionId", s.ID(), "streamName", s.streamName)
+	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
+		slog.Info("PlayStopped event sent", "sessionId", s.ID(), "streamKey", s.streamKey)
 	default:
 		slog.Warn("MediaServer channel full, dropping PlayStopped event", "sessionId", s.ID())
 	}

@@ -158,7 +158,7 @@ type SegmentStore interface {
 	Clear(streamID string) error
 	
 	// GetStats 저장소 통계 정보
-	GetStats(streamID string) (map[string]interface{}, error)
+	GetStats(streamID string) (map[string]any, error)
 }
 
 // MemorySegmentStore 메모리 기반 세그먼트 저장소
@@ -250,10 +250,10 @@ func (store *MemorySegmentStore) Clear(streamID string) error {
 }
 
 // GetStats implements SegmentStore interface
-func (store *MemorySegmentStore) GetStats(streamID string) (map[string]interface{}, error) {
+func (store *MemorySegmentStore) GetStats(streamID string) (map[string]any, error) {
 	segments, exists := store.segments[streamID]
 	if !exists {
-		return map[string]interface{}{
+		return map[string]any{
 			"segment_count": 0,
 			"total_size":    0,
 		}, nil
@@ -264,7 +264,7 @@ func (store *MemorySegmentStore) GetStats(streamID string) (map[string]interface
 		totalSize += segment.GetSize()
 	}
 	
-	return map[string]interface{}{
+	return map[string]any{
 		"segment_count": len(segments),
 		"total_size":    totalSize,
 	}, nil

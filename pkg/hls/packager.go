@@ -239,11 +239,11 @@ func (p *Packager) startNextSegment() error {
 }
 
 // GetStats 패키저 통계 반환
-func (p *Packager) GetStats() map[string]interface{} {
+func (p *Packager) GetStats() map[string]any {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 	
-	return map[string]interface{}{
+	return map[string]any{
 		"stream_id":       p.streamID,
 		"is_active":       p.isActive,
 		"total_frames":    p.totalFrames,
