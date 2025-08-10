@@ -61,9 +61,9 @@ func (p *Packager) ID() uintptr {
 	return uintptr(unsafe.Pointer(p))
 }
 
-// MediaType implements MediaSink interface
-func (p *Packager) MediaType() media.MediaNodeType {
-	return media.MediaNodeTypeHLS
+// NodeType implements MediaSink interface
+func (p *Packager) NodeType() media.NodeType {
+	return media.NodeTypeHLS
 }
 
 // Address implements MediaSink interface
@@ -71,25 +71,8 @@ func (p *Packager) Address() string {
 	return fmt.Sprintf("hls://%s", p.streamID)
 }
 
-// Start implements MediaSink interface
-func (p *Packager) Start() error {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-	
-	p.isActive = true
-	p.segmentStart = time.Now()
-	
-	// 첫 번째 세그먼트 시작
-	if err := p.currentBuilder.StartSegment(p.segmentIndex, p.streamID); err != nil {
-		return fmt.Errorf("failed to start first segment: %w", err)
-	}
-	
-	slog.Info("HLS packager started", "streamID", p.streamID)
-	return nil
-}
-
-// Stop implements MediaSink interface
-func (p *Packager) Stop() error {
+// Close implements MediaSink interface
+func (p *Packager) Close() error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	

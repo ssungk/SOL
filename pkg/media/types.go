@@ -1,40 +1,40 @@
 package media
 
-// MediaNodeType represents different media node types (protocols and processors)
-type MediaNodeType uint8
+// NodeType represents different media node types (protocols and processors)
+type NodeType uint8
 
 const (
-	MediaNodeTypeRTMP MediaNodeType = iota + 1
-	MediaNodeTypeRTSP
-	MediaNodeTypeSRT
-	MediaNodeTypeWebRTC
-	MediaNodeTypeHLS
-	MediaNodeTypeDASH
-	MediaNodeTypeFile
-	MediaNodeTypeTranscoder
-	MediaNodeTypeAnalyzer
+	NodeTypeRTMP NodeType = iota + 1
+	NodeTypeRTSP
+	NodeTypeSRT
+	NodeTypeWebRTC
+	NodeTypeHLS
+	NodeTypeDASH
+	NodeTypeFile
+	NodeTypeTranscoder
+	NodeTypeAnalyzer
 )
 
-// String returns string representation of MediaNodeType for debugging
-func (mnt MediaNodeType) String() string {
-	switch mnt {
-	case MediaNodeTypeRTMP:
+// String returns string representation of NodeType for debugging
+func (nt NodeType) String() string {
+	switch nt {
+	case NodeTypeRTMP:
 		return "rtmp"
-	case MediaNodeTypeRTSP:
+	case NodeTypeRTSP:
 		return "rtsp"
-	case MediaNodeTypeSRT:
+	case NodeTypeSRT:
 		return "srt"
-	case MediaNodeTypeWebRTC:
+	case NodeTypeWebRTC:
 		return "webrtc"
-	case MediaNodeTypeHLS:
+	case NodeTypeHLS:
 		return "hls"
-	case MediaNodeTypeDASH:
+	case NodeTypeDASH:
 		return "dash"
-	case MediaNodeTypeFile:
+	case NodeTypeFile:
 		return "file"
-	case MediaNodeTypeTranscoder:
+	case NodeTypeTranscoder:
 		return "transcoder"
-	case MediaNodeTypeAnalyzer:
+	case NodeTypeAnalyzer:
 		return "analyzer"
 	default:
 		return "unknown"

@@ -159,7 +159,7 @@ func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 	// 노드 타입에 따라 처리
 	if source, ok := node.(media.MediaSource); ok {
 		// Source 등록 - 스트림에 연결은 프로토콜별로 처리
-		slog.Info("Registered source", "streamId", streamId, "nodeId", nodeId, "nodeType", node.MediaType())
+		slog.Info("Registered source", "streamId", streamId, "nodeId", nodeId, "nodeType", node.NodeType())
 		_ = source // 사용 표시
 	}
 	
@@ -175,7 +175,7 @@ func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 			slog.Error("Failed to send cached data to sink", "streamId", streamId, "nodeId", nodeId, "err", err)
 		}
 		
-		slog.Info("Registered sink", "streamId", streamId, "nodeId", nodeId, "nodeType", node.MediaType())
+		slog.Info("Registered sink", "streamId", streamId, "nodeId", nodeId, "nodeType", node.NodeType())
 	}
 }
 
@@ -219,7 +219,7 @@ func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	// 노드 제거
 	delete(s.nodes, nodeId)
 	
-	slog.Info("Removed node", "nodeId", nodeId, "streamIds", targetStreamIds, "nodeType", node.MediaType())
+	slog.Info("Removed node", "nodeId", nodeId, "streamIds", targetStreamIds, "nodeType", node.NodeType())
 	
 	// 스트림 정리 로직 개선
 	for _, streamId := range targetStreamIds {
@@ -386,7 +386,7 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	var streamId string
 	
 	// RTSP 노드의 경우 스트림 생성 및 연결
-	if event.NodeType == media.MediaNodeTypeRTSP {
+	if event.NodeType == media.NodeTypeRTSP {
 		if rtspSession, ok := node.(*rtsp.Session); ok {
 			streamId = rtspSession.GetStreamPath()
 			stream = s.GetOrCreateStream(streamId)
@@ -462,7 +462,7 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 	}
 	
 	// RTSP 세션인 경우 스트림 참조 설정
-	if event.NodeType == media.MediaNodeTypeRTSP {
+	if event.NodeType == media.NodeTypeRTSP {
 		if rtspSession, ok := sink.(*rtsp.Session); ok {
 			rtspSession.SetStream(stream)
 			slog.Info("Stream reference set for RTSP session", "streamId", event.StreamId, "sessionId", rtspSession.GetStreamPath())

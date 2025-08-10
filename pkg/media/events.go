@@ -8,7 +8,7 @@ type NodeEvent interface {
 // 공통 노드 이벤트 필드
 type BaseNodeEvent struct {
 	ID       uintptr
-	NodeType MediaNodeType
+	NodeType NodeType
 }
 
 func (e BaseNodeEvent) NodeId() uintptr {
@@ -53,7 +53,7 @@ type NodeTerminated struct {
 // 이벤트 생성자 함수들
 
 // NewNodeCreated 노드 생성 이벤트 생성자
-func NewNodeCreated(id uintptr, nodeType MediaNodeType, node MediaNode) NodeCreated {
+func NewNodeCreated(id uintptr, nodeType NodeType, node MediaNode) NodeCreated {
 	return NodeCreated{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		Node:          node,
@@ -61,7 +61,7 @@ func NewNodeCreated(id uintptr, nodeType MediaNodeType, node MediaNode) NodeCrea
 }
 
 // NewPublishStarted 발행 시작 이벤트 생성자
-func NewPublishStarted(id uintptr, nodeType MediaNodeType, stream *Stream) PublishStarted {
+func NewPublishStarted(id uintptr, nodeType NodeType, stream *Stream) PublishStarted {
 	return PublishStarted{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		Stream:        stream,
@@ -69,7 +69,7 @@ func NewPublishStarted(id uintptr, nodeType MediaNodeType, stream *Stream) Publi
 }
 
 // NewPublishStopped 발행 중지 이벤트 생성자
-func NewPublishStopped(id uintptr, nodeType MediaNodeType, streamId string) PublishStopped {
+func NewPublishStopped(id uintptr, nodeType NodeType, streamId string) PublishStopped {
 	return PublishStopped{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
@@ -77,7 +77,7 @@ func NewPublishStopped(id uintptr, nodeType MediaNodeType, streamId string) Publ
 }
 
 // NewPlayStarted 재생 시작 이벤트 생성자
-func NewPlayStarted(id uintptr, nodeType MediaNodeType, streamId string) PlayStarted {
+func NewPlayStarted(id uintptr, nodeType NodeType, streamId string) PlayStarted {
 	return PlayStarted{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
@@ -85,7 +85,7 @@ func NewPlayStarted(id uintptr, nodeType MediaNodeType, streamId string) PlaySta
 }
 
 // NewPlayStopped 재생 중지 이벤트 생성자
-func NewPlayStopped(id uintptr, nodeType MediaNodeType, streamId string) PlayStopped {
+func NewPlayStopped(id uintptr, nodeType NodeType, streamId string) PlayStopped {
 	return PlayStopped{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
@@ -93,7 +93,7 @@ func NewPlayStopped(id uintptr, nodeType MediaNodeType, streamId string) PlaySto
 }
 
 // NewNodeTerminated 노드 종료 이벤트 생성자
-func NewNodeTerminated(id uintptr, nodeType MediaNodeType) NodeTerminated {
+func NewNodeTerminated(id uintptr, nodeType NodeType) NodeTerminated {
 	return NodeTerminated{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 	}

@@ -16,7 +16,6 @@ import (
 
 // Session represents an RTSP client session
 type Session struct {
-	sessionId       string
 	conn            net.Conn
 	reader          *MessageReader
 	writer          *MessageWriter
@@ -114,38 +113,12 @@ func NewSession(conn net.Conn, externalChannel chan<- any, rtpTransport *rtp.RTP
 		cancel:          cancel,
 	}
 
-	// 포인터 주소값을 sessionId로 사용
-	session.sessionId = fmt.Sprintf("%p", session)
-
 	return session
 }
 
-// Start starts the session handling - MediaNode 인터페이스 구현
-func (s *Session) Start() error {
-	slog.Info("RTSP session started", "sessionId", s.sessionId, "remoteAddr", s.conn.RemoteAddr())
-
-	// Send node created event to MediaServer
-	if s.externalChannel != nil {
-		select {
-		case s.externalChannel <- media.NodeCreated{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.MediaType(),
-			},
-			Node: s, // MediaNode 인터페이스 구현체
-		}:
-		default:
-		}
-	}
-
-	go s.handleRequests()
-	go s.handleTimeout()
-	return nil
-}
-
-// Stop stops the session - MediaNode 인터페이스 구현
-func (s *Session) Stop() error {
-	slog.Info("RTSP session stopping", "sessionId", s.sessionId)
+// Close closes the session - MediaNode 인터페이스 구현
+func (s *Session) Close() error {
+	slog.Info("RTSP session closing", "sessionId", s.ID())
 
 	// Cancel context
 	s.cancel()
@@ -161,7 +134,7 @@ func (s *Session) Stop() error {
 		case s.externalChannel <- media.NodeTerminated{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
-				NodeType: s.MediaType(),
+				NodeType: s.NodeType(),
 			},
 		}:
 		default:
@@ -173,7 +146,7 @@ func (s *Session) Stop() error {
 
 // handleRequests handles incoming RTSP requests and interleaved data
 func (s *Session) handleRequests() {
-	defer s.Stop()
+	defer s.Close()
 
 	for {
 		select {
@@ -189,7 +162,7 @@ func (s *Session) handleRequests() {
 		firstByte := make([]byte, 1)
 		n, err := s.conn.Read(firstByte)
 		if err != nil {
-			slog.Error("Failed to read from connection", "sessionId", s.sessionId, "err", err)
+			slog.Error("Failed to read from connection", "sessionId", s.ID(), "err", err)
 			return
 		}
 		if n == 0 {
@@ -199,7 +172,7 @@ func (s *Session) handleRequests() {
 		// Check if it's interleaved data (starts with '$')
 		if firstByte[0] == '$' {
 			if err := s.handleInterleavedData(); err != nil {
-				slog.Error("Failed to handle interleaved data", "sessionId", s.sessionId, "err", err)
+				slog.Error("Failed to handle interleaved data", "sessionId", s.ID(), "err", err)
 				return
 			}
 			continue
@@ -215,7 +188,7 @@ func (s *Session) handleRequests() {
 
 		request, err := s.reader.ReadRequest()
 		if err != nil {
-			slog.Error("Failed to read RTSP request", "sessionId", s.sessionId, "err", err)
+			slog.Error("Failed to read RTSP request", "sessionId", s.ID(), "err", err)
 			return
 		}
 
@@ -223,10 +196,10 @@ func (s *Session) handleRequests() {
 		s.reader = NewMessageReader(s.conn)
 
 		s.lastActivity = time.Now()
-		slog.Debug("RTSP request received", "sessionId", s.sessionId, "method", request.Method, "uri", request.URI, "cseq", request.CSeq)
+		slog.Debug("RTSP request received", "sessionId", s.ID(), "method", request.Method, "uri", request.URI, "cseq", request.CSeq)
 
 		if err := s.handleRequest(request); err != nil {
-			slog.Error("Failed to handle RTSP request", "sessionId", s.sessionId, "method", request.Method, "err", err)
+			slog.Error("Failed to handle RTSP request", "sessionId", s.ID(), "method", request.Method, "err", err)
 			s.sendErrorResponse(request.CSeq, StatusInternalServerError)
 		}
 	}
@@ -254,12 +227,12 @@ func (s *Session) handleInterleavedData() error {
 	// Process the data based on channel
 	if int(channel) == s.rtpChannel {
 		// RTP data from client - convert to media frame and send to stream
-		slog.Debug("Received interleaved RTP data from client", "sessionId", s.sessionId, "dataSize", len(data))
+		slog.Debug("Received interleaved RTP data from client", "sessionId", s.ID(), "dataSize", len(data))
 		
 		// RTP 패킷을 media.Frame으로 변환
 		frame, err := s.convertRTPToFrame(data, s.streamPath)
 		if err != nil {
-			slog.Error("Failed to convert RTP to frame", "sessionId", s.sessionId, "err", err)
+			slog.Error("Failed to convert RTP to frame", "sessionId", s.ID(), "err", err)
 			return nil
 		}
 
@@ -267,19 +240,19 @@ func (s *Session) handleInterleavedData() error {
 		if s.state == StateRecording && s.stream != nil {
 			s.stream.SendFrame(frame)
 			slog.Debug("RTP frame sent to stream", 
-				"sessionId", s.sessionId, 
+				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
 				"subType", frame.SubType,
 				"mediaType", frame.Type)
 		} else {
 			slog.Debug("RTP frame converted but not sent (no stream or not recording)", 
-				"sessionId", s.sessionId, 
+				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
 				"state", s.state.String(),
 				"hasStream", s.stream != nil)
 		}
 	} else {
-		slog.Warn("Received interleaved data on unknown channel", "sessionId", s.sessionId, "channel", channel)
+		slog.Warn("Received interleaved data on unknown channel", "sessionId", s.ID(), "channel", channel)
 	}
 
 	return nil
@@ -296,8 +269,8 @@ func (s *Session) handleTimeout() {
 			return
 		case <-ticker.C:
 			if time.Since(s.lastActivity) > s.timeout {
-				slog.Info("RTSP session timed out", "sessionId", s.sessionId)
-				s.Stop()
+				slog.Info("RTSP session timed out", "sessionId", s.ID())
+				s.Close()
 				return
 			}
 		}
@@ -315,7 +288,7 @@ func (s *Session) handleRequest(req *Request) error {
 
 		// Extract session ID (remove timeout parameter)
 		sessionParts := strings.Split(sessionHeader, ";")
-		if len(sessionParts) > 0 && sessionParts[0] != s.sessionId {
+		if len(sessionParts) > 0 && sessionParts[0] != fmt.Sprintf("%d", s.ID()) {
 			return s.sendErrorResponse(req.CSeq, StatusSessionNotFound)
 		}
 	}
@@ -361,7 +334,7 @@ func (s *Session) handleDescribe(req *Request) error {
 	s.streamPath = req.URI
 
 	// DESCRIBE 요청은 단순히 SDP 정보를 반환하므로 별도 이벤트 불필요
-	slog.Info("DESCRIBE request processed", "sessionId", s.sessionId, "streamPath", s.streamPath)
+	slog.Info("DESCRIBE request processed", "sessionId", s.ID(), "streamPath", s.streamPath)
 
 	// Generate more detailed SDP
 	sdp := s.generateDetailedSDP()
@@ -389,7 +362,7 @@ func (s *Session) handleSetup(req *Request) error {
 	// Create RTP session based on transport mode
 	if s.transportMode == TransportTCP && s.interleavedMode {
 		// TCP interleaved mode - no separate UDP session needed
-		slog.Info("TCP interleaved mode setup", "sessionId", s.sessionId, "rtpChannel", s.rtpChannel)
+		slog.Info("TCP interleaved mode setup", "sessionId", s.ID(), "rtpChannel", s.rtpChannel)
 	} else if len(s.clientPorts) >= 2 && s.rtpTransport != nil {
 		// UDP mode - create RTP session
 		ssrc := uint32(0x12345678) // TODO: generate unique SSRC
@@ -407,7 +380,7 @@ func (s *Session) handleSetup(req *Request) error {
 
 		s.rtpSession = rtpSession
 		s.serverPorts = []int{8000, 8001} // TODO: get from RTP transport
-		slog.Info("UDP RTP session created", "sessionId", s.sessionId, "ssrc", ssrc)
+		slog.Info("UDP RTP session created", "sessionId", s.ID(), "ssrc", ssrc)
 	} else {
 		s.serverPorts = []int{8000, 8001}
 	}
@@ -415,7 +388,7 @@ func (s *Session) handleSetup(req *Request) error {
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
 	response.SetHeader(HeaderTransport, s.buildTransportResponse())
-	response.SetHeader(HeaderSession, fmt.Sprintf("%s;timeout=%d", s.sessionId, int(s.timeout.Seconds())))
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d;timeout=%d", s.ID(), int(s.timeout.Seconds())))
 
 	s.state = StateReady
 
@@ -431,7 +404,7 @@ func (s *Session) handlePlay(req *Request) error {
 	// Parse Range header if present
 	rangeHeader := req.GetHeader(HeaderRange)
 	if rangeHeader != "" {
-		slog.Debug("Range header received", "sessionId", s.sessionId, "range", rangeHeader)
+		slog.Debug("Range header received", "sessionId", s.ID(), "range", rangeHeader)
 		// TODO: implement range support
 	}
 
@@ -441,7 +414,7 @@ func (s *Session) handlePlay(req *Request) error {
 		case s.externalChannel <- media.PlayStarted{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
-				NodeType: s.MediaType(),
+				NodeType: s.NodeType(),
 			},
 			StreamId: s.streamPath,
 		}:
@@ -451,7 +424,7 @@ func (s *Session) handlePlay(req *Request) error {
 
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 	response.SetHeader(HeaderRTPInfo, fmt.Sprintf("url=%s;seq=0;rtptime=0", req.URI))
 
 	s.state = StatePlaying
@@ -471,7 +444,7 @@ func (s *Session) handlePause(req *Request) error {
 		case s.externalChannel <- media.PlayStopped{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
-				NodeType: s.MediaType(),
+				NodeType: s.NodeType(),
 			},
 			StreamId: s.streamPath,
 		}:
@@ -481,7 +454,7 @@ func (s *Session) handlePause(req *Request) error {
 
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	s.state = StateReady
 
@@ -496,7 +469,7 @@ func (s *Session) handleTeardown(req *Request) error {
 		case s.externalChannel <- media.PlayStopped{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
-				NodeType: s.MediaType(),
+				NodeType: s.NodeType(),
 			},
 			StreamId: s.streamPath,
 		}:
@@ -506,14 +479,14 @@ func (s *Session) handleTeardown(req *Request) error {
 
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	s.state = StateInit
 
 	// Schedule session termination after response
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		s.Stop()
+		s.Close()
 	}()
 
 	return s.writer.WriteResponse(response)
@@ -532,19 +505,19 @@ func (s *Session) handleRecord(req *Request) error {
 		case s.externalChannel <- media.PublishStarted{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
-				NodeType: s.MediaType(),
+				NodeType: s.NodeType(),
 			},
 			Stream: nil, // MediaServer에서 스트림 생성 및 연결
 		}:
-			slog.Info("Publish started event sent for RTSP record", "sessionId", s.sessionId, "streamPath", s.streamPath)
+			slog.Info("Publish started event sent for RTSP record", "sessionId", s.ID(), "streamPath", s.streamPath)
 		default:
-			slog.Warn("Failed to send publish started event", "sessionId", s.sessionId)
+			slog.Warn("Failed to send publish started event", "sessionId", s.ID())
 		}
 	}
 
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	s.state = StateRecording
 
@@ -559,7 +532,7 @@ func (s *Session) handleAnnounce(req *Request) error {
 	if s.externalChannel != nil {
 		// SDP 정보를 메타데이터로 변환하여 저장
 		sdp := string(req.Body)
-		slog.Info("ANNOUNCE received with SDP", "sessionId", s.sessionId, "streamPath", s.streamPath, "sdpLength", len(sdp))
+		slog.Info("ANNOUNCE received with SDP", "sessionId", s.ID(), "streamPath", s.streamPath, "sdpLength", len(sdp))
 		// TODO: SDP를 메타데이터로 변환하여 stream에 전송
 	}
 
@@ -573,7 +546,7 @@ func (s *Session) handleAnnounce(req *Request) error {
 func (s *Session) handleGetParameter(req *Request) error {
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	// Basic keep-alive response
 	return s.writer.WriteResponse(response)
@@ -583,7 +556,7 @@ func (s *Session) handleGetParameter(req *Request) error {
 func (s *Session) handleSetParameter(req *Request) error {
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, s.sessionId)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	return s.writer.WriteResponse(response)
 }
@@ -632,7 +605,7 @@ func (s *Session) parseTransport(transport string) {
 			s.rtpChannel = 0
 		}
 
-		slog.Info("TCP interleaved transport", "sessionId", s.sessionId, "rtpChannel", s.rtpChannel)
+		slog.Info("TCP interleaved transport", "sessionId", s.ID(), "rtpChannel", s.rtpChannel)
 		return
 	}
 
@@ -652,7 +625,7 @@ func (s *Session) parseTransport(transport string) {
 				break
 			}
 		}
-		slog.Info("UDP transport", "sessionId", s.sessionId, "clientPorts", s.clientPorts)
+		slog.Info("UDP transport", "sessionId", s.ID(), "clientPorts", s.clientPorts)
 	}
 }
 
@@ -718,7 +691,7 @@ func (s *Session) SendInterleavedRTPPacket(data []byte) error {
 		return fmt.Errorf("failed to send interleaved RTP packet: %v", err)
 	}
 
-	slog.Debug("Interleaved RTP packet sent", "sessionId", s.sessionId, "channel", s.rtpChannel, "dataSize", len(data))
+	slog.Debug("Interleaved RTP packet sent", "sessionId", s.ID(), "channel", s.rtpChannel, "dataSize", len(data))
 	return nil
 }
 
@@ -744,9 +717,9 @@ func (s *Session) ID() uintptr {
 	return uintptr(unsafe.Pointer(s))
 }
 
-// MediaType MediaNode 인터페이스 구현 - 미디어 노드 타입 반환
-func (s *Session) MediaType() media.MediaNodeType {
-	return media.MediaNodeTypeRTSP
+// NodeType MediaNode 인터페이스 구현 - 노드 타입 반환
+func (s *Session) NodeType() media.NodeType {
+	return media.NodeTypeRTSP
 }
 
 // Address MediaNode 인터페이스 구현 - 주소 반환
@@ -787,7 +760,7 @@ func (s *Session) SendMediaFrame(streamId string, frame media.Frame) error {
 // SendMetadata MediaSink 인터페이스 구현 - 메타데이터를 세션으로 전송
 func (s *Session) SendMetadata(streamId string, metadata map[string]string) error {
 	// RTSP에서는 SDP를 통해 메타데이터가 전송되므로 현재는 처리하지 않음
-	slog.Debug("Metadata received for RTSP session", "sessionId", s.sessionId, "streamId", streamId)
+	slog.Debug("Metadata received for RTSP session", "sessionId", s.ID(), "streamId", streamId)
 	return nil
 }
 
@@ -836,7 +809,7 @@ func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 // SetStream MediaServer에서 스트림을 설정하기 위한 메서드
 func (s *Session) SetStream(stream *media.Stream) {
 	s.stream = stream
-	slog.Info("Stream set for RTSP session", "sessionId", s.sessionId, "streamId", stream.GetId())
+	slog.Info("Stream set for RTSP session", "sessionId", s.ID(), "streamId", stream.GetId())
 }
 
 // GetStreamPath 현재 세션의 스트림 경로 반환
@@ -893,7 +866,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 	}
 
 	slog.Debug("Converted RTP to Frame", 
-		"sessionId", s.sessionId, 
+		"sessionId", s.ID(), 
 		"streamId", streamId,
 		"payloadType", payloadType,
 		"mediaType", mediaType,

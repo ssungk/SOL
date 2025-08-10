@@ -21,12 +21,10 @@ type Server struct {
 	mutex        sync.RWMutex                 // 동시성 제어
 	ctx          context.Context              // 컨텍스트
 	cancel       context.CancelFunc           // 취소 함수
-	wg           sync.WaitGroup               // WaitGroup
-	running      bool                         // 서버 실행 상태
 
 	// MediaServer와의 통합을 위한 채널
 	mediaServerChannel chan<- any     // MediaServer로 이벤트 전송
-	serverWg          *sync.WaitGroup         // MediaServer WaitGroup
+	wg                *sync.WaitGroup         // 외부 WaitGroup 참조
 }
 
 // NewServer HLS 서버 생성
@@ -41,7 +39,7 @@ func NewServer(config HLSConfig, mediaServerChannel chan<- any, serverWg *sync.W
 		ctx:                ctx,
 		cancel:             cancel,
 		mediaServerChannel: mediaServerChannel,
-		serverWg:           serverWg,
+		wg:                 serverWg,
 	}
 	
 	// HTTP 서버 설정
@@ -59,7 +57,6 @@ func NewServer(config HLSConfig, mediaServerChannel chan<- any, serverWg *sync.W
 // Start 서버 시작 (ProtocolServer 인터페이스 구현)
 func (s *Server) Start() error {
 	slog.Info("Starting HLS server", "port", s.config.Port)
-	s.running = true
 	
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -76,10 +73,7 @@ func (s *Server) Start() error {
 // Stop 서버 중지 (ProtocolServer 인터페이스 구현)
 func (s *Server) Stop() {
 	slog.Info("Stopping HLS server")
-	s.running = false
-	
 	s.cancel()
-	s.wg.Wait()
 	
 	// HTTP 서버 종료
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -274,7 +268,7 @@ func (s *Server) cleanupStream(streamID string) {
 	}
 	
 	if packager, exists := s.packagers[streamID]; exists {
-		packager.Stop()
+		packager.Close()
 		delete(s.packagers, streamID)
 	}
 	
@@ -292,8 +286,6 @@ func (s *Server) GetPackager(streamID string) (*Packager, bool) {
 
 // cleanupLoop 정리 작업 루프
 func (s *Server) cleanupLoop() {
-	s.wg.Add(1)
-	defer s.wg.Done()
 	
 	ticker := time.NewTicker(30 * time.Second) // 30초마다 정리
 	defer ticker.Stop()

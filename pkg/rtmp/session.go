@@ -53,7 +53,7 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 	}
 
 	// NodeCreated 이벤트를 MediaServer로 전송
-	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), media.MediaNodeTypeRTMP, s)
+	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), media.NodeTypeRTMP, s)
 
 	// 세션의 두 주요 고루틴 시작
 	go s.eventLoop()
@@ -138,7 +138,7 @@ func (s *session) cleanup() {
 	s.stopPlaying() // 플레이어 상태 체크 없이 항상 호출 (MediaServer에서 중복 처리 방지)
 
 	// MediaServer에 최종 종료 알림 (blocking - 중요한 이벤트)
-	s.mediaServerChannel <- media.NewNodeTerminated(s.ID(), media.MediaNodeTypeRTMP)
+	s.mediaServerChannel <- media.NewNodeTerminated(s.ID(), media.NodeTypeRTMP)
 
 	slog.Info("session cleanup completed", "sessionId", s.ID())
 }
@@ -231,20 +231,15 @@ func (s *session) ID() uintptr {
 	return uintptr(unsafe.Pointer(s))
 }
 
-func (s *session) MediaType() media.MediaNodeType {
-	return media.MediaNodeTypeRTMP
+func (s *session) NodeType() media.NodeType {
+	return media.NodeTypeRTMP
 }
 
 func (s *session) Address() string {
 	return s.conn.RemoteAddr().String()
 }
 
-func (s *session) Start() error {
-	slog.Info("RTMP session started", "sessionId", s.ID())
-	return nil
-}
-
-func (s *session) Stop() error {
+func (s *session) Close() error {
 	s.cancel()
 	slog.Info("RTMP session stopping", "sessionId", s.ID())
 	return nil
@@ -355,7 +350,7 @@ func (s *session) handlePublish(values []any) {
 
 	// MediaServer에 publish 시작 알림
 	select {
-	case s.mediaServerChannel <- media.NewPublishStarted(s.ID(), media.MediaNodeTypeRTMP, stream):
+	case s.mediaServerChannel <- media.NewPublishStarted(s.ID(), media.NodeTypeRTMP, stream):
 	case <-s.ctx.Done():
 	}
 
@@ -414,7 +409,7 @@ func (s *session) handlePlay(values []any) {
 
 	// MediaServer에 play 시작 알림
 	select {
-	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.MediaNodeTypeRTMP, fullStreamPath):
+	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
 	case <-s.ctx.Done():
 	}
 
@@ -1033,7 +1028,7 @@ func (s *session) stopPublishing() {
 
 	// MediaServer에 발행 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
+	case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.NodeTypeRTMP, s.streamKey):
 	case <-s.ctx.Done():
 	}
 }
@@ -1044,7 +1039,7 @@ func (s *session) stopPlaying() {
 
 	// MediaServer에 재생 중단 이벤트 전송
 	select {
-	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.MediaNodeTypeRTMP, s.streamKey):
+	case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.NodeTypeRTMP, s.streamKey):
 	case <-s.ctx.Done():
 	}
 }

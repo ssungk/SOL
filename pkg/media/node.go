@@ -5,12 +5,11 @@ package media
 type MediaNode interface {
 	// Basic identification
 	ID() uintptr
-	MediaType() MediaNodeType
+	NodeType() NodeType
 	Address() string
 
 	// Node lifecycle
-	Start() error
-	Stop() error
+	Close() error
 }
 
 // 미디어 데이터 소스 (publisher/encoder/file)
