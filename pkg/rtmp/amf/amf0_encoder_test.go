@@ -132,11 +132,116 @@ func TestEncodeValue_Int64(t *testing.T) {
 	}
 }
 
+func TestEncodeValue_Uint(t *testing.T) {
+	buf := new(bytes.Buffer)
+	err := encodeValue(buf, uint(42))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	if data[0] != numberMarker {
+		t.Errorf("expected numberMarker, got 0x%02x", data[0])
+	}
+}
+
+func TestEncodeValue_Uint32(t *testing.T) {
+	buf := new(bytes.Buffer)
+	err := encodeValue(buf, uint32(42))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	if data[0] != numberMarker {
+		t.Errorf("expected numberMarker, got 0x%02x", data[0])
+	}
+}
+
+func TestEncodeValue_Uint64(t *testing.T) {
+	buf := new(bytes.Buffer)
+	err := encodeValue(buf, uint64(42))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()
+	if data[0] != numberMarker {
+		t.Errorf("expected numberMarker, got 0x%02x", data[0])
+	}
+}
+
 func TestEncodeValue_NumberWriteError(t *testing.T) {
 	ew := &errorWriter{errorAfter: 0}
 	err := encodeValue(ew, 3.14)
 	if err == nil {
 		t.Fatal("expected write error")
+	}
+}
+
+func TestEncodeValue_IntWriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, int(42))
+	if err == nil {
+		t.Fatal("expected int write error")
+	}
+}
+
+func TestEncodeValue_Float32WriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, float32(3.14))
+	if err == nil {
+		t.Fatal("expected float32 write error")
+	}
+}
+
+func TestEncodeValue_Int32WriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, int32(42))
+	if err == nil {
+		t.Fatal("expected int32 write error")
+	}
+}
+
+func TestEncodeValue_UintWriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, uint(42))
+	if err == nil {
+		t.Fatal("expected uint write error")
+	}
+}
+
+func TestEncodeValue_Uint32WriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, uint32(42))
+	if err == nil {
+		t.Fatal("expected uint32 write error")
+	}
+}
+
+func TestEncodeValue_Uint64WriteError(t *testing.T) {
+	ew := &errorWriter{errorAfter: 0}
+	err := encodeValue(ew, uint64(42))
+	if err == nil {
+		t.Fatal("expected uint64 write error")
+	}
+}
+
+func TestEncodeValue_Int64BinaryWriteError(t *testing.T) {
+	// int64 케이스에서 binary.Write 에러 테스트
+	ew := &errorWriter{errorAfter: 1} // numberMarker 쓰기는 성공, binary.Write에서 실패
+	err := encodeValue(ew, int64(42))
+	if err == nil {
+		t.Fatal("expected int64 binary write error")
+	}
+}
+
+func TestEncodeValue_Int64WriteError(t *testing.T) {
+	// int64 케이스에서 writeByte(numberMarker) 에러 테스트
+	ew := &errorWriter{errorAfter: 0} // numberMarker 쓰기에서 실패
+	err := encodeValue(ew, int64(42))
+	if err == nil {
+		t.Fatal("expected int64 write error")
 	}
 }
 

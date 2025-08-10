@@ -169,6 +169,16 @@ func (ctx *AMF3Context) encodeValue(w io.Writer, value any) error {
 		return ctx.encodeInteger(w, int32(v))
 	case int32:
 		return ctx.encodeInteger(w, v)
+	case int64:
+		return ctx.encodeDouble(w, float64(v))
+	case uint:
+		return ctx.encodeDouble(w, float64(v))
+	case uint32:
+		return ctx.encodeDouble(w, float64(v))
+	case uint64:
+		return ctx.encodeDouble(w, float64(v))
+	case float32:
+		return ctx.encodeDouble(w, float64(v))
 	case float64:
 		return ctx.encodeDouble(w, v)
 	case string:

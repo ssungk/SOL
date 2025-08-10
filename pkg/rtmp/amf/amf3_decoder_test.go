@@ -167,19 +167,31 @@ func TestDecodeAMF3_Integer(t *testing.T) {
 func TestDecodeInteger_SignExtension(t *testing.T) {
 	ctx := NewAMF3Context()
 	
-	// 29비트 음수 테스트 (부호 확장 필요)
-	data := []byte{0x80, 0x80, 0x80, 0x01} // 29비트에서 음수
-	val, err := ctx.decodeU29(bytes.NewReader(data))
+	// 29번째 비트(0x10000000)가 1인 값 생성
+	// 실제로는 더 큰 값을 사용해서 29번째 비트를 1로 만들기
+	data := []byte{0xFF, 0xFF, 0xFF, 0xFF} // 최대값으로 29번째 비트 확실히 1
+	result, err := ctx.decodeInteger(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
 	
-	// 부호 확장 테스트
-	if val&0x10000000 != 0 {
-		result := int32(val | 0xE0000000)
-		if result >= 0 {
-			t.Errorf("expected negative result for sign extension")
-		}
+	// 부호 확장이 적용되어 음수가 되어야 함
+	if result >= 0 {
+		t.Errorf("expected negative result for sign extension, got %d", result)
+	}
+}
+
+func TestDecodeInteger_NoSignExtension(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 양수 테스트 (부호 확장 불필요)
+	result, err := ctx.decodeInteger(bytes.NewReader([]byte{0x7F}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	if result != 127 {
+		t.Errorf("expected 127, got %d", result)
 	}
 }
 
@@ -396,6 +408,56 @@ func TestDecodeArray_ReferenceWrongType(t *testing.T) {
 	}
 }
 
+func TestDecodeArray_AssociativeKeyReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 배열 길이는 있지만 associative 키 읽기 실패
+	data := []byte{0x03} // 길이 1
+	_, err := ctx.decodeArray(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected associative key read error")
+	}
+}
+
+func TestDecodeArray_AssociativeValueReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 배열 길이와 associative 키는 있지만 값 읽기 실패  
+	data := []byte{0x03, 0x07, 'k', 'e', 'y'} // 길이 1, "key"
+	_, err := ctx.decodeArray(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected associative value read error")
+	}
+}
+
+func TestDecodeArray_ElementReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 배열 길이와 associative 부분은 있지만 원소 읽기 실패
+	data := []byte{0x03, 0x01} // 길이 1, 빈 키 (associative 끝)
+	_, err := ctx.decodeArray(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected element read error")
+	}
+}
+
+func TestDecodeArray_AssociativeValueIgnored(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// associative 키와 값이 있지만 값은 무시됨
+	buf := new(bytes.Buffer)
+	// 길이 0 배열, "key"(associative), "value", 빈 키(associative 끝)
+	buf.WriteByte(0x01) // 길이 0
+	ctx.encodeStringValue(buf, "key")
+	ctx.encodeString(buf, "value") // 이 값은 무시됨
+	ctx.encodeStringValue(buf, "") // associative 끝
+	
+	_, err := ctx.decodeArray(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDecodeAMF3_Object(t *testing.T) {
 	ctx := NewAMF3Context()
 	
@@ -484,6 +546,59 @@ func TestDecodeObject_TraitReference(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "trait references not supported") {
 		t.Errorf("expected error to contain 'trait references not supported', got %v", err.Error())
+	}
+}
+
+func TestDecodeObject_ClassNameReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 인라인 플래그 후 클래스명 읽기 실패
+	data := []byte{0x03} // 인라인 + 트레이트 플래그, 하지만 데이터 없음
+	_, err := ctx.decodeObject(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected class name read error")
+	}
+}
+
+func TestDecodeObject_KeyReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 인라인 + 트레이트 플래그, 빈 클래스명, 하지만 키 읽기 실패
+	data := []byte{0x03, 0x01} // 인라인 + 트레이트 플래그, 빈 문자열 (클래스명)
+	_, err := ctx.decodeObject(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected key read error")
+	}
+}
+
+func TestDecodeObject_ValueReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 인라인 + 트레이트 플래그, 빈 클래스명, 키는 있지만 값 읽기 실패
+	data := []byte{0x03, 0x01, 0x07, 'k', 'e', 'y'} // 인라인 + 트레이트 플래그, 빈 클래스명, "key"
+	_, err := ctx.decodeObject(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected value read error")
+	}
+}
+
+func TestDecodeObject_WithClassName(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 인라인 + 트레이트 플래그, 클래스명이 있는 경우
+	buf := new(bytes.Buffer)
+	buf.WriteByte(0x03) // 인라인 + 트레이트 플래그
+	ctx.encodeStringValue(buf, "TestClass") // 비어있지 않은 클래스명
+	ctx.encodeStringValue(buf, "") // 빈 키 (속성 끝)
+	
+	obj, err := ctx.decodeObject(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	// 객체가 성공적으로 디코딩되어야 함
+	if obj == nil {
+		t.Fatal("expected object, got nil")
 	}
 }
 
@@ -624,6 +739,33 @@ func TestDecodeU29_ReadError(t *testing.T) {
 	_, err := ctx.decodeU29(bytes.NewReader([]byte{}))
 	if err == nil {
 		t.Fatal("expected read error")
+	}
+}
+
+func TestDecodeU29_FourByteForm(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 4바이트 형식 테스트
+	data := []byte{0x80, 0x80, 0x80, 0x01}
+	val, err := ctx.decodeU29(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	expected := uint32(0x01)
+	if val != expected {
+		t.Errorf("expected 0x%X, got 0x%X", expected, val)
+	}
+}
+
+func TestDecodeU29_FourByteReadError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 4바이트 형식인데 마지막 바이트 읽기 실패
+	data := []byte{0x80, 0x80, 0x80} // 3바이트만
+	_, err := ctx.decodeU29(bytes.NewReader(data))
+	if err == nil {
+		t.Fatal("expected read error for fourth byte")
 	}
 }
 

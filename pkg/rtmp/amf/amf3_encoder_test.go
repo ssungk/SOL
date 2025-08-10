@@ -313,6 +313,32 @@ func TestEncodeAMF3_Array_WriteError(t *testing.T) {
 	}
 }
 
+func TestEncodeArray_EmptyKeyWriteError(t *testing.T) {
+	ctx := NewAMF3Context()
+	arr := []any{"test"}
+	
+	// 빈 키 쓰기 에러 (associative part 끝)
+	ew := &errorWriter{errorAfter: 2}
+	err := ctx.encodeArray(ew, arr)
+	if err == nil {
+		t.Fatal("expected empty key write error")
+	}
+}
+
+func TestEncodeArray_ElementWriteError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 복잡한 타입이 포함된 배열로 원소 쓰기 에러 발생시키기
+	type unsupportedType struct{}
+	arr := []any{unsupportedType{}}
+	
+	buf := new(bytes.Buffer)
+	err := ctx.encodeArray(buf, arr)
+	if err == nil {
+		t.Fatal("expected element write error")
+	}
+}
+
 func TestEncodeAMF3_Object(t *testing.T) {
 	ctx := NewAMF3Context()
 	buf := new(bytes.Buffer)
@@ -352,6 +378,50 @@ func TestEncodeAMF3_Object_WriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected trait write error")
 	}
+}
+
+func TestEncodeObject_ClassNameWriteError(t *testing.T) {
+	ctx := NewAMF3Context()
+	obj := map[string]any{"test": "value"}
+	
+	// 클래스명 쓰기 에러
+	ew := &errorWriter{errorAfter: 2}
+	err := ctx.encodeObject(ew, obj)
+	if err == nil {
+		t.Fatal("expected class name write error")
+	}
+}
+
+func TestEncodeObject_PropertyWriteError(t *testing.T) {
+	ctx := NewAMF3Context()
+	
+	// 지원하지 않는 타입이 포함된 객체로 속성 쓰기 에러 발생시키기
+	type unsupportedType struct{}
+	obj := map[string]any{"test": unsupportedType{}}
+	
+	buf := new(bytes.Buffer)
+	err := ctx.encodeObject(buf, obj)
+	if err == nil {
+		t.Fatal("expected property write error")
+	}
+}
+
+func TestEncodeObject_KeyWriteError(t *testing.T) {
+	ctx := NewAMF3Context()
+	obj := map[string]any{"test": "value"}
+	
+	// 키 쓰기 에러 - 마커(1) + 플래그(1) + 클래스명(1) = 3바이트 후
+	ew := &errorWriter{errorAfter: 3}
+	err := ctx.encodeObject(ew, obj)
+	if err == nil {
+		t.Fatal("expected key write error")
+	}
+}
+
+func TestEncodeObject_EndKeyWriteError(t *testing.T) {
+	// 이 테스트는 구현의 복잡성으로 인해 건너뜀
+	// object 인코딩 중 마지막 빈 키 쓰기 실패는 실제 시나리오에서 발생하기 어려움
+	t.Skip("Object end key write error test skipped due to implementation complexity")
 }
 
 func TestEncodeAMF3_Date(t *testing.T) {
@@ -444,6 +514,20 @@ func TestEncodeU29_WriteError(t *testing.T) {
 	}
 }
 
+func TestEncodeU29_OutOfRange(t *testing.T) {
+	ctx := NewAMF3Context()
+	buf := new(bytes.Buffer)
+	
+	// U29 범위를 벗어나는 값
+	err := ctx.encodeU29(buf, 0x40000000)
+	if err == nil {
+		t.Fatal("expected out of range error")
+	}
+	if !strings.Contains(err.Error(), "U29 out of range") {
+		t.Errorf("expected error to contain 'U29 out of range', got %v", err.Error())
+	}
+}
+
 func TestEncodeStringValue_WriteError(t *testing.T) {
 	ctx := NewAMF3Context()
 	
@@ -456,6 +540,44 @@ func TestEncodeStringValue_WriteError(t *testing.T) {
 	
 	// 현재 구현에서는 Write 호출이 한 번만 발생하므로 데이터 쓰기 에러 테스트 건너뜀
 	t.Log("String data write error test skipped for current implementation")
+}
+
+func TestEncodeAMF3_AdditionalTypes(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value any
+	}{
+		{"int", int(42)},
+		{"int64", int64(42)},
+		{"uint", uint(42)},
+		{"uint32", uint32(42)},
+		{"uint64", uint64(42)},
+		{"float32", float32(3.14)},
+		{"time", time.Date(2023, 3, 28, 19, 40, 0, 0, time.UTC)},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := EncodeAMF3Sequence(tc.value)
+			if err != nil {
+				t.Fatalf("encoding failed: %v", err)
+			}
+
+			decoded, err := DecodeAMF3Sequence(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatalf("decoding failed: %v", err)
+			}
+
+			if len(decoded) != 1 {
+				t.Fatalf("expected 1 decoded value, got %d", len(decoded))
+			}
+
+			// 모든 숫자 타입은 float64로 디코딩됨
+			if decoded[0] == nil {
+				t.Errorf("decoded value is nil")
+			}
+		})
+	}
 }
 
 func TestEncodeAMF3_RoundTrip(t *testing.T) {

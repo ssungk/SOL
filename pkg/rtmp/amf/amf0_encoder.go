@@ -55,6 +55,21 @@ func encodeValue(w io.Writer, value any) error {
 			return err
 		}
 		return binary.Write(w, binary.BigEndian, float64(v))
+	case uint:
+		if err := writeByte(w, numberMarker); err != nil {
+			return err
+		}
+		return binary.Write(w, binary.BigEndian, float64(v))
+	case uint32:
+		if err := writeByte(w, numberMarker); err != nil {
+			return err
+		}
+		return binary.Write(w, binary.BigEndian, float64(v))
+	case uint64:
+		if err := writeByte(w, numberMarker); err != nil {
+			return err
+		}
+		return binary.Write(w, binary.BigEndian, float64(v))
 	case string:
 		return encodeString(w, v)
 	case map[string]any:
