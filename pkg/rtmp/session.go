@@ -89,7 +89,7 @@ func (s *session) readLoop() {
 	// readLoop가 종료되면 (연결 끊김 등) 전체 세션을 종료하도록 cancel 호출
 	defer s.cancel()
 
-	if err := handshake(s.conn); err != nil {
+	if err := ServerHandshake(s.conn); err != nil {
 		slog.Error("Handshake failed", "err", err)
 		return
 	}

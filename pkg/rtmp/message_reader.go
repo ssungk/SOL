@@ -1,7 +1,6 @@
 package rtmp
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -22,51 +21,6 @@ func newMessageReader() *messageReader {
 	return ms
 }
 
-func handshake(rw io.ReadWriter) error {
-	// C0
-	c0 := make([]byte, 1)
-	if _, err := io.ReadFull(rw, c0); err != nil {
-		return fmt.Errorf("failed to read C0: %w", err)
-	}
-
-	if c0[0] != RTMPVersion {
-		return fmt.Errorf("unsupported RTMP version: %d", c0[0])
-	}
-
-	// S0
-	if _, err := rw.Write(c0); err != nil {
-		return fmt.Errorf("failed to write S0: %w", err)
-	}
-
-	// S1
-	s1 := make([]byte, HandshakeSize)
-	copy(s1[0:4], []byte{0, 0, 0, 0}) // time field
-	copy(s1[4:8], []byte{0, 0, 0, 0}) // zero field
-	_, _ = rand.Read(s1[8:])          // random field
-
-	if _, err := rw.Write(s1); err != nil {
-		return fmt.Errorf("failed to write S1: %w", err)
-	}
-
-	// C1
-	c1 := make([]byte, HandshakeSize)
-	if _, err := io.ReadFull(rw, c1); err != nil {
-		return fmt.Errorf("failed to read C1: %w", err)
-	}
-
-	// S2
-	if _, err := rw.Write(c1); err != nil {
-		return fmt.Errorf("failed to write S2: %w", err)
-	}
-
-	// C2
-	c2 := make([]byte, HandshakeSize)
-	if _, err := io.ReadFull(rw, c2); err != nil {
-		return fmt.Errorf("failed to read C2: %w", err)
-	}
-
-	return nil
-}
 
 func (ms *messageReader) setChunkSize(size uint32) {
 	ms.readerContext.setChunkSize(size)
