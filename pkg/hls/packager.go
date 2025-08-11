@@ -334,3 +334,16 @@ func (b *TSSegmentBuilder) generateTSData() []byte {
 	
 	return tsData
 }
+
+// --- MediaSink 인터페이스 구현 ---
+
+// SubscribedStreams MediaSink 인터페이스 구현 - 구독 중인 스트림 ID 목록 반환
+func (p *Packager) SubscribedStreams() []string {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	
+	if p.isActive {
+		return []string{p.streamID}
+	}
+	return nil
+}

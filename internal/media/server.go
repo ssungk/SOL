@@ -390,7 +390,7 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 		if rtspSession, ok := node.(*rtsp.Session); ok {
 			streamId = rtspSession.GetStreamPath()
 			stream = s.GetOrCreateStream(streamId)
-			rtspSession.SetStream(stream)
+			rtspSession.Stream = stream
 			slog.Info("Stream created and connected for RTSP publish", "streamId", streamId, "sessionId", rtspSession.GetStreamPath())
 		}
 	} else if event.Stream != nil {
@@ -464,7 +464,7 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 	// RTSP 세션인 경우 스트림 참조 설정
 	if event.NodeType == media.NodeTypeRTSP {
 		if rtspSession, ok := sink.(*rtsp.Session); ok {
-			rtspSession.SetStream(stream)
+			rtspSession.Stream = stream
 			slog.Info("Stream reference set for RTSP session", "streamId", event.StreamId, "sessionId", rtspSession.GetStreamPath())
 		}
 	}

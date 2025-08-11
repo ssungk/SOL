@@ -37,7 +37,7 @@ type Session struct {
 	cancel          context.CancelFunc
 	
 	// Stream integration (MediaServer에서 설정)
-	stream *media.Stream // 연결된 스트림
+	Stream *media.Stream // 연결된 스트림
 }
 
 // SessionState represents the current state of an RTSP session
@@ -237,8 +237,8 @@ func (s *Session) handleInterleavedData() error {
 		}
 
 		// Stream에 프레임 전송 (RECORD 모드에서)
-		if s.state == StateRecording && s.stream != nil {
-			s.stream.SendFrame(frame)
+		if s.state == StateRecording && s.Stream != nil {
+			s.Stream.SendFrame(frame)
 			slog.Debug("RTP frame sent to stream", 
 				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
@@ -249,7 +249,7 @@ func (s *Session) handleInterleavedData() error {
 				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
 				"state", s.state.String(),
-				"hasStream", s.stream != nil)
+				"hasStream", s.Stream != nil)
 		}
 	} else {
 		slog.Warn("Received interleaved data on unknown channel", "sessionId", s.ID(), "channel", channel)
@@ -806,12 +806,6 @@ func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 	return rtpPacket, nil
 }
 
-// SetStream MediaServer에서 스트림을 설정하기 위한 메서드
-func (s *Session) SetStream(stream *media.Stream) {
-	s.stream = stream
-	slog.Info("Stream set for RTSP session", "sessionId", s.ID(), "streamId", stream.GetId())
-}
-
 // GetStreamPath 현재 세션의 스트림 경로 반환
 func (s *Session) GetStreamPath() string {
 	return s.streamPath
@@ -874,4 +868,24 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 		"payloadSize", len(payload))
 
 	return frame, nil
+}
+
+// --- MediaSource 인터페이스 구현 (RECORD 모드) ---
+
+// PublishingStreams MediaSource 인터페이스 구현 - 발행 중인 스트림 목록 반환 (RECORD 모드)
+func (s *Session) PublishingStreams() []*media.Stream {
+	if s.state == StateRecording && s.Stream != nil {
+		return []*media.Stream{s.Stream}
+	}
+	return nil
+}
+
+// --- MediaSink 인터페이스 구현 (PLAY 모드) ---
+
+// SubscribedStreams MediaSink 인터페이스 구현 - 구독 중인 스트림 ID 목록 반환 (PLAY 모드)
+func (s *Session) SubscribedStreams() []string {
+	if s.state == StatePlaying && s.Stream != nil {
+		return []string{s.Stream.GetId()}
+	}
+	return nil
 }
