@@ -98,8 +98,6 @@ func (s *MediaServer) eventLoop() {
 func (s *MediaServer) channelHandler(data any) {
 	switch v := data.(type) {
 	// 공통 이벤트 처리
-	case media.PublishStarted:
-		s.handlePublishStarted(v)
 	case media.PublishStopped:
 		s.handlePublishStopped(v)
 	case media.PlayStarted:
@@ -110,6 +108,8 @@ func (s *MediaServer) channelHandler(data any) {
 		s.handleNodeCreated(v)
 	case media.NodeTerminated:
 		s.handleNodeTerminated(v)
+	case media.PublishStarted:
+		s.handleStreamPublishAttempt(v)
 	default:
 		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
 	}
@@ -396,7 +396,7 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	} else if event.Stream != nil {
 		// RTMP 등 다른 프로토콜의 경우 이미 생성된 스트림 사용
 		stream = event.Stream
-		streamId = stream.GetId()
+		streamId = stream.ID()
 	} else {
 		slog.Error("No stream provided and unable to create for node type", "nodeType", event.NodeType.String())
 		return
@@ -507,4 +507,41 @@ func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
 	
 	// 노드 제거 및 정리
 	s.RemoveNode(event.NodeId())
+}
+
+// handleStreamPublishAttempt 실제 publish 시도 처리 (collision detection + 원자적 점유)
+func (s *MediaServer) handleStreamPublishAttempt(event media.PublishStarted) {
+	streamId := event.Stream.ID()
+	slog.Debug("Stream publish attempt requested", "streamId", streamId, "nodeId", event.NodeId())
+	
+	response := media.Response{
+		Success: false,
+		Error:   "",
+	}
+	
+	// 최종 확인: 아직 사용 중이지 않은지 체크
+	if _, exists := s.streams[streamId]; exists {
+		response.Error = "Stream ID was taken by another client"
+		slog.Info("Stream publish failed - ID taken", "streamId", streamId, "nodeId", event.NodeId())
+	} else {
+		// 원자적으로 스트림 점유
+		s.streams[streamId] = event.Stream
+		s.streamSources[streamId] = event.NodeId()
+		response.Success = true
+		slog.Info("Stream publish successful", "streamId", streamId, "nodeId", event.NodeId())
+	}
+	
+	// 응답 전송 (채널이 닫혀있어도 panic 방지)
+	select {
+	case event.ResponseChan <- response:
+		slog.Debug("Stream publish attempt response sent", "streamId", streamId, "success", response.Success)
+	default:
+		slog.Warn("Failed to send stream publish attempt response - channel closed", "streamId", streamId)
+		// 만약 성공했는데 응답을 못보냈다면 정리해야 함
+		if response.Success {
+			delete(s.streams, streamId)
+			delete(s.streamSources, streamId)
+			slog.Warn("Rolled back successful stream publish due to closed response channel", "streamId", streamId)
+		}
+	}
 }

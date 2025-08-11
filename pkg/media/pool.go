@@ -18,13 +18,6 @@ type PoolManager struct {
 	mu      sync.RWMutex              // 동시성 제어
 }
 
-// NewPoolManager creates a new pool manager
-func NewPoolManager() *PoolManager {
-	return &PoolManager{
-		buffers: make(map[uintptr]*PooledBuffer),
-	}
-}
-
 // AllocateBuffer allocates a buffer from the given pool and tracks it
 func (pm *PoolManager) AllocateBuffer(pool *sync.Pool, size uint32) *PooledBuffer {
 	// Pool에서 버퍼 할당
@@ -75,6 +68,15 @@ type ManagedFrame struct {
 	Frame
 	poolManager *PoolManager     // Pool manager 참조
 	pooledData  []*PooledBuffer  // 추적되는 pooled buffers
+}
+
+// 생성자 함수들
+
+// NewPoolManager creates a new pool manager
+func NewPoolManager() *PoolManager {
+	return &PoolManager{
+		buffers: make(map[uintptr]*PooledBuffer),
+	}
 }
 
 // NewManagedFrame creates a new managed frame

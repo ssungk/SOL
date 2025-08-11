@@ -34,6 +34,7 @@ const (
 	StatusNotAcceptable        = 406
 	StatusProxyAuthRequired    = 407
 	StatusRequestTimeout       = 408
+	StatusConflict            = 409
 	StatusGone                 = 410
 	StatusLengthRequired       = 411
 	StatusPreconditionFailed   = 412

@@ -298,18 +298,18 @@ func (s *Session) handleRequest(req *Request) error {
 		return s.handleOptions(req)
 	case MethodDescribe:
 		return s.handleDescribe(req)
-	case MethodSetup:
-		return s.handleSetup(req)
-	case MethodPlay:
-		return s.handlePlay(req)
-	case MethodTeardown:
-		return s.handleTeardown(req)
-	case MethodPause:
-		return s.handlePause(req)
-	case MethodRecord:
-		return s.handleRecord(req)
 	case MethodAnnounce:
 		return s.handleAnnounce(req)
+	case MethodSetup:
+		return s.handleSetup(req)
+	case MethodRecord:
+		return s.handleRecord(req)
+	case MethodPlay:
+		return s.handlePlay(req)
+	case MethodPause:
+		return s.handlePause(req)
+	case MethodTeardown:
+		return s.handleTeardown(req)
 	case MethodGetParam:
 		return s.handleGetParameter(req)
 	case MethodSetParam:
@@ -344,6 +344,24 @@ func (s *Session) handleDescribe(req *Request) error {
 	response.SetHeader(HeaderContentType, "application/sdp")
 	response.SetHeader(HeaderContentLength, strconv.Itoa(len(sdp)))
 	response.Body = []byte(sdp)
+
+	return s.writer.WriteResponse(response)
+}
+
+// handleAnnounce handles ANNOUNCE request
+func (s *Session) handleAnnounce(req *Request) error {
+	s.streamPath = req.URI
+
+	// ANNOUNCE는 SDP 정보 설정이므로 메타데이터로 처리
+	if s.externalChannel != nil {
+		// SDP 정보를 메타데이터로 변환하여 저장
+		sdp := string(req.Body)
+		slog.Info("ANNOUNCE received with SDP", "sessionId", s.ID(), "streamPath", s.streamPath, "sdpLength", len(sdp))
+		// TODO: SDP를 메타데이터로 변환하여 stream에 전송
+	}
+
+	response := NewResponse(StatusOK)
+	response.SetCSeq(req.CSeq)
 
 	return s.writer.WriteResponse(response)
 }
@@ -498,46 +516,23 @@ func (s *Session) handleRecord(req *Request) error {
 		return s.sendErrorResponse(req.CSeq, StatusMethodNotValidInThisState)
 	}
 
-	// Send publish started event to MediaServer (RECORD = publish)
-	if s.externalChannel != nil {
-		// RTSP RECORD는 PublishStarted 이벤트로 처리 (스트림 생성은 MediaServer에서)
-		select {
-		case s.externalChannel <- media.PublishStarted{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.NodeType(),
-			},
-			Stream: nil, // MediaServer에서 스트림 생성 및 연결
-		}:
-			slog.Info("Publish started event sent for RTSP record", "sessionId", s.ID(), "streamPath", s.streamPath)
-		default:
-			slog.Warn("Failed to send publish started event", "sessionId", s.ID())
-		}
+	// StreamPath collision detection
+	streamPath := s.streamPath
+
+	// 1단계: 스트림 준비 (MediaServer에서 처리하므로 nil로 전달)
+	stream := (*media.Stream)(nil) // RTSP는 MediaServer에서 스트림 생성
+
+	// 2단계: MediaServer에 실제 record 시도 (collision detection + 원자적 점유)
+	if !s.attemptStreamPublish(streamPath, stream) {
+		return s.sendRecordErrorResponse(req.CSeq, "Stream path was taken by another client")
 	}
 
+	// 3단계: 성공 응답 전송 (MediaServer 등록은 attemptStreamPublish에서 완료됨)
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
 	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
 
 	s.state = StateRecording
-
-	return s.writer.WriteResponse(response)
-}
-
-// handleAnnounce handles ANNOUNCE request
-func (s *Session) handleAnnounce(req *Request) error {
-	s.streamPath = req.URI
-
-	// ANNOUNCE는 SDP 정보 설정이므로 메타데이터로 처리
-	if s.externalChannel != nil {
-		// SDP 정보를 메타데이터로 변환하여 저장
-		sdp := string(req.Body)
-		slog.Info("ANNOUNCE received with SDP", "sessionId", s.ID(), "streamPath", s.streamPath, "sdpLength", len(sdp))
-		// TODO: SDP를 메타데이터로 변환하여 stream에 전송
-	}
-
-	response := NewResponse(StatusOK)
-	response.SetCSeq(req.CSeq)
 
 	return s.writer.WriteResponse(response)
 }
@@ -885,7 +880,62 @@ func (s *Session) PublishingStreams() []*media.Stream {
 // SubscribedStreams MediaSink 인터페이스 구현 - 구독 중인 스트림 ID 목록 반환 (PLAY 모드)
 func (s *Session) SubscribedStreams() []string {
 	if s.state == StatePlaying && s.Stream != nil {
-		return []string{s.Stream.GetId()}
+		return []string{s.Stream.ID()}
 	}
 	return nil
+}
+
+// StreamPath collision detection 헬퍼 메서드
+
+// attemptStreamPublish 실제 publish 시도 (collision detection + 원자적 점유)
+func (s *Session) attemptStreamPublish(streamPath string, stream *media.Stream) bool {
+	if s.externalChannel == nil {
+		return true
+	}
+
+	responseChan := make(chan media.Response, 1)
+	
+	request := media.NewPublishStarted(
+		s.ID(),
+		s.NodeType(),
+		stream,
+		responseChan,
+	)
+
+	// 요청 전송
+	select {
+	case s.externalChannel <- request:
+		// 응답 대기 (타임아웃 5초)
+		select {
+		case response := <-responseChan:
+			if response.Error != "" {
+				slog.Debug("Stream publish attempt failed", "sessionId", s.ID(), "streamPath", streamPath, "error", response.Error)
+			}
+			return response.Success
+		case <-time.After(5 * time.Second):
+			slog.Warn("Stream publish attempt timeout", "sessionId", s.ID(), "streamPath", streamPath)
+			return false
+		case <-s.ctx.Done():
+			return false
+		}
+	case <-s.ctx.Done():
+		return false
+	default:
+		slog.Warn("Failed to send stream publish attempt request - channel full", "sessionId", s.ID(), "streamPath", streamPath)
+		return false
+	}
+}
+
+// sendRecordErrorResponse RTSP RECORD 실패 응답 전송
+func (s *Session) sendRecordErrorResponse(cseq int, message string) error {
+	slog.Info("RECORD failed", "sessionId", s.ID(), "reason", message)
+	
+	response := NewResponse(StatusConflict) // 409 Conflict
+	response.SetCSeq(cseq)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
+	// RTSP에서는 body에 에러 메시지 추가
+	response.Body = []byte(message)
+	response.SetHeader("Content-Length", fmt.Sprintf("%d", len(response.Body)))
+	
+	return s.writer.WriteResponse(response)
 }

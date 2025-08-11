@@ -26,8 +26,8 @@ func NewStream(id string) *Stream {
 	return s
 }
 
-// GetId returns the stream id
-func (s *Stream) GetId() string {
+// ID returns the stream id
+func (s *Stream) ID() string {
 	return s.id
 }
 
@@ -147,20 +147,6 @@ func (s *Stream) GetCacheStats() map[string]any {
 	return stats
 }
 
-// CleanupSession removes the session from stream sinks by sessionId
-// DEPRECATED: This method is not used anywhere and has flawed logic.
-// Use RemoveSink(sink MediaSink) with direct sink reference instead.
-func (s *Stream) CleanupSession(sessionId string) {
-	// NOTE: This method has incorrect logic - it removes the first sink regardless of sessionId match
-	// It should iterate through sinks and find the one with matching sessionId, but sinks don't have sessionId field
-	// 
-	// Correct approach would be:
-	// 1. Add sessionId to MediaSink interface, or
-	// 2. Use nodeId-based removal directly via RemoveSink()
-	// 
-	// For now, marking as deprecated to prevent misuse
-	slog.Warn("CleanupSession called - this method is deprecated and has flawed logic", "sessionId", sessionId, "streamId", s.id)
-}
 
 // broadcastFrame sends media frame to all sinks
 func (s *Stream) broadcastFrame(frame Frame) {
