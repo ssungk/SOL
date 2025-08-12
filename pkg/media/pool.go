@@ -18,6 +18,38 @@ type PoolManager struct {
 	mu      sync.RWMutex              // 동시성 제어
 }
 
+// ManagedFrame represents a frame with pool-managed buffers
+type ManagedFrame struct {
+	Frame
+	poolManager *PoolManager     // Pool manager 참조
+	pooledData  []*PooledBuffer  // 추적되는 pooled buffers
+}
+
+// 생성자 함수들
+
+// NewPoolManager creates a new pool manager
+func NewPoolManager() *PoolManager {
+	return &PoolManager{
+		buffers: make(map[uintptr]*PooledBuffer),
+	}
+}
+
+// NewManagedFrame creates a new managed frame
+func NewManagedFrame(frameType Type, subType FrameSubType, timestamp uint32, poolManager *PoolManager) *ManagedFrame {
+	return &ManagedFrame{
+		Frame: Frame{
+			Type:      frameType,
+			SubType:   subType,
+			Timestamp: timestamp,
+			Data:      make([][]byte, 0),
+		},
+		poolManager: poolManager,
+		pooledData:  make([]*PooledBuffer, 0),
+	}
+}
+
+// PoolManager 메서드들
+
 // AllocateBuffer allocates a buffer from the given pool and tracks it
 func (pm *PoolManager) AllocateBuffer(pool *sync.Pool, size uint32) *PooledBuffer {
 	// Pool에서 버퍼 할당
@@ -63,35 +95,7 @@ func (pm *PoolManager) GetTrackedCount() int {
 	return len(pm.buffers)
 }
 
-// ManagedFrame represents a frame with pool-managed buffers
-type ManagedFrame struct {
-	Frame
-	poolManager *PoolManager     // Pool manager 참조
-	pooledData  []*PooledBuffer  // 추적되는 pooled buffers
-}
-
-// 생성자 함수들
-
-// NewPoolManager creates a new pool manager
-func NewPoolManager() *PoolManager {
-	return &PoolManager{
-		buffers: make(map[uintptr]*PooledBuffer),
-	}
-}
-
-// NewManagedFrame creates a new managed frame
-func NewManagedFrame(frameType Type, subType FrameSubType, timestamp uint32, poolManager *PoolManager) *ManagedFrame {
-	return &ManagedFrame{
-		Frame: Frame{
-			Type:      frameType,
-			SubType:   subType,
-			Timestamp: timestamp,
-			Data:      make([][]byte, 0),
-		},
-		poolManager: poolManager,
-		pooledData:  make([]*PooledBuffer, 0),
-	}
-}
+// ManagedFrame 메서드들
 
 // AddPooledChunk adds a pooled buffer chunk to the frame
 func (mf *ManagedFrame) AddPooledChunk(pb *PooledBuffer) {

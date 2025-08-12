@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sol/pkg/hls"
+	"sol/pkg/srt"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 type Config struct {
 	RTMP    RTMPConfig    `yaml:"rtmp"`
 	RTSP    RTSPConfig    `yaml:"rtsp"`
+	SRT     SRTConfig     `yaml:"srt"`
 	HLS     HLSConfig     `yaml:"hls"`
 	API     APIConfig     `yaml:"api"`
 	Logging LoggingConfig `yaml:"logging"`
@@ -29,6 +31,16 @@ type RTMPConfig struct {
 type RTSPConfig struct {
 	Port    int `yaml:"port"`
 	Timeout int `yaml:"timeout"`
+}
+
+type SRTConfig struct {
+	Port         int    `yaml:"port"`
+	Latency      int    `yaml:"latency"`
+	MaxBandwidth int64  `yaml:"max_bandwidth"`
+	Encryption   string `yaml:"encryption"`
+	Passphrase   string `yaml:"passphrase"`
+	StreamID     string `yaml:"stream_id"`
+	Timeout      int    `yaml:"timeout"`
 }
 
 type HLSConfig struct {
@@ -64,6 +76,15 @@ func GetConfigWithDefaults() *Config {
 		RTSP: RTSPConfig{
 			Port: 554,
 			Timeout: 60,
+		},
+		SRT: SRTConfig{
+			Port:         9999,
+			Latency:      120,
+			MaxBandwidth: 0,
+			Encryption:   "none",
+			Passphrase:   "",
+			StreamID:     "",
+			Timeout:      5,
 		},
 		HLS: HLSConfig{
 			Port:            8081,
@@ -102,6 +123,9 @@ func LoadConfig() (*Config, error) {
 		fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 		fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 		fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+		fmt.Printf("  SRT Port: %d\n", config.SRT.Port)
+		fmt.Printf("  SRT Latency: %d ms\n", config.SRT.Latency)
+		fmt.Printf("  SRT Encryption: %s\n", config.SRT.Encryption)
 		fmt.Printf("  HLS Port: %d\n", config.HLS.Port)
 		fmt.Printf("  HLS Segment Duration: %v\n", config.HLS.SegmentDuration)
 		fmt.Printf("  HLS Format: %s\n", config.HLS.Format)
@@ -132,6 +156,9 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 	fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 	fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+	fmt.Printf("  SRT Port: %d\n", config.SRT.Port)
+	fmt.Printf("  SRT Latency: %d ms\n", config.SRT.Latency)
+	fmt.Printf("  SRT Encryption: %s\n", config.SRT.Encryption)
 	fmt.Printf("  HLS Port: %d\n", config.HLS.Port)
 	fmt.Printf("  HLS Segment Duration: %v\n", config.HLS.SegmentDuration)
 	fmt.Printf("  HLS Format: %s\n", config.HLS.Format)
@@ -157,6 +184,39 @@ func (c *Config) validate() error {
 	// RTSP 타임아웃 검증
 	if c.RTSP.Timeout <= 0 {
 		return fmt.Errorf("invalid rtsp timeout: %d (must be positive)", c.RTSP.Timeout)
+	}
+	
+	// SRT 포트 검증
+	if c.SRT.Port <= 0 || c.SRT.Port > 65535 {
+		return fmt.Errorf("invalid srt port: %d (must be between 1-65535)", c.SRT.Port)
+	}
+	
+	// SRT 지연시간 검증
+	if c.SRT.Latency < 20 || c.SRT.Latency > 8000 {
+		return fmt.Errorf("invalid srt latency: %d ms (must be between 20-8000 ms)", c.SRT.Latency)
+	}
+	
+	// SRT 암호화 타입 검증
+	validEncryptions := []string{"none", "aes128", "aes192", "aes256"}
+	encValid := false
+	for _, enc := range validEncryptions {
+		if strings.ToLower(c.SRT.Encryption) == enc {
+			encValid = true
+			break
+		}
+	}
+	if !encValid {
+		return fmt.Errorf("invalid srt encryption: %s (must be one of: %v)", c.SRT.Encryption, validEncryptions)
+	}
+	
+	// SRT 암호화 사용 시 패스워드 검증
+	if c.SRT.Encryption != "none" && c.SRT.Passphrase == "" {
+		return fmt.Errorf("srt passphrase required when encryption is enabled")
+	}
+	
+	// SRT 타임아웃 검증
+	if c.SRT.Timeout <= 0 {
+		return fmt.Errorf("invalid srt timeout: %d (must be positive)", c.SRT.Timeout)
 	}
 	
 	// HLS 포트 검증
@@ -227,6 +287,31 @@ func (c *Config) ToHLSConfig() hls.HLSConfig {
 		LowLatency:      c.HLS.LowLatency,
 		StoragePath:     c.HLS.StoragePath,
 		MaxConcurrent:   c.HLS.MaxConcurrent,
+	}
+}
+
+// ToSRTConfig converts Config.SRT to srt.SRTConfig
+func (c *Config) ToSRTConfig() srt.SRTConfig {
+	var encryption int
+	switch strings.ToLower(c.SRT.Encryption) {
+	case "aes128":
+		encryption = srt.EncryptionAES128
+	case "aes192":
+		encryption = srt.EncryptionAES192
+	case "aes256":
+		encryption = srt.EncryptionAES256
+	default:
+		encryption = srt.EncryptionNone
+	}
+	
+	return srt.SRTConfig{
+		Port:         c.SRT.Port,
+		Latency:      c.SRT.Latency,
+		MaxBandwidth: c.SRT.MaxBandwidth,
+		Encryption:   encryption,
+		Passphrase:   c.SRT.Passphrase,
+		StreamID:     c.SRT.StreamID,
+		Timeout:      time.Duration(c.SRT.Timeout) * time.Second,
 	}
 }
 

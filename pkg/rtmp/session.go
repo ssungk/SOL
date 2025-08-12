@@ -23,10 +23,15 @@ type session struct {
 	conn   net.Conn
 
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
-	appName string // appName
+	appName string
 
-	// 발행용 (MediaSource) - 다중 스트림 지원
-	publishedStreams map[string]*media.Stream // streamKey -> Stream
+	// 발행용 (MediaSource) - RTMP streamId 기반
+	publishedStreams map[int]*media.Stream // streamId(int) -> Stream
+
+	// 상호 참조 테이블
+	streamIdToPath map[int]string // streamId -> streamPath
+	streamPathToId map[string]int // streamPath -> streamId
+	nextStreamId   int            // 다음 할당할 streamId (1부터 시작)
 
 	// 재생용 (MediaSink)
 	subscribedStreamIds []string // play 시 구독하는 스트림 ID들
@@ -53,8 +58,11 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		ctx:                 ctx,
 		cancel:              cancel,
 		wg:                  wg,
-		publishedStreams:    make(map[string]*media.Stream), // 발행용 스트림 맵 초기화
-		subscribedStreamIds: make([]string, 0),              // 재생용 스트림 ID 초기화
+		publishedStreams:    make(map[int]*media.Stream), // 발행용 스트림 맵 초기화
+		streamIdToPath:      make(map[int]string),        // streamId -> streamPath 매핑
+		streamPathToId:      make(map[string]int),        // streamPath -> streamId 매핑
+		nextStreamId:        1,                           // 1부터 시작
+		subscribedStreamIds: make([]string, 0),           // 재생용 스트림 ID 초기화
 	}
 
 	// NodeCreated 이벤트를 MediaServer로 전송
@@ -309,141 +317,6 @@ func (s *session) IsPlayer() bool {
 // 이벤트 루프 내에서 안전하게 상태를 변경하도록 수정됩니다.
 // (생략된 코드는 기존 로직을 이벤트 루프 패러다임에 맞게 조정한 것입니다)
 // createStream 명령어 처리
-// publish 명령어 처리 (소스 모드 활성화)
-func (s *session) handlePublish(values []any) {
-
-	if len(values) < 3 {
-		slog.Error("publish: not enough parameters", "length", len(values))
-		return
-	}
-
-	transactionID, ok := values[1].(float64)
-	if !ok {
-		slog.Error("publish: invalid transaction ID", "type", utils.TypeName(values[1]))
-		return
-	}
-
-	// 스트림 이름
-	streamName, ok := values[3].(string)
-	if !ok {
-		slog.Error("publish: invalid stream name", "type", utils.TypeName(values[3]))
-		return
-	}
-
-	// 발행 유형 (옵션널)
-	publishType := "live" // 기본값
-	if len(values) > 4 {
-		if pt, ok := values[4].(string); ok {
-			publishType = pt
-		}
-	}
-
-	fullStreamPath := s.appName + "/" + streamName
-	if s.appName == "" || streamName == "" {
-		slog.Error("publish: invalid stream path", "appName", s.appName, "streamKey", streamName)
-		return
-	}
-
-	slog.Info("publish request", "fullStreamPath", fullStreamPath, "publishType", publishType, "transactionID", transactionID)
-
-	// 1단계: 스트림 생성 및 준비
-	stream := media.NewStream(fullStreamPath)
-	s.addPublishedStream(streamName, stream)
-
-	// 2단계: MediaServer에 실제 publish 시도 (collision detection + 원자적 점유)
-	if !s.attemptStreamPublish(fullStreamPath, stream) {
-		// 실패 시 정리
-		s.removePublishedStream(streamName)
-		s.sendPublishErrorResponse(transactionID, "NetStream.Publish.BadName", "Stream key was taken by another client")
-		return
-	}
-
-	// 3단계: 성공 응답 전송
-	s.sendPublishSuccessResponse(transactionID, fullStreamPath)
-
-	slog.Info("publish started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
-}
-
-// play 명령어 처리 (싱크 모드 활성화)
-func (s *session) handlePlay(values []any) {
-
-	if len(values) < 3 {
-		slog.Error("play: not enough parameters", "length", len(values))
-		return
-	}
-
-	transactionID, ok := values[1].(float64)
-	if !ok {
-		slog.Error("play: invalid transaction ID", "type", utils.TypeName(values[1]))
-		return
-	}
-
-	// 스트림 이름
-	streamName, ok := values[3].(string)
-	if !ok {
-		slog.Error("play: invalid stream name", "type", utils.TypeName(values[3]))
-		return
-	}
-
-	fullStreamPath := s.appName + "/" + streamName
-	if s.appName == "" || streamName == "" {
-		slog.Error("play: invalid stream path", "appName", s.appName, "streamKey", streamName)
-		return
-	}
-
-	slog.Info("play request", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
-
-	// 구독 스트림 ID에 추가
-	s.addSubscribedStreamId(fullStreamPath)
-
-	// MediaServer에 play 시작 알림
-	select {
-	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
-	case <-s.ctx.Done():
-	}
-
-	// 1. NetStream.Play.Reset 전송
-	resetStatusObj := map[string]any{
-		"level":       "status",
-		"code":        "NetStream.Play.Reset",
-		"description": fmt.Sprintf("Resetting and playing stream %s", fullStreamPath),
-		"details":     fullStreamPath,
-	}
-
-	resetSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, resetStatusObj)
-	if err != nil {
-		slog.Error("play: failed to encode reset onStatus", "err", err)
-		return
-	}
-
-	err = s.writer.writeCommand(s.conn, resetSequence)
-	if err != nil {
-		slog.Error("play: failed to write reset onStatus", "err", err)
-		return
-	}
-
-	// 2. NetStream.Play.Start 전송
-	startStatusObj := map[string]any{
-		"level":       "status",
-		"code":        "NetStream.Play.Start",
-		"description": fmt.Sprintf("Started playing stream %s", fullStreamPath),
-		"details":     fullStreamPath,
-	}
-
-	startSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, startStatusObj)
-	if err != nil {
-		slog.Error("play: failed to encode start onStatus", "err", err)
-		return
-	}
-
-	err = s.writer.writeCommand(s.conn, startSequence)
-	if err != nil {
-		slog.Error("play: failed to write start onStatus", "err", err)
-		return
-	}
-
-	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
-}
 
 // 오디오 데이터 처리 (발행자 모드에서만)
 func (s *session) handleAudio(message *Message) {
@@ -943,11 +816,11 @@ func (s *session) handleCreateStream(values []any) {
 		return
 	}
 
-	// 기본 스트림 ID (1 고정)
-	defaultStreamID := 1
+	// 새로운 스트림 ID 생성 (실제 사용할 streamId)
+	newStreamID := s.generateStreamId()
 
 	// _result 응답 전송
-	sequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, float64(defaultStreamID))
+	sequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, float64(newStreamID))
 	if err != nil {
 		slog.Error("createStream: failed to encode response", "err", err)
 		return
@@ -959,7 +832,156 @@ func (s *session) handleCreateStream(values []any) {
 		return
 	}
 
-	slog.Info("createStream successful", "streamID", defaultStreamID, "transactionID", transactionID)
+	slog.Info("createStream successful", "streamID", newStreamID, "transactionID", transactionID)
+}
+
+// handleReleaseStream Flash Media Server 호환을 위한 releaseStream 명령어 처리
+func (s *session) handleReleaseStream(values []any) {
+	slog.Debug("releaseStream command received (ignored)", "sessionId", s.ID())
+	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
+}
+
+// handleFCPublish Flash Media Server 호환을 위한 FCPublish 명령어 처리  
+func (s *session) handleFCPublish(values []any) {
+	slog.Debug("FCPublish command received (ignored)", "sessionId", s.ID())
+	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
+}
+
+// handlePublish publish 명령어 처리 (소스 모드 활성화)
+func (s *session) handlePublish(values []any) {
+
+	if len(values) < 3 {
+		slog.Error("publish: not enough parameters", "length", len(values))
+		return
+	}
+
+	transactionID, ok := values[1].(float64)
+	if !ok {
+		slog.Error("publish: invalid transaction ID", "type", utils.TypeName(values[1]))
+		return
+	}
+
+	// 스트림 이름
+	streamName, ok := values[3].(string)
+	if !ok {
+		slog.Error("publish: invalid stream name", "type", utils.TypeName(values[3]))
+		return
+	}
+
+	// 발행 유형 (옵션널)
+	publishType := "live" // 기본값
+	if len(values) > 4 {
+		if pt, ok := values[4].(string); ok {
+			publishType = pt
+		}
+	}
+
+	fullStreamPath := s.appName + "/" + streamName
+	if s.appName == "" || streamName == "" {
+		slog.Error("publish: invalid stream path", "appName", s.appName, "streamKey", streamName)
+		return
+	}
+
+	slog.Info("publish request", "fullStreamPath", fullStreamPath, "publishType", publishType, "transactionID", transactionID)
+
+	// 1단계: streamId 생성 및 스트림 준비
+	streamId := s.generateStreamId()
+	stream := media.NewStream(fullStreamPath)
+	s.addPublishedStream(streamId, fullStreamPath, stream)
+
+	// 2단계: MediaServer에 실제 publish 시도 (collision detection + 원자적 점유)
+	if !s.attemptStreamPublish(fullStreamPath, stream) {
+		// 실패 시 정리
+		s.removePublishedStream(streamId)
+		s.sendPublishErrorResponse(transactionID, "NetStream.Publish.BadName", "Stream key was taken by another client")
+		return
+	}
+
+	// 3단계: 성공 응답 전송
+	s.sendPublishSuccessResponse(transactionID, fullStreamPath)
+
+	slog.Info("publish started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
+}
+
+// handlePlay play 명령어 처리 (싱크 모드 활성화)
+func (s *session) handlePlay(values []any) {
+
+	if len(values) < 3 {
+		slog.Error("play: not enough parameters", "length", len(values))
+		return
+	}
+
+	transactionID, ok := values[1].(float64)
+	if !ok {
+		slog.Error("play: invalid transaction ID", "type", utils.TypeName(values[1]))
+		return
+	}
+
+	// 스트림 이름
+	streamName, ok := values[3].(string)
+	if !ok {
+		slog.Error("play: invalid stream name", "type", utils.TypeName(values[3]))
+		return
+	}
+
+	fullStreamPath := s.appName + "/" + streamName
+	if s.appName == "" || streamName == "" {
+		slog.Error("play: invalid stream path", "appName", s.appName, "streamKey", streamName)
+		return
+	}
+
+	slog.Info("play request", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
+
+	// 구독 스트림 ID에 추가
+	s.addSubscribedStreamId(fullStreamPath)
+
+	// MediaServer에 play 시작 알림
+	select {
+	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
+	case <-s.ctx.Done():
+	}
+
+	// 1. NetStream.Play.Reset 전송
+	resetStatusObj := map[string]any{
+		"level":       "status",
+		"code":        "NetStream.Play.Reset",
+		"description": fmt.Sprintf("Resetting and playing stream %s", fullStreamPath),
+		"details":     fullStreamPath,
+	}
+
+	resetSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, resetStatusObj)
+	if err != nil {
+		slog.Error("play: failed to encode reset onStatus", "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, resetSequence)
+	if err != nil {
+		slog.Error("play: failed to write reset onStatus", "err", err)
+		return
+	}
+
+	// 2. NetStream.Play.Start 전송
+	startStatusObj := map[string]any{
+		"level":       "status",
+		"code":        "NetStream.Play.Start",
+		"description": fmt.Sprintf("Started playing stream %s", fullStreamPath),
+		"details":     fullStreamPath,
+	}
+
+	startSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, startStatusObj)
+	if err != nil {
+		slog.Error("play: failed to encode start onStatus", "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, startSequence)
+	if err != nil {
+		slog.Error("play: failed to write start onStatus", "err", err)
+		return
+	}
+
+	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
 
 // stopPublishing 발행 중단 처리
@@ -969,15 +991,19 @@ func (s *session) stopPublishing() {
 	}
 
 	// 다중 스트림 발행 중단 처리
-	for streamKey := range s.publishedStreams {
-		select {
-		case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.NodeTypeRTMP, streamKey):
-		case <-s.ctx.Done():
+	for streamId := range s.publishedStreams {
+		if streamPath, exists := s.getStreamPathById(streamId); exists {
+			select {
+			case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.NodeTypeRTMP, streamPath):
+			case <-s.ctx.Done():
+			}
 		}
 	}
 
 	// 스트림 정리
-	s.publishedStreams = make(map[string]*media.Stream)
+	s.publishedStreams = make(map[int]*media.Stream)
+	s.streamIdToPath = make(map[int]string)
+	s.streamPathToId = make(map[string]int)
 }
 
 // stopPlaying 재생 중단 처리
@@ -1088,25 +1114,27 @@ func (s *session) handleAMF3Command(message *Message) {
 
 // --- 다중 스트림 관리 메서드들 ---
 
-// addPublishedStream 발행 스트림 추가
-func (s *session) addPublishedStream(streamKey string, stream *media.Stream) {
-	s.publishedStreams[streamKey] = stream
-	slog.Debug("Published stream added", "sessionId", s.ID(), "streamKey", streamKey, "streamId", stream.ID())
+// addPublishedStream 발행 스트림 추가 (streamId 기반)
+func (s *session) addPublishedStream(streamId int, streamPath string, stream *media.Stream) {
+	s.publishedStreams[streamId] = stream
+	s.addStreamMapping(streamId, streamPath)
+	slog.Debug("Published stream added", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath, "mediaStreamId", stream.ID())
 }
 
-// removePublishedStream 발행 스트림 제거
-func (s *session) removePublishedStream(streamKey string) *media.Stream {
-	stream, exists := s.publishedStreams[streamKey]
+// removePublishedStream 발행 스트림 제거 (streamId 기반)
+func (s *session) removePublishedStream(streamId int) *media.Stream {
+	stream, exists := s.publishedStreams[streamId]
 	if exists {
-		delete(s.publishedStreams, streamKey)
-		slog.Debug("Published stream removed", "sessionId", s.ID(), "streamKey", streamKey)
+		delete(s.publishedStreams, streamId)
+		s.removeStreamMapping(streamId)
+		slog.Debug("Published stream removed", "sessionId", s.ID(), "streamId", streamId)
 	}
 	return stream
 }
 
-// getPublishedStream 발행 스트림 가져오기
-func (s *session) getPublishedStream(streamKey string) (*media.Stream, bool) {
-	stream, exists := s.publishedStreams[streamKey]
+// getPublishedStream 발행 스트림 가져오기 (streamId 기반)
+func (s *session) getPublishedStream(streamId int) (*media.Stream, bool) {
+	stream, exists := s.publishedStreams[streamId]
 	return stream, exists
 }
 
@@ -1179,6 +1207,41 @@ func (s *session) SubscribedStreams() []string {
 	return nil
 }
 
+// --- 스트림 ID 관리 헬퍼 메서드들 ---
+
+// generateStreamId 새로운 streamId 생성
+func (s *session) generateStreamId() int {
+	streamId := s.nextStreamId
+	s.nextStreamId++
+	return streamId
+}
+
+// addStreamMapping streamId와 streamPath 매핑 추가
+func (s *session) addStreamMapping(streamId int, streamPath string) {
+	s.streamIdToPath[streamId] = streamPath
+	s.streamPathToId[streamPath] = streamId
+}
+
+// removeStreamMapping streamId 매핑 제거
+func (s *session) removeStreamMapping(streamId int) {
+	if streamPath, exists := s.streamIdToPath[streamId]; exists {
+		delete(s.streamIdToPath, streamId)
+		delete(s.streamPathToId, streamPath)
+	}
+}
+
+// getStreamPathById streamId로 streamPath 조회
+func (s *session) getStreamPathById(streamId int) (string, bool) {
+	streamPath, exists := s.streamIdToPath[streamId]
+	return streamPath, exists
+}
+
+// getStreamIdByPath streamPath로 streamId 조회
+func (s *session) getStreamIdByPath(streamPath string) (int, bool) {
+	streamId, exists := s.streamPathToId[streamPath]
+	return streamId, exists
+}
+
 // --- StreamKey collision detection 메서드 ---
 
 // attemptStreamPublish MediaServer에 publish 시도 (collision detection + 원자적 점유)
@@ -1211,7 +1274,7 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 // sendPublishErrorResponse publish 에러 응답 전송
 func (s *session) sendPublishErrorResponse(transactionID float64, code string, description string) {
 	statusObj := map[string]any{
-		"level":       "error", 
+		"level":       "error",
 		"code":        code,
 		"description": description,
 	}
@@ -1232,7 +1295,7 @@ func (s *session) sendPublishErrorResponse(transactionID float64, code string, d
 func (s *session) sendPublishSuccessResponse(transactionID float64, streamPath string) {
 	statusObj := map[string]any{
 		"level":       "status",
-		"code":        "NetStream.Publish.Start", 
+		"code":        "NetStream.Publish.Start",
 		"description": fmt.Sprintf("Started publishing stream %s", streamPath),
 		"details":     streamPath,
 	}
@@ -1247,18 +1310,6 @@ func (s *session) sendPublishSuccessResponse(transactionID float64, streamPath s
 	if err != nil {
 		slog.Error("Failed to write publish success response", "sessionId", s.ID(), "err", err)
 	}
-}
-
-// handleReleaseStream Flash Media Server 호환을 위한 releaseStream 명령어 처리
-func (s *session) handleReleaseStream(values []any) {
-	slog.Debug("releaseStream command received (ignored)", "sessionId", s.ID())
-	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
-}
-
-// handleFCPublish Flash Media Server 호환을 위한 FCPublish 명령어 처리  
-func (s *session) handleFCPublish(values []any) {
-	slog.Debug("FCPublish command received (ignored)", "sessionId", s.ID())
-	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
 }
 
 // handleFCUnpublish FCUnpublish 명령어 처리
@@ -1281,7 +1332,9 @@ func (s *session) handleCloseStream(values []any) {
 	s.stopPlaying() // 상태 체크 없이 항상 호출
 
 	// 다중 스트림 정리
-	s.publishedStreams = make(map[string]*media.Stream)
+	s.publishedStreams = make(map[int]*media.Stream)
+	s.streamIdToPath = make(map[int]string)
+	s.streamPathToId = make(map[string]int)
 	s.subscribedStreamIds = s.subscribedStreamIds[:0]
 }
 
@@ -1297,6 +1350,8 @@ func (s *session) handleDeleteStream(values []any) {
 	s.stopPlaying()
 
 	// 다중 스트림 정리
-	s.publishedStreams = make(map[string]*media.Stream)
+	s.publishedStreams = make(map[int]*media.Stream)
+	s.streamIdToPath = make(map[int]string)
+	s.streamPathToId = make(map[string]int)
 	s.subscribedStreamIds = s.subscribedStreamIds[:0]
 }

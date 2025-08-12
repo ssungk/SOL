@@ -8,6 +8,7 @@ import (
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
+	"sol/pkg/srt"
 	"sol/pkg/utils"
 	"sync"
 )
@@ -31,7 +32,7 @@ type MediaServer struct {
 	streamSources map[string]uintptr     // streamId -> sourceNodeId (소스 추적용)
 }
 
-func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig, streamConfig StreamConfig) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, srtConfig srt.SRTConfig, hlsConfig hls.HLSConfig, streamConfig StreamConfig) *MediaServer {
 	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -51,6 +52,9 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, hlsConfig hls.HLSConfig
 
 	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["rtsp"] = rtspServer
+	
+	srtServer := srt.NewServer(srtConfig, mediaServer.mediaServerChannel, &mediaServer.wg)
+	mediaServer.servers["srt"] = srtServer
 	
 	hlsServer := hls.NewServer(hlsConfig, mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["hls"] = hlsServer
@@ -97,19 +101,21 @@ func (s *MediaServer) eventLoop() {
 
 func (s *MediaServer) channelHandler(data any) {
 	switch v := data.(type) {
-	// 공통 이벤트 처리
-	case media.PublishStopped:
-		s.handlePublishStopped(v)
-	case media.PlayStarted:
-		s.handlePlayStarted(v)
-	case media.PlayStopped:
-		s.handlePlayStopped(v)
+	// 노드 라이프사이클 이벤트
 	case media.NodeCreated:
 		s.handleNodeCreated(v)
 	case media.NodeTerminated:
 		s.handleNodeTerminated(v)
+	// 스트림 발행 이벤트
 	case media.PublishStarted:
 		s.handleStreamPublishAttempt(v)
+	case media.PublishStopped:
+		s.handlePublishStopped(v)
+	// 스트림 재생 이벤트
+	case media.PlayStarted:
+		s.handlePlayStarted(v)
+	case media.PlayStopped:
+		s.handlePlayStopped(v)
 	default:
 		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
 	}
@@ -366,6 +372,60 @@ func (s *MediaServer) RemoveHLSStream(streamID string) {
 	slog.Info("HLS stream removed", "streamID", streamID)
 }
 
+// handleNodeCreated 노드 생성 이벤트 처리
+func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
+	slog.Info("Node created", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
+	
+	// 노드를 nodes 맵에 등록 (아직 스트림에는 연결하지 않음)
+	s.nodes[event.NodeId()] = event.Node
+	slog.Info("Node registered in nodes map", "nodeId", event.NodeId())
+}
+
+// handleNodeTerminated 노드 종료 이벤트 처리
+func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
+	slog.Info("Node terminated", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
+	
+	// 노드 제거 및 정리
+	s.RemoveNode(event.NodeId())
+}
+
+// handleStreamPublishAttempt 실제 publish 시도 처리 (collision detection + 원자적 점유)
+func (s *MediaServer) handleStreamPublishAttempt(event media.PublishStarted) {
+	streamId := event.Stream.ID()
+	slog.Debug("Stream publish attempt requested", "streamId", streamId, "nodeId", event.NodeId())
+	
+	response := media.Response{
+		Success: false,
+		Error:   "",
+	}
+	
+	// 최종 확인: 아직 사용 중이지 않은지 체크
+	if _, exists := s.streams[streamId]; exists {
+		response.Error = "Stream ID was taken by another client"
+		slog.Info("Stream publish failed - ID taken", "streamId", streamId, "nodeId", event.NodeId())
+	} else {
+		// 원자적으로 스트림 점유
+		s.streams[streamId] = event.Stream
+		s.streamSources[streamId] = event.NodeId()
+		response.Success = true
+		slog.Info("Stream publish successful", "streamId", streamId, "nodeId", event.NodeId())
+	}
+	
+	// 응답 전송 (채널이 닫혀있어도 panic 방지)
+	select {
+	case event.ResponseChan <- response:
+		slog.Debug("Stream publish attempt response sent", "streamId", streamId, "success", response.Success)
+	default:
+		slog.Warn("Failed to send stream publish attempt response - channel closed", "streamId", streamId)
+		// 만약 성공했는데 응답을 못보냈다면 정리해야 함
+		if response.Success {
+			delete(s.streams, streamId)
+			delete(s.streamSources, streamId)
+			slog.Warn("Rolled back successful stream publish due to closed response channel", "streamId", streamId)
+		}
+	}
+}
+
 // handlePublishStarted 발행 시작 이벤트 처리
 func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	// 노드 ID를 통해 노드 찾기
@@ -488,60 +548,5 @@ func (s *MediaServer) handlePlayStopped(event media.PlayStopped) {
 		slog.Info("Sink node removed due to play stop", "streamId", event.StreamId, "sinkId", event.NodeId())
 	} else {
 		slog.Debug("Play stopped event for already removed node", "nodeId", event.NodeId())
-	}
-}
-
-// handleNodeCreated 노드 생성 이벤트 처리 (연결만 된 상태)
-func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
-	slog.Info("Node created", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
-	
-	// 노드를 nodes 맵에 등록 (아직 스트림에는 연결하지 않음)
-	s.nodes[event.NodeId()] = event.Node
-	slog.Info("Node registered in nodes map", "nodeId", event.NodeId())
-}
-
-
-// handleNodeTerminated 노드 종료 이벤트 처리
-func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
-	slog.Info("Node terminated", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
-	
-	// 노드 제거 및 정리
-	s.RemoveNode(event.NodeId())
-}
-
-// handleStreamPublishAttempt 실제 publish 시도 처리 (collision detection + 원자적 점유)
-func (s *MediaServer) handleStreamPublishAttempt(event media.PublishStarted) {
-	streamId := event.Stream.ID()
-	slog.Debug("Stream publish attempt requested", "streamId", streamId, "nodeId", event.NodeId())
-	
-	response := media.Response{
-		Success: false,
-		Error:   "",
-	}
-	
-	// 최종 확인: 아직 사용 중이지 않은지 체크
-	if _, exists := s.streams[streamId]; exists {
-		response.Error = "Stream ID was taken by another client"
-		slog.Info("Stream publish failed - ID taken", "streamId", streamId, "nodeId", event.NodeId())
-	} else {
-		// 원자적으로 스트림 점유
-		s.streams[streamId] = event.Stream
-		s.streamSources[streamId] = event.NodeId()
-		response.Success = true
-		slog.Info("Stream publish successful", "streamId", streamId, "nodeId", event.NodeId())
-	}
-	
-	// 응답 전송 (채널이 닫혀있어도 panic 방지)
-	select {
-	case event.ResponseChan <- response:
-		slog.Debug("Stream publish attempt response sent", "streamId", streamId, "success", response.Success)
-	default:
-		slog.Warn("Failed to send stream publish attempt response - channel closed", "streamId", streamId)
-		// 만약 성공했는데 응답을 못보냈다면 정리해야 함
-		if response.Success {
-			delete(s.streams, streamId)
-			delete(s.streamSources, streamId)
-			slog.Warn("Rolled back successful stream publish due to closed response channel", "streamId", streamId)
-		}
 	}
 }

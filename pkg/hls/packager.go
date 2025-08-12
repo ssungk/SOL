@@ -143,7 +143,7 @@ func (p *Packager) SendMetadata(streamId string, metadata map[string]string) err
 	}
 	
 	slog.Debug("Metadata received in HLS packager", "streamID", p.streamID, "metadata", metadata)
-	// TODO: 메타데이터 처리 구현
+	// 메타데이터 처리는 필요시 구현
 	return nil
 }
 
@@ -293,7 +293,7 @@ func (b *TSSegmentBuilder) FinishSegment() (Segment, error) {
 	b.segment.duration = duration
 	
 	// TS 데이터 생성 (현재는 더미 데이터)
-	// TODO: 실제 MPEG-TS 패킷 생성
+	// MPEG-TS 패킷 생성 로직 추후 구현
 	tsData := b.generateTSData()
 	b.segment.SetData(tsData)
 	

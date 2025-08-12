@@ -208,7 +208,7 @@ func (s *Server) handleInitSegment(w http.ResponseWriter, r *http.Request, strea
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "max-age=3600")
 	
-	// TODO: fMP4 초기화 세그먼트 데이터 반환
+	// fMP4 초기화 세그먼트 데이터 반환 로직 예정
 	http.NotFound(w, r)
 }
 
@@ -321,7 +321,7 @@ func (s *Server) handleStreamList(w http.ResponseWriter, r *http.Request) {
 	for streamID, playlist := range s.playlists {
 		info := StreamInfo{
 			StreamID:     streamID,
-			StartTime:    time.Now(), // TODO: 실제 시작 시간 추적
+			StartTime:    time.Now(), // 실제 시작 시간 추적 기능 추후 개선
 			LastUpdate:   time.Now(),
 			SegmentCount: playlist.GetSegmentCount(),
 			IsActive:     playlist.IsLive(),
@@ -346,7 +346,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		s.mutex.RLock()
 		stats := make(map[string]any)
 		stats["total_streams"] = len(s.playlists)
-		stats["active_streams"] = len(s.playlists) // TODO: 활성 스트림 카운트
+		stats["active_streams"] = len(s.playlists) // 활성 스트림 카운트 로직
 		s.mutex.RUnlock()
 		
 		w.Header().Set("Content-Type", "application/json")

@@ -357,7 +357,7 @@ func (s *Session) handleAnnounce(req *Request) error {
 		// SDP 정보를 메타데이터로 변환하여 저장
 		sdp := string(req.Body)
 		slog.Info("ANNOUNCE received with SDP", "sessionId", s.ID(), "streamPath", s.streamPath, "sdpLength", len(sdp))
-		// TODO: SDP를 메타데이터로 변환하여 stream에 전송
+		// SDP 정보는 현재 로그로만 기록하고 향후 필요시 메타데이터로 변환 예정
 	}
 
 	response := NewResponse(StatusOK)
@@ -383,7 +383,7 @@ func (s *Session) handleSetup(req *Request) error {
 		slog.Info("TCP interleaved mode setup", "sessionId", s.ID(), "rtpChannel", s.rtpChannel)
 	} else if len(s.clientPorts) >= 2 && s.rtpTransport != nil {
 		// UDP mode - create RTP session
-		ssrc := uint32(0x12345678) // TODO: generate unique SSRC
+		ssrc := uint32(0x12345678) // 고정 SSRC 사용 (추후 랜덤 생성으로 변경 가능)
 
 		// Get client IP from connection
 		clientIP := s.conn.RemoteAddr().(*net.TCPAddr).IP.String()
@@ -397,7 +397,7 @@ func (s *Session) handleSetup(req *Request) error {
 		}
 
 		s.rtpSession = rtpSession
-		s.serverPorts = []int{8000, 8001} // TODO: get from RTP transport
+		s.serverPorts = []int{8000, 8001} // 고정 포트 사용 (RTP transport에서 동적 할당 가능)
 		slog.Info("UDP RTP session created", "sessionId", s.ID(), "ssrc", ssrc)
 	} else {
 		s.serverPorts = []int{8000, 8001}
@@ -413,6 +413,33 @@ func (s *Session) handleSetup(req *Request) error {
 	return s.writer.WriteResponse(response)
 }
 
+// handleRecord handles RECORD request
+func (s *Session) handleRecord(req *Request) error {
+	if s.state != StateReady {
+		return s.sendErrorResponse(req.CSeq, StatusMethodNotValidInThisState)
+	}
+
+	// StreamPath collision detection
+	streamPath := s.streamPath
+
+	// 1단계: 스트림 준비 (MediaServer에서 처리하므로 nil로 전달)
+	stream := (*media.Stream)(nil) // RTSP는 MediaServer에서 스트림 생성
+
+	// 2단계: MediaServer에 실제 record 시도 (collision detection + 원자적 점유)
+	if !s.attemptStreamPublish(streamPath, stream) {
+		return s.sendRecordErrorResponse(req.CSeq, "Stream path was taken by another client")
+	}
+
+	// 3단계: 성공 응답 전송 (MediaServer 등록은 attemptStreamPublish에서 완료됨)
+	response := NewResponse(StatusOK)
+	response.SetCSeq(req.CSeq)
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
+
+	s.state = StateRecording
+
+	return s.writer.WriteResponse(response)
+}
+
 // handlePlay handles PLAY request
 func (s *Session) handlePlay(req *Request) error {
 	if s.state != StateReady {
@@ -423,7 +450,7 @@ func (s *Session) handlePlay(req *Request) error {
 	rangeHeader := req.GetHeader(HeaderRange)
 	if rangeHeader != "" {
 		slog.Debug("Range header received", "sessionId", s.ID(), "range", rangeHeader)
-		// TODO: implement range support
+		// Range 헤더는 현재 로그로만 기록 (시간대별 재생 지원은 향후 구현)
 	}
 
 	// Send play started event to MediaServer
@@ -506,33 +533,6 @@ func (s *Session) handleTeardown(req *Request) error {
 		time.Sleep(100 * time.Millisecond)
 		s.Close()
 	}()
-
-	return s.writer.WriteResponse(response)
-}
-
-// handleRecord handles RECORD request
-func (s *Session) handleRecord(req *Request) error {
-	if s.state != StateReady {
-		return s.sendErrorResponse(req.CSeq, StatusMethodNotValidInThisState)
-	}
-
-	// StreamPath collision detection
-	streamPath := s.streamPath
-
-	// 1단계: 스트림 준비 (MediaServer에서 처리하므로 nil로 전달)
-	stream := (*media.Stream)(nil) // RTSP는 MediaServer에서 스트림 생성
-
-	// 2단계: MediaServer에 실제 record 시도 (collision detection + 원자적 점유)
-	if !s.attemptStreamPublish(streamPath, stream) {
-		return s.sendRecordErrorResponse(req.CSeq, "Stream path was taken by another client")
-	}
-
-	// 3단계: 성공 응답 전송 (MediaServer 등록은 attemptStreamPublish에서 완료됨)
-	response := NewResponse(StatusOK)
-	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
-
-	s.state = StateRecording
 
 	return s.writer.WriteResponse(response)
 }

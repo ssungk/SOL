@@ -59,6 +59,45 @@ func (s *Stream) SendMetadata(metadata map[string]string) {
 	s.broadcastMetadata(metadata)
 }
 
+// broadcastFrame sends media frame to all sinks
+func (s *Stream) broadcastFrame(frame Frame) {
+	// Send to all sinks with stream ID
+	for _, sink := range s.sinks {
+		if err := sink.SendMediaFrame(s.id, frame); err != nil {
+			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", frame.SubType, "err", err)
+		}
+	}
+}
+
+// broadcastManagedFrame sends managed frame to all sinks (zero-copy for live streaming)
+func (s *Stream) broadcastManagedFrame(managedFrame *ManagedFrame) {
+	// Clone managed frame for each sink (sharing pool references)
+	for _, sink := range s.sinks {
+		// Create a clone for this sink (shares pool references but separate lifetime)
+		sinkFrame := managedFrame.Clone()
+		
+		// Convert to regular frame for sink (this copies data but allows pool cleanup)
+		frame := sinkFrame.ToRegularFrame()
+		sinkFrame.Release() // Release pool references immediately after copying
+		
+		if err := sink.SendMediaFrame(s.id, frame); err != nil {
+			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", managedFrame.SubType, "err", err)
+		}
+	}
+	
+	// Original managed frame can now be released by caller
+}
+
+// broadcastMetadata sends metadata to all sinks
+func (s *Stream) broadcastMetadata(metadata map[string]string) {
+	// Send to all sinks with stream ID
+	for _, sink := range s.sinks {
+		if err := sink.SendMetadata(s.id, metadata); err != nil {
+			slog.Error("Failed to send metadata to sink", "streamId", s.id, "nodeId", sink.ID(), "err", err)
+		}
+	}
+}
+
 // Stop stops the stream and cleans up resources
 func (s *Stream) Stop() {
 	slog.Info("Stopping stream", "streamId", s.id)
@@ -145,44 +184,4 @@ func (s *Stream) GetCacheStats() map[string]any {
 	stats["sink_count"] = len(s.sinks)
 
 	return stats
-}
-
-
-// broadcastFrame sends media frame to all sinks
-func (s *Stream) broadcastFrame(frame Frame) {
-	// Send to all sinks with stream ID
-	for _, sink := range s.sinks {
-		if err := sink.SendMediaFrame(s.id, frame); err != nil {
-			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", frame.SubType, "err", err)
-		}
-	}
-}
-
-// broadcastManagedFrame sends managed frame to all sinks (zero-copy for live streaming)
-func (s *Stream) broadcastManagedFrame(managedFrame *ManagedFrame) {
-	// Clone managed frame for each sink (sharing pool references)
-	for _, sink := range s.sinks {
-		// Create a clone for this sink (shares pool references but separate lifetime)
-		sinkFrame := managedFrame.Clone()
-		
-		// Convert to regular frame for sink (this copies data but allows pool cleanup)
-		frame := sinkFrame.ToRegularFrame()
-		sinkFrame.Release() // Release pool references immediately after copying
-		
-		if err := sink.SendMediaFrame(s.id, frame); err != nil {
-			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", managedFrame.SubType, "err", err)
-		}
-	}
-	
-	// Original managed frame can now be released by caller
-}
-
-// broadcastMetadata sends metadata to all sinks
-func (s *Stream) broadcastMetadata(metadata map[string]string) {
-	// Send to all sinks with stream ID
-	for _, sink := range s.sinks {
-		if err := sink.SendMetadata(s.id, metadata); err != nil {
-			slog.Error("Failed to send metadata to sink", "streamId", s.id, "nodeId", sink.ID(), "err", err)
-		}
-	}
 }
