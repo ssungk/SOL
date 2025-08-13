@@ -252,6 +252,8 @@ func (d *demuxer) processPESBuffer(pid uint16, buffer []byte, streamInfo StreamI
 		d.processH265Stream(pid, pesPacket, streamInfo)
 	case StreamTypeADTS:
 		d.processAACStream(pid, pesPacket, streamInfo)
+	case StreamTypeSCTE35:
+		d.processSCTE35Stream(pid, pesPacket, streamInfo)
 	default:
 		if d.config.EnableDebugLog {
 			slog.Debug("Unsupported stream type", "PID", pid, "type", streamInfo.Type)
@@ -357,6 +359,58 @@ func (d *demuxer) processAACStream(pid uint16, pesPacket *PESPacket, streamInfo 
 			if err := d.frameCallback(pid, mediaFrame); err != nil && d.config.EnableDebugLog {
 				slog.Debug("Frame callback error", "PID", pid, "err", err)
 			}
+		}
+	}
+}
+
+// processSCTE35Stream SCTE-35 스트림 처리
+func (d *demuxer) processSCTE35Stream(pid uint16, pesPacket *PESPacket, streamInfo StreamInfo) {
+	// SCTE-35는 PES가 아닌 섹션 형태로 전송됨
+	// PES 패킷의 데이터 부분을 SCTE-35 섹션으로 파싱
+	scte35Section, err := ParseSCTE35(pesPacket.Data)
+	if err != nil {
+		if d.config.EnableDebugLog {
+			slog.Debug("Failed to parse SCTE-35 section", "PID", pid, "err", err)
+		}
+		return
+	}
+
+	if d.config.EnableDebugLog {
+		slog.Debug("SCTE-35 message received", 
+			"PID", pid, 
+			"commandType", scte35Section.SpliceCommandType,
+			"eventID", scte35Section.GetEventID(),
+			"isAdStart", scte35Section.IsAdBreakStart(),
+			"isAdEnd", scte35Section.IsAdBreakEnd())
+	}
+
+	// SCTE-35 메시지를 메타데이터로 변환
+	if d.metadataCallback != nil {
+		metadata := map[string]string{
+			"type":        "scte35",
+			"commandType": string(rune(scte35Section.SpliceCommandType)),
+			"eventID":     string(rune(scte35Section.GetEventID())),
+		}
+
+		if scte35Section.IsAdBreakStart() {
+			metadata["adBreak"] = "start"
+			if duration := scte35Section.GetDuration(); duration > 0 {
+				metadata["duration"] = string(rune(int(duration)))
+			}
+		} else if scte35Section.IsAdBreakEnd() {
+			metadata["adBreak"] = "end"
+		}
+
+		if pts, hasTime := scte35Section.GetSpliceTime(); hasTime {
+			metadata["spliceTime"] = string(rune(pts))
+		}
+
+		if presentationTime, hasTime := scte35Section.GetPresentationTime(); hasTime {
+			metadata["presentationTime"] = string(rune(presentationTime))
+		}
+
+		if err := d.metadataCallback(pid, metadata); err != nil && d.config.EnableDebugLog {
+			slog.Debug("SCTE-35 metadata callback error", "PID", pid, "err", err)
 		}
 	}
 }

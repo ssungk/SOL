@@ -44,6 +44,7 @@ const (
 	StreamTypeMPEG4Systems       StreamType = 0x12
 	StreamTypeH264               StreamType = 0x1B // H.264/AVC
 	StreamTypeH265               StreamType = 0x24 // H.265/HEVC
+	StreamTypeSCTE35             StreamType = 0x86 // SCTE-35 Digital Program Insertion
 )
 
 // NALUType H.264/H.265 NALU 타입
@@ -265,6 +266,8 @@ func (st StreamType) String() string {
 		return "MPEG-1 Audio"
 	case StreamTypeMPEG2Audio:
 		return "MPEG-2 Audio"
+	case StreamTypeSCTE35:
+		return "SCTE-35"
 	default:
 		return "Unknown"
 	}
