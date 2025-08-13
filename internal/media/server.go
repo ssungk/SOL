@@ -91,7 +91,7 @@ func (s *MediaServer) eventLoop() {
 	for {
 		select {
 		case data := <-s.mediaServerChannel:
-			s.channelHandler(data)
+			s.handleChannel(data)
 		case <-s.ctx.Done():
 			s.shutdown()
 			return
@@ -99,7 +99,7 @@ func (s *MediaServer) eventLoop() {
 	}
 }
 
-func (s *MediaServer) channelHandler(data any) {
+func (s *MediaServer) handleChannel(data any) {
 	switch v := data.(type) {
 	// 노드 라이프사이클 이벤트
 	case media.NodeCreated:
@@ -189,33 +189,66 @@ func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	node, exists := s.nodes[nodeId]
 	if !exists {
+		slog.Debug("Node not found for removal", "nodeId", nodeId)
 		return
 	}
+	
+	_, isSource := node.(media.MediaSource)
+	_, isSink := node.(media.MediaSink)
+	
+	slog.Info("Starting node removal process", 
+		"nodeId", nodeId, 
+		"nodeType", node.NodeType(), 
+		"isSource", isSource,
+		"isSink", isSink,
+		"totalStreams", len(s.streams),
+		"totalSources", len(s.streamSources))
 	
 	// 노드를 포함하는 스트림 찾기 및 제거
 	var targetStreamIds []string
 	
-	// Source(발행자) 노드인 경우 처리
+	// Source(발행자) 노드인 경우 처리 - 실제로 streamSources에 등록된 노드만 Source로 취급
 	if _, ok := node.(media.MediaSource); ok {
+		slog.Debug("Processing MediaSource node removal", 
+			"nodeId", nodeId, 
+			"streamSourcesCount", len(s.streamSources),
+			"streamSourcesMap", s.streamSources)
+		
 		// 이 소스가 어떤 스트림들을 만들었는지 찾기
 		for streamId, sourceNodeId := range s.streamSources {
 			if sourceNodeId == nodeId {
 				targetStreamIds = append(targetStreamIds, streamId)
 				// 소스 맵핑도 제거
 				delete(s.streamSources, streamId)
-				slog.Info("Source node removed, marking stream for cleanup", "nodeId", nodeId, "streamId", streamId)
+				slog.Info("Source node removed, marking stream for cleanup", 
+					"nodeId", nodeId, 
+					"streamId", streamId,
+					"remainingSourcesCount", len(s.streamSources))
 			}
+		}
+		if len(targetStreamIds) == 0 {
+			slog.Debug("Node implements MediaSource but not registered as source", 
+				"nodeId", nodeId,
+				"allRegisteredSources", s.streamSources)
 		}
 	}
 	
 	// Sink(재생자) 노드인 경우 처리
 	if _, ok := node.(media.MediaSink); ok {
+		slog.Debug("Processing MediaSink node removal", "nodeId", nodeId)
+		
 		for streamId, stream := range s.streams {
+			sinksBefore := stream.GetSinkCount()
 			for _, existingSink := range stream.GetSinks() {
 				if existingSink.ID() == nodeId {
 					stream.RemoveSink(existingSink)
+					sinksAfter := stream.GetSinkCount()
 					targetStreamIds = append(targetStreamIds, streamId)
-					slog.Info("Sink node removed from stream", "nodeId", nodeId, "streamId", streamId)
+					slog.Info("Sink node removed from stream", 
+						"nodeId", nodeId, 
+						"streamId", streamId,
+						"sinksBefore", sinksBefore,
+						"sinksAfter", sinksAfter)
 					break
 				}
 			}
@@ -225,31 +258,73 @@ func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	// 노드 제거
 	delete(s.nodes, nodeId)
 	
-	slog.Info("Removed node", "nodeId", nodeId, "streamIds", targetStreamIds, "nodeType", node.NodeType())
+	slog.Info("Node removed from nodes map", 
+		"nodeId", nodeId, 
+		"targetStreamIds", targetStreamIds, 
+		"nodeType", node.NodeType(),
+		"remainingNodes", len(s.nodes))
 	
 	// 스트림 정리 로직 개선
 	for _, streamId := range targetStreamIds {
 		if stream := s.streams[streamId]; stream != nil {
-			// Source가 제거된 경우 또는 Sink가 모두 제거된 경우 스트림 삭제
-			// 소스가 제거된 스트림인지 확인
-			_, wasSourceStream := s.streamSources[streamId]
-			if _, wasSource := node.(media.MediaSource); wasSource && wasSourceStream {
-				// Source가 제거되면 스트림 무조건 삭제
+			sinkCount := stream.GetSinkCount()
+			_, hasSource := s.streamSources[streamId]
+			
+			// 실제로 Source로 등록된 노드인지 확인 (단순히 인터페이스 구현 여부가 아닌)
+			wasRegisteredAsSource := false
+			for registeredStreamId, registeredNodeId := range s.streamSources {
+				if registeredStreamId == streamId && registeredNodeId == nodeId {
+					wasRegisteredAsSource = true
+					break
+				}
+			}
+			
+			slog.Debug("Evaluating stream cleanup", 
+				"streamId", streamId,
+				"sinkCount", sinkCount,
+				"hasActiveSource", hasSource,
+				"nodeWasRegisteredAsSource", wasRegisteredAsSource)
+			
+			if wasRegisteredAsSource {
+				// 실제로 Source로 등록된 노드가 제거되면 스트림 무조건 삭제
 				stream.Stop()
 				delete(s.streams, streamId)
 				// streamSources 맵핑도 제거 (이미 위에서 제거되었을 수도 있음)
 				delete(s.streamSources, streamId)
-				slog.Info("Removed stream due to source removal", "streamId", streamId)
-			} else if stream.GetSinkCount() == 0 {
-				// Sink만 제거된 경우, 다른 Sink가 없으면 스트림 삭제
-				stream.Stop()
-				delete(s.streams, streamId)
-				// 혹시 소스 맵핑도 제거
-				delete(s.streamSources, streamId)
-				slog.Info("Removed stream due to no remaining sinks", "streamId", streamId)
+				slog.Info("Stream removed due to registered source removal", 
+					"streamId", streamId,
+					"remainingStreams", len(s.streams))
+			} else if sinkCount == 0 {
+				// Sink만 제거된 경우, Source가 없을 때만 스트림 삭제
+				if !hasSource {
+					// Source도 없고 Sink도 없으면 스트림 삭제
+					stream.Stop()
+					delete(s.streams, streamId)
+					slog.Info("Stream removed due to no remaining sinks and no source", 
+						"streamId", streamId,
+						"remainingStreams", len(s.streams))
+				} else {
+					// Source가 있으면 스트림 유지
+					slog.Debug("Stream maintained despite no sinks (source still active)", 
+						"streamId", streamId,
+						"activeSourceId", s.streamSources[streamId])
+				}
+			} else {
+				slog.Debug("Stream maintained with active sinks", 
+					"streamId", streamId, 
+					"sinkCount", sinkCount,
+					"hasActiveSource", hasSource)
 			}
+		} else {
+			slog.Warn("Stream not found during cleanup", "streamId", streamId)
 		}
 	}
+	
+	slog.Info("Node removal process completed", 
+		"nodeId", nodeId,
+		"finalStreamCount", len(s.streams),
+		"finalSourceCount", len(s.streamSources),
+		"finalNodeCount", len(s.nodes))
 }
 
 // 스트림 개수 반환

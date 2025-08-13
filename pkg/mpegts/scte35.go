@@ -112,7 +112,7 @@ func (s *SpliceInsert) Encode() []byte {
 		
 		// unique_program_id, avail_num, avails_expected
 		uniqueID := make([]byte, 2)
-		utils.PutUint16BE(uniqueID, s.UniqueProgramID)
+		binary.BigEndian.PutUint16(uniqueID, s.UniqueProgramID)
 		data = append(data, uniqueID...)
 		data = append(data, s.AvailNum)
 		data = append(data, s.AvailsExpected)
@@ -147,7 +147,7 @@ func (s *SpliceTime) Encode() []byte {
 	if s.TimeSpecifiedFlag {
 		// time_specified_flag = 1, reserved = 0x3F (6비트), pts_time (33비트)
 		data[0] = 0xFE | uint8((s.PTSTime>>32)&0x01)
-		utils.PutUint32BE(data[1:], uint32(s.PTSTime))
+		binary.BigEndian.PutUint32(data[1:], uint32(s.PTSTime))
 	} else {
 		// time_specified_flag = 0, reserved = 0x7F (7비트)
 		data[0] = 0x7F
@@ -172,7 +172,7 @@ func (b *BreakDuration) Encode() []byte {
 	} else {
 		data[0] = 0x7E | uint8((b.Duration>>32)&0x01)
 	}
-	utils.PutUint32BE(data[1:], uint32(b.Duration))
+	binary.BigEndian.PutUint32(data[1:], uint32(b.Duration))
 	
 	return data
 }
@@ -196,7 +196,7 @@ func (a *AvailDescriptor) Encode() []byte {
 	data := make([]byte, 6) // tag(1) + length(1) + data(4)
 	data[0] = a.Tag()
 	data[1] = a.Length()
-	utils.PutUint32BE(data[2:], a.ProviderAvailID)
+	binary.BigEndian.PutUint32(data[2:], a.ProviderAvailID)
 	return data
 }
 
@@ -258,7 +258,7 @@ func (s *SegmentationDescriptor) Encode() []byte {
 	offset++
 	
 	// segmentation_event_id
-	utils.PutUint32BE(data[offset:], s.SegmentationEventID)
+	binary.BigEndian.PutUint32(data[offset:], s.SegmentationEventID)
 	offset += 4
 	
 	// 플래그들
@@ -284,7 +284,7 @@ func (s *SegmentationDescriptor) Encode() []byte {
 		if s.SegmentationDurationFlag {
 			// segmentation_duration (40비트)
 			data[offset] = uint8(s.SegmentationDuration >> 32)
-			utils.PutUint32BE(data[offset+1:], uint32(s.SegmentationDuration))
+			binary.BigEndian.PutUint32(data[offset+1:], uint32(s.SegmentationDuration))
 			offset += 5
 		}
 		
@@ -329,7 +329,7 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 	offset++
 	
 	// 섹션 문법 지시자, 개인 지시자, 섹션 길이
-	flags := utils.GetUint16BE(data[offset:])
+	flags := binary.BigEndian.Uint16(data[offset:])
 	section.SectionSyntaxIndicator = (flags & 0x8000) != 0
 	section.PrivateIndicator = (flags & 0x4000) != 0
 	section.SectionLength = flags & 0x0FFF
@@ -354,7 +354,7 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 	offset++
 	
 	// PTS 조정 (33비트)
-	section.PTSAdjustment = uint64(data[offset])<<25 | uint64(utils.GetUint32BE(data[offset+1:]))>>7
+	section.PTSAdjustment = uint64(data[offset])<<25 | uint64(binary.BigEndian.Uint32(data[offset+1:]))>>7
 	offset += 5
 	
 	// CW 인덱스
@@ -362,11 +362,11 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 	offset++
 	
 	// Tier (12비트)
-	section.Tier = utils.GetUint16BE(data[offset:]) & 0x0FFF
+	section.Tier = binary.BigEndian.Uint16(data[offset:]) & 0x0FFF
 	offset += 2
 	
 	// 스플라이스 명령 길이
-	section.SpliceCommandLength = utils.GetUint16BE(data[offset:]) & 0x0FFF
+	section.SpliceCommandLength = binary.BigEndian.Uint16(data[offset:]) & 0x0FFF
 	offset += 2
 	
 	// 스플라이스 명령 타입
@@ -390,7 +390,7 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 	}
 	
 	// 디스크립터 루프 길이
-	section.DescriptorLoopLength = utils.GetUint16BE(data[offset:])
+	section.DescriptorLoopLength = binary.BigEndian.Uint16(data[offset:])
 	offset += 2
 	
 	// 디스크립터 파싱
@@ -413,7 +413,7 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 		case 0x00: // avail_descriptor
 			if len(descData) >= 4 {
 				desc := &AvailDescriptor{
-					ProviderAvailID: utils.GetUint32BE(descData),
+					ProviderAvailID: binary.BigEndian.Uint32(descData),
 				}
 				section.Descriptors = append(section.Descriptors, desc)
 			}
@@ -437,7 +437,7 @@ func ParseSCTE35(data []byte) (*SpliceInfoSection, error) {
 	
 	// CRC32
 	if offset+4 <= len(data) {
-		section.CRC32 = utils.GetUint32BE(data[offset:])
+		section.CRC32 = binary.BigEndian.Uint32(data[offset:])
 	}
 	
 	return section, nil
@@ -453,7 +453,7 @@ func parseSpliceInsert(data []byte) *SpliceInsert {
 	offset := 0
 	
 	// splice_event_id
-	insert.SpliceEventID = utils.GetUint32BE(data[offset:])
+	insert.SpliceEventID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 	
 	// 플래그들
@@ -487,7 +487,7 @@ func parseSpliceInsert(data []byte) *SpliceInsert {
 		
 		// unique_program_id, avail_num, avails_expected
 		if len(data) >= offset+4 {
-			insert.UniqueProgramID = utils.GetUint16BE(data[offset:])
+			insert.UniqueProgramID = binary.BigEndian.Uint16(data[offset:])
 			insert.AvailNum = data[offset+2]
 			insert.AvailsExpected = data[offset+3]
 		}
@@ -518,7 +518,7 @@ func parseSpliceTime(data []byte) *SpliceTime {
 	
 	if time.TimeSpecifiedFlag && len(data) >= 5 {
 		// PTS 시간 추출 (33비트)
-		time.PTSTime = uint64(data[0]&0x01)<<32 | uint64(utils.GetUint32BE(data[1:]))
+		time.PTSTime = uint64(data[0]&0x01)<<32 | uint64(binary.BigEndian.Uint32(data[1:]))
 	}
 	
 	return time
@@ -532,7 +532,7 @@ func parseBreakDuration(data []byte) *BreakDuration {
 	
 	duration := &BreakDuration{}
 	duration.AutoReturn = (data[0] & 0x80) != 0
-	duration.Duration = uint64(data[0]&0x01)<<32 | uint64(utils.GetUint32BE(data[1:]))
+	duration.Duration = uint64(data[0]&0x01)<<32 | uint64(binary.BigEndian.Uint32(data[1:]))
 	
 	return duration
 }
@@ -547,7 +547,7 @@ func parseSegmentationDescriptor(data []byte) *SegmentationDescriptor {
 	offset := 0
 	
 	// segmentation_event_id
-	desc.SegmentationEventID = utils.GetUint32BE(data[offset:])
+	desc.SegmentationEventID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 	
 	// 플래그들
@@ -564,7 +564,7 @@ func parseSegmentationDescriptor(data []byte) *SegmentationDescriptor {
 	if !desc.SegmentationEventCancelInd && len(data) > offset {
 		// segmentation_duration (40비트)
 		if desc.SegmentationDurationFlag && len(data) >= offset+5 {
-			desc.SegmentationDuration = uint64(data[offset])<<32 | uint64(utils.GetUint32BE(data[offset+1:]))
+			desc.SegmentationDuration = uint64(data[offset])<<32 | uint64(binary.BigEndian.Uint32(data[offset+1:]))
 			offset += 5
 		}
 		
@@ -611,7 +611,7 @@ func CreateSCTE35(section *SpliceInfoSection) ([]byte, error) {
 	// PTS 조정 (33비트를 40비트로 인코딩)
 	ptsAdj := make([]byte, 5)
 	ptsAdj[0] = uint8(section.PTSAdjustment >> 25)
-	utils.PutUint32BE(ptsAdj[1:], uint32(section.PTSAdjustment<<7))
+	binary.BigEndian.PutUint32(ptsAdj[1:], uint32(section.PTSAdjustment<<7))
 	data = append(data, ptsAdj...)
 	
 	// CW 인덱스
@@ -619,7 +619,7 @@ func CreateSCTE35(section *SpliceInfoSection) ([]byte, error) {
 	
 	// Tier (12비트를 16비트로 인코딩)
 	tier := make([]byte, 2)
-	utils.PutUint16BE(tier, 0xF000|section.Tier)
+	binary.BigEndian.PutUint16(tier, 0xF000|section.Tier)
 	data = append(data, tier...)
 	
 	// 스플라이스 명령
@@ -630,7 +630,7 @@ func CreateSCTE35(section *SpliceInfoSection) ([]byte, error) {
 	
 	// 스플라이스 명령 길이
 	cmdLength := make([]byte, 2)
-	utils.PutUint16BE(cmdLength, 0xF000|uint16(len(cmdData)))
+	binary.BigEndian.PutUint16(cmdLength, 0xF000|uint16(len(cmdData)))
 	data = append(data, cmdLength...)
 	
 	// 스플라이스 명령 데이터
@@ -644,7 +644,7 @@ func CreateSCTE35(section *SpliceInfoSection) ([]byte, error) {
 	
 	// 디스크립터 루프 길이
 	descLength := make([]byte, 2)
-	utils.PutUint16BE(descLength, uint16(len(descData)))
+	binary.BigEndian.PutUint16(descLength, uint16(len(descData)))
 	data = append(data, descLength...)
 	
 	// 디스크립터 데이터
@@ -652,13 +652,13 @@ func CreateSCTE35(section *SpliceInfoSection) ([]byte, error) {
 	
 	// 섹션 길이 업데이트 (CRC32 포함)
 	sectionLength := len(data) - 3 + 4 // 헤더 3바이트 제외, CRC32 4바이트 포함
-	utils.PutUint16BE(data[lengthPos:], uint16(sectionLength))
+	binary.BigEndian.PutUint16(data[lengthPos:], uint16(sectionLength))
 	
 	// CRC32 계산 및 추가
 	crcData := data[1:] // table_id 제외
 	crc := crc32.Checksum(crcData, crc32Table)
 	crcBytes := make([]byte, 4)
-	utils.PutUint32BE(crcBytes, crc)
+	binary.BigEndian.PutUint32(crcBytes, crc)
 	data = append(data, crcBytes...)
 	
 	return data, nil

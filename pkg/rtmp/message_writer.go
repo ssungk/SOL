@@ -333,17 +333,3 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	return mw.writeMessage(w, msg)
 }
 
-// writeVideoMessage 비디오 메시지 전송 (pkg/media Frame 지원)
-func (mw *messageWriter) writeVideoMessage(w io.Writer, msg *Message) error {
-	return mw.writeMessage(w, msg)
-}
-
-// writeAudioMessage 오디오 메시지 전송 (pkg/media Frame 지원)
-func (mw *messageWriter) writeAudioMessage(w io.Writer, msg *Message) error {
-	return mw.writeMessage(w, msg)
-}
-
-// writeScriptMessage 스크립트 데이터 메시지 전송 (pkg/media MetadataFrame 지원)
-func (mw *messageWriter) writeScriptMessage(w io.Writer, msg *Message) error {
-	return mw.writeMessage(w, msg)
-}

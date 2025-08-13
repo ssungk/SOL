@@ -56,7 +56,7 @@ func (ms *messageReaderContext) isInitialChunk(chunkStreamId uint32) bool {
 func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 	header, ok := ms.messageHeaders[chunkStreamId]
 	if !ok {
-		slog.Warn("message header not found", "chunkStreamId", chunkStreamId)
+		slog.Error("message header not found", "chunkStreamId", chunkStreamId)
 		return 0
 	}
 	currentLength := ms.payloadLengths[chunkStreamId]

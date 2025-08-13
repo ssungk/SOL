@@ -84,10 +84,22 @@ func (s *session) eventLoop() {
 	for {
 		select {
 		case data := <-s.channel:
-			s.channelHandler(data)
+			s.handleChannel(data)
 		case <-s.ctx.Done():
 			return
 		}
+	}
+}
+
+// handleMessageOrRoute 메시지를 즉시 처리하거나 이벤트 루프로 라우팅 (레이스 컨디션 방지)
+func (s *session) handleMessageOrRoute(message *Message) {
+	switch message.messageHeader.typeId {
+	case MsgTypeSetChunkSize:
+		s.handleSetChunkSize(message)
+	case MsgTypeAbort:
+		s.handleAbort(message)
+	default:
+		s.channel <- commandEvent{message: message}
 	}
 }
 
@@ -107,27 +119,16 @@ func (s *session) readLoop() {
 	for {
 		message, err := s.reader.readNextMessage(s.conn)
 		if err != nil {
-			return // 에러 발생 시 루프 종료
+			return
 		}
 
-		// SetChunkSize와 Abort 메시지는 즉시 처리 (레이스 컨디션 방지)
-		if message.messageHeader.typeId == MsgTypeSetChunkSize {
-			s.handleSetChunkSize(message)
-			continue // eventCh로 보내지 않음
-		}
-
-		if message.messageHeader.typeId == MsgTypeAbort {
-			s.handleAbort(message)
-			continue // eventCh로 보내지 않음
-		}
-
-		// 다른 메시지들은 이벤트로 변환하여 이벤트 루프로 전송
-		s.channel <- commandEvent{message: message}
+		// 메시지를 즉시 처리하거나 이벤트 루프로 라우팅
+		s.handleMessageOrRoute(message)
 	}
 }
 
-// channelHandler 이벤트 종류에 따라 적절한 핸들러 호출
-func (s *session) channelHandler(data any) {
+// handleChannel 이벤트 종류에 따라 적절한 핸들러 호출
+func (s *session) handleChannel(data any) {
 	switch e := data.(type) {
 	case sendFrameEvent:
 		s.handleSendFrame(e)
@@ -136,7 +137,7 @@ func (s *session) channelHandler(data any) {
 	case commandEvent:
 		s.handleCommand(e.message)
 	default:
-		slog.Warn("Unknown session data type", "type", utils.TypeName(data))
+		slog.Error("Unknown session data type", "type", utils.TypeName(data))
 	}
 }
 
@@ -159,28 +160,8 @@ func (s *session) cleanup() {
 // --- MediaSink 인터페이스 구현 ---
 
 func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
-	// 재생 중이 아니면 거부
-	if s.isPublishingMode() {
-		return fmt.Errorf("session is in publishing mode, cannot receive frames")
-	}
-
-	// 구독 중인 스트림인지 확인
-	subscribing := false
-	for _, id := range s.subscribedStreamIds {
-		if id == streamId {
-			subscribing = true
-			break
-		}
-	}
-
-	// 구독 중이 아니면 거부
-
-	if !subscribing {
-		return fmt.Errorf("not subscribed to stream %s", streamId)
-	}
-
-	// 이벤트로 전송
-	event := sendFrameEvent{frame: frame}
+	// MediaServer가 적절한 Sink에게만 호출하므로 구독 체크 불필요
+	event := sendFrameEvent{streamPath: streamId, frame: frame}
 	select {
 	case s.channel <- event:
 		return nil
@@ -190,28 +171,8 @@ func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
 }
 
 func (s *session) SendMetadata(streamId string, metadata map[string]string) error {
-	// 재생 중이 아니면 무시
-	if s.isPublishingMode() {
-		return nil
-	}
-
-	// 구독 중인 스트림인지 확인
-	subscribing := false
-	for _, id := range s.subscribedStreamIds {
-		if id == streamId {
-			subscribing = true
-			break
-		}
-	}
-
-	// 구독 중이 아니면 거부
-
-	if !subscribing {
-		return nil // 구독하지 않은 스트림은 조용히 무시
-	}
-
-	// 이벤트로 전송
-	event := sendMetadataEvent{metadata: metadata}
+	// MediaServer가 적절한 Sink에게만 호출하므로 구독 체크 불필요
+	event := sendMetadataEvent{streamPath: streamId, metadata: metadata}
 	select {
 	case s.channel <- event:
 		return nil
@@ -224,27 +185,30 @@ func (s *session) SendMetadata(streamId string, metadata map[string]string) erro
 
 // handleSendFrame MediaSink로부터 받은 프레임을 클라이언트로 전송
 func (s *session) handleSendFrame(e sendFrameEvent) {
+	streamId := s.getStreamIdFromPath(e.streamPath)
 
-	var err error
+	var msgType uint8
 	switch e.frame.Type {
 	case media.TypeVideo:
-		err = s.sendVideoFrame(e.frame)
+		msgType = MsgTypeVideo
 	case media.TypeAudio:
-		err = s.sendAudioFrame(e.frame)
+		msgType = MsgTypeAudio
 	default:
-		slog.Warn("Unknown frame type", "type", e.frame.Type, "sessionId", s.ID())
+		slog.Warn("Unsupported frame type", "type", e.frame.Type, "sessionId", s.ID())
 		return
 	}
 
-	if err != nil {
+	message := NewMediaMessage(msgType, streamId, e.frame.Timestamp, e.frame.Data, s.calculateDataSize(e.frame.Data))
+	if err := s.writer.writeMessage(s.conn, message); err != nil {
 		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "subType", e.frame.SubType, "err", err)
 	}
 }
 
 // handleSendMetadata MediaSink로부터 받은 메타데이터를 클라이언트로 전송
 func (s *session) handleSendMetadata(e sendMetadataEvent) {
+	streamId := s.getStreamIdFromPath(e.streamPath)
 
-	if err := s.sendMetadataToClient(e.metadata); err != nil {
+	if err := s.sendMetadataToClient(e.metadata, streamId); err != nil {
 		slog.Error("Failed to send metadata to RTMP session", "sessionId", s.ID(), "err", err)
 	}
 }
@@ -295,6 +259,30 @@ func (s *session) Address() string {
 }
 
 func (s *session) Close() error {
+	slog.Info("RTMP session close initiated", 
+		"sessionId", s.ID(),
+		"isPublisher", s.IsPublisher(),
+		"publishedStreamsCount", len(s.publishedStreams),
+		"subscribedStreamsCount", len(s.subscribedStreamIds))
+	
+	// 발행 중인 스트림들 로그
+	for streamId, stream := range s.publishedStreams {
+		if stream != nil {
+			slog.Info("Closing published stream", 
+				"sessionId", s.ID(),
+				"streamId", streamId,
+				"streamPath", stream.ID(),
+				"sinkCount", stream.GetSinkCount())
+		}
+	}
+	
+	// 구독 중인 스트림들 로그
+	for _, streamPath := range s.subscribedStreamIds {
+		slog.Info("Closing subscribed stream", 
+			"sessionId", s.ID(),
+			"streamPath", streamPath)
+	}
+	
 	s.cancel()
 	slog.Info("RTMP session stopping", "sessionId", s.ID())
 	return nil
@@ -476,7 +464,7 @@ func (s *session) handleAMF0ScriptData(message *Message) {
 	case "onMetaData":
 		s.handleOnMetaData(values)
 	default:
-		slog.Info("unknown script command", "command", commandName, "values", values)
+		slog.Error("unknown script command", "command", commandName, "values", values)
 	}
 }
 
@@ -531,38 +519,8 @@ func (s *session) GetStreamInfo() (streamCount int, isPublishing bool, isPlaying
 
 // 구현을 위한 헬퍼 메서드들
 
-// sendVideoFrame 비디오 프레임을 RTMP 메시지로 전송
-func (s *session) sendVideoFrame(frame media.Frame) error {
-	message := &Message{
-		messageHeader: &messageHeader{
-			timestamp: frame.Timestamp,
-			length:    uint32(s.calculateDataSize(frame.Data)),
-			typeId:    MsgTypeVideo,
-			streamId:  1, // 기본 스트림 ID 고정
-		},
-		payload: frame.Data,
-	}
-
-	return s.writer.writeVideoMessage(s.conn, message)
-}
-
-// sendAudioFrame 오디오 프레임을 RTMP 메시지로 전송
-func (s *session) sendAudioFrame(frame media.Frame) error {
-	message := &Message{
-		messageHeader: &messageHeader{
-			timestamp: frame.Timestamp,
-			length:    uint32(s.calculateDataSize(frame.Data)),
-			typeId:    MsgTypeAudio,
-			streamId:  1, // 기본 스트림 ID 고정
-		},
-		payload: frame.Data,
-	}
-
-	return s.writer.writeAudioMessage(s.conn, message)
-}
-
 // sendMetadataToClient 메타데이터를 RTMP onMetaData 메시지로 전송
-func (s *session) sendMetadataToClient(metadata map[string]string) error {
+func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint32) error {
 	// string을 any map으로 변환 (AMF 인코딩을 위해)
 	interfaceMetadata := make(map[string]any)
 	for k, v := range metadata {
@@ -585,19 +543,31 @@ func (s *session) sendMetadataToClient(metadata map[string]string) error {
 			timestamp: 0,
 			length:    uint32(len(encodedData)),
 			typeId:    MsgTypeAMF0Data,
-			streamId:  1, // 기본 스트림 ID 고정
+			streamId:  streamId,
 		},
 		payload: payload,
 	}
 
-	return s.writer.writeScriptMessage(s.conn, message)
+	return s.writer.writeMessage(s.conn, message)
+}
+
+// getStreamIdFromPath string streamPath를 uint32 streamId로 변환
+func (s *session) getStreamIdFromPath(streamPath string) uint32 {
+	// 간단한 해시 기반 변환 (streamPath → streamId)
+	// 실제로는 streamPath에 따른 고정된 매핑을 사용할 수도 있음
+	hash := uint32(0)
+	for _, b := range []byte(streamPath) {
+		hash = hash*31 + uint32(b)
+	}
+	// 0은 피하고 1부터 시작하도록 보정
+	return (hash % 0xFFFFFF) + 1
 }
 
 // calculateDataSize 데이터 크기 계산 헬퍼 함수
-func (s *session) calculateDataSize(data [][]byte) int {
-	totalSize := 0
+func (s *session) calculateDataSize(data [][]byte) uint32 {
+	totalSize := uint32(0)
 	for _, chunk := range data {
-		totalSize += len(chunk)
+		totalSize += uint32(len(chunk))
 	}
 	return totalSize
 }
@@ -726,9 +696,11 @@ func (s *session) handleAMF0Command(message *Message) {
 	case "createStream":
 		s.handleCreateStream(values)
 	case "releaseStream":
-		s.handleReleaseStream(values)
+		// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
+		slog.Debug("releaseStream command received (ignored)", "sessionId", s.ID())
 	case "FCPublish":
-		s.handleFCPublish(values)
+		// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
+		slog.Debug("FCPublish command received (ignored)", "sessionId", s.ID())
 	case "publish":
 		s.handlePublish(values)
 	case "play":
@@ -739,8 +711,10 @@ func (s *session) handleAMF0Command(message *Message) {
 		s.handleCloseStream(values)
 	case "deleteStream":
 		s.handleDeleteStream(values)
+	case "getStreamLength":
+		s.handleGetStreamLength(values)
 	default:
-		slog.Warn("Unknown AMF command", "sessionId", s.ID(), "name", commandName)
+		slog.Error("Unknown AMF command", "sessionId", s.ID(), "name", commandName)
 	}
 }
 
@@ -835,18 +809,6 @@ func (s *session) handleCreateStream(values []any) {
 	slog.Info("createStream successful", "streamID", newStreamID, "transactionID", transactionID)
 }
 
-// handleReleaseStream Flash Media Server 호환을 위한 releaseStream 명령어 처리
-func (s *session) handleReleaseStream(values []any) {
-	slog.Debug("releaseStream command received (ignored)", "sessionId", s.ID())
-	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
-}
-
-// handleFCPublish Flash Media Server 호환을 위한 FCPublish 명령어 처리  
-func (s *session) handleFCPublish(values []any) {
-	slog.Debug("FCPublish command received (ignored)", "sessionId", s.ID())
-	// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
-}
-
 // handlePublish publish 명령어 처리 (소스 모드 활성화)
 func (s *session) handlePublish(values []any) {
 
@@ -905,6 +867,10 @@ func (s *session) handlePublish(values []any) {
 
 // handlePlay play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(values []any) {
+	slog.Info("Play request initiated", 
+		"sessionId", s.ID(),
+		"currentSubscriptions", len(s.subscribedStreamIds),
+		"isPublisher", s.IsPublisher())
 
 	if len(values) < 3 {
 		slog.Error("play: not enough parameters", "length", len(values))
@@ -930,15 +896,37 @@ func (s *session) handlePlay(values []any) {
 		return
 	}
 
-	slog.Info("play request", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
+	slog.Info("Play request details", 
+		"sessionId", s.ID(),
+		"fullStreamPath", fullStreamPath, 
+		"transactionID", transactionID,
+		"currentSubscribedStreams", s.subscribedStreamIds)
+
+	// 이미 구독 중인지 체크
+	for _, existingPath := range s.subscribedStreamIds {
+		if existingPath == fullStreamPath {
+			slog.Warn("Already subscribed to stream", 
+				"sessionId", s.ID(),
+				"streamPath", fullStreamPath)
+		}
+	}
 
 	// 구독 스트림 ID에 추가
 	s.addSubscribedStreamId(fullStreamPath)
 
-	// MediaServer에 play 시작 알림
+	slog.Info("Sending PlayStarted event to MediaServer", 
+		"sessionId", s.ID(),
+		"streamPath", fullStreamPath)
+
+	// MediaServer에 play 시작 알림 (블로킹 - 중요한 이벤트)
 	select {
 	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
+		slog.Info("PlayStarted event sent successfully", 
+			"sessionId", s.ID(),
+			"streamPath", fullStreamPath)
 	case <-s.ctx.Done():
+		slog.Error("Failed to send PlayStarted event - context cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
+		return
 	}
 
 	// 1. NetStream.Play.Reset 전송
@@ -996,6 +984,7 @@ func (s *session) stopPublishing() {
 			select {
 			case s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.NodeTypeRTMP, streamPath):
 			case <-s.ctx.Done():
+				slog.Error("Failed to send PublishStopped event - context cancelled", "sessionId", s.ID(), "streamPath", streamPath)
 			}
 		}
 	}
@@ -1015,6 +1004,8 @@ func (s *session) stopPlaying() {
 		select {
 		case s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.NodeTypeRTMP, streamId):
 		case <-s.ctx.Done():
+			slog.Error("Failed to send PlayStopped event - context cancelled", "sessionId", s.ID(), "streamId", streamId)
+			return
 		}
 	}
 
@@ -1107,8 +1098,10 @@ func (s *session) handleAMF3Command(message *Message) {
 	case "FCPublish":
 		// Flash Media Server 호환을 위한 명령어, 특별한 처리 불필요
 		slog.Debug("FCPublish command received (ignored)", "sessionId", s.ID())
+	case "getStreamLength":
+		s.handleGetStreamLength(values)
 	default:
-		slog.Warn("Unsupported AMF3 command", "sessionId", s.ID(), "command", commandName)
+		slog.Error("Unsupported AMF3 command", "sessionId", s.ID(), "command", commandName)
 	}
 }
 
@@ -1170,19 +1163,9 @@ func (s *session) clearSubscribedStreamIds() {
 	slog.Debug("All subscribed stream IDs cleared", "sessionId", s.ID())
 }
 
-// hasPublishedStreams 발행 스트림 보유 여부 확인
-func (s *session) hasPublishedStreams() bool {
-	return len(s.publishedStreams) > 0
-}
-
 // isPublishingMode 발행 모드 여부 확인
 func (s *session) isPublishingMode() bool {
 	return len(s.publishedStreams) > 0
-}
-
-// isPlayingMode 재생 모드 여부 확인
-func (s *session) isPlayingMode() bool {
-	return !s.isPublishingMode()
 }
 
 // --- MediaSource 인터페이스 구현 (발행자 모드) ---
@@ -1197,12 +1180,10 @@ func (s *session) PublishingStreams() []*media.Stream {
 
 // SubscribedStreams MediaSink 인터페이스 구현 - 구독 중인 스트림 ID 목록 반환
 func (s *session) SubscribedStreams() []string {
-	if s.isPlayingMode() {
-		if len(s.subscribedStreamIds) > 0 {
-			result := make([]string, len(s.subscribedStreamIds))
-			copy(result, s.subscribedStreamIds)
-			return result
-		}
+	if len(s.subscribedStreamIds) > 0 {
+		result := make([]string, len(s.subscribedStreamIds))
+		copy(result, s.subscribedStreamIds)
+		return result
 	}
 	return nil
 }
@@ -1259,7 +1240,7 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 				slog.Info("Stream publish attempt succeeded", "sessionId", s.ID(), "streamKey", streamKey)
 				return true
 			} else {
-				slog.Info("Stream publish attempt failed", "sessionId", s.ID(), "streamKey", streamKey, "error", response.Error)
+				slog.Error("Stream publish attempt failed", "sessionId", s.ID(), "streamKey", streamKey, "error", response.Error)
 				return false
 			}
 		case <-time.After(5 * time.Second):
@@ -1272,7 +1253,7 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 }
 
 // sendPublishErrorResponse publish 에러 응답 전송
-func (s *session) sendPublishErrorResponse(transactionID float64, code string, description string) {
+func (s *session) sendPublishErrorResponse(_ float64, code string, description string) {
 	statusObj := map[string]any{
 		"level":       "error",
 		"code":        code,
@@ -1292,7 +1273,7 @@ func (s *session) sendPublishErrorResponse(transactionID float64, code string, d
 }
 
 // sendPublishSuccessResponse publish 성공 응답 전송
-func (s *session) sendPublishSuccessResponse(transactionID float64, streamPath string) {
+func (s *session) sendPublishSuccessResponse(_ float64, streamPath string) {
 	statusObj := map[string]any{
 		"level":       "status",
 		"code":        "NetStream.Publish.Start",
@@ -1313,7 +1294,7 @@ func (s *session) sendPublishSuccessResponse(transactionID float64, streamPath s
 }
 
 // handleFCUnpublish FCUnpublish 명령어 처리
-func (s *session) handleFCUnpublish(values []any) {
+func (s *session) handleFCUnpublish(_ []any) {
 
 	// 발행 중단 처리
 	if s.isPublishingMode() {
@@ -1322,7 +1303,7 @@ func (s *session) handleFCUnpublish(values []any) {
 }
 
 // handleCloseStream closeStream 명령어 처리
-func (s *session) handleCloseStream(values []any) {
+func (s *session) handleCloseStream(_ []any) {
 
 	// deleteStream과 동일한 처리
 	if s.isPublishingMode() {
@@ -1339,7 +1320,7 @@ func (s *session) handleCloseStream(values []any) {
 }
 
 // handleDeleteStream deleteStream 명령어 처리
-func (s *session) handleDeleteStream(values []any) {
+func (s *session) handleDeleteStream(_ []any) {
 
 	// 발행 중이었다면 발행 중단 이벤트 전송
 	if s.isPublishingMode() {
@@ -1354,4 +1335,47 @@ func (s *session) handleDeleteStream(values []any) {
 	s.streamIdToPath = make(map[int]string)
 	s.streamPathToId = make(map[string]int)
 	s.subscribedStreamIds = s.subscribedStreamIds[:0]
+}
+
+// handleGetStreamLength getStreamLength 명령어 처리 (Flash Media Server 호환)
+func (s *session) handleGetStreamLength(values []any) {
+	// getStreamLength는 보통 최소 3개 매개변수: "getStreamLength", transactionID, null, streamName
+	if len(values) < 4 {
+		slog.Debug("getStreamLength: insufficient parameters", "sessionId", s.ID(), "length", len(values))
+		return
+	}
+
+	transactionID, ok := values[1].(float64)
+	if !ok {
+		slog.Debug("getStreamLength: invalid transaction ID", "sessionId", s.ID(), "type", utils.TypeName(values[1]))
+		return
+	}
+
+	// 스트림 이름 (4번째 매개변수)
+	streamName, ok := values[3].(string)
+	if !ok {
+		slog.Debug("getStreamLength: invalid stream name", "sessionId", s.ID(), "type", utils.TypeName(values[3]))
+		return
+	}
+
+	slog.Debug("getStreamLength request", "sessionId", s.ID(), "streamName", streamName, "transactionID", transactionID)
+
+	// 라이브 스트림의 경우 길이는 항상 -1 (무한대/라이브)을 반환
+	// 이는 Flash Media Server의 표준 동작입니다
+	streamLength := -1.0
+
+	// _result 응답 전송
+	sequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, streamLength)
+	if err != nil {
+		slog.Error("getStreamLength: failed to encode response", "sessionId", s.ID(), "err", err)
+		return
+	}
+
+	err = s.writer.writeCommand(s.conn, sequence)
+	if err != nil {
+		slog.Error("getStreamLength: failed to write response", "sessionId", s.ID(), "err", err)
+		return
+	}
+
+	slog.Debug("getStreamLength response sent", "sessionId", s.ID(), "streamName", streamName, "length", streamLength, "transactionID", transactionID)
 }
