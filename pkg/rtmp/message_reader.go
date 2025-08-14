@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sol/pkg/media"
-	"sync"
 )
 
 type messageReader struct {
@@ -55,14 +53,31 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 	// 모든 경우에 헤더를 업데이트 (Fmt1/2/3의 경우 상속받은 완전한 헤더로 업데이트)
 	ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, messageHeader)
 
-	payload, err := readPooledPayload(r, ms.readerContext.bufferPool, ms.readerContext.poolManager, ms.readerContext.nextChunkSize(basicHeader.chunkStreamID))
-	if err != nil {
+	chunkSize := ms.readerContext.nextChunkSize(basicHeader.chunkStreamID)
+	
+	// 첫 번째 청크인 경우 전체 메시지 버퍼 할당
+	if ms.readerContext.isInitialChunk(basicHeader.chunkStreamID) {
+		ms.readerContext.allocateMessageBuffer(basicHeader.chunkStreamID)
+	}
+	
+	// 제로카피: 메시지 버퍼에 직접 읽기
+	messageBuffer, offset := ms.readerContext.getMessageBuffer(basicHeader.chunkStreamID)
+	if messageBuffer == nil {
+		return nil, fmt.Errorf("failed to get message buffer for chunkStreamId %d", basicHeader.chunkStreamID)
+	}
+	
+	// 메시지 버퍼의 적절한 위치에 직접 읽기
+	readBuffer := messageBuffer[offset : offset+chunkSize]
+	if _, err := io.ReadFull(r, readBuffer); err != nil {
+		// Pool에서 할당된 버퍼인 경우 반환 필요
+		ms.readerContext.poolManager.ReleaseBuffer(messageBuffer)
 		return nil, err
 	}
+	
+	// 읽은 데이터 길이 업데이트
+	ms.readerContext.updatePayloadLength(basicHeader.chunkStreamID, chunkSize)
 
-	ms.readerContext.appendPayload(basicHeader.chunkStreamID, payload)
-
-	return NewChunk(basicHeader, messageHeader, payload), nil
+	return NewChunk(basicHeader, messageHeader, readBuffer), nil
 }
 
 func readBasicHeader(r io.Reader) (*basicHeader, error) {
@@ -262,20 +277,6 @@ func readExtendedTimestamp(r io.Reader) (uint32, error) {
 	return binary.BigEndian.Uint32(buf[:]), nil
 }
 
-// readPooledPayload reads payload using pool manager for tracking
-func readPooledPayload(r io.Reader, bufferPool *sync.Pool, poolManager *media.PoolManager, size uint32) ([]byte, error) {
-	// PoolManager를 통해 버퍼 할당
-	pb := poolManager.AllocateBuffer(bufferPool, size)
-
-	if _, err := io.ReadFull(r, pb.Data); err != nil {
-		// 오류 시 pool manager를 통해 반환
-		poolManager.ReleaseBuffer(pb.Data)
-		return nil, err
-	}
-
-	// 추적되는 버퍼를 그대로 반환 (복사하지 않음)
-	return pb.Data, nil
-}
 
 func readUint24BE(buf []byte) uint32 {
 	return uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])

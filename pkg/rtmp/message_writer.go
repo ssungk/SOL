@@ -36,11 +36,8 @@ func (mw *messageWriter) writeMessage(w io.Writer, msg *Message) error {
 
 // 메시지를 청크 배열로 구성 (zero-copy)
 func (mw *messageWriter) buildChunks(msg *Message) ([]*Chunk, error) {
-	// payload의 전체 길이 계산
-	totalPayloadLength := 0
-	for _, chunk := range msg.payload {
-		totalPayloadLength += len(chunk)
-	}
+	// payload의 전체 길이
+	totalPayloadLength := len(msg.payload)
 
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
@@ -71,53 +68,18 @@ func (mw *messageWriter) buildChunks(msg *Message) ([]*Chunk, error) {
 	return chunks, nil
 }
 
-// [][]byte payload에서 지정된 오프셋과 크기만큼 데이터를 추출 (zero-copy)
-func extractPayloadSlice(payload [][]byte, offset, size int) []byte {
-	if size == 0 {
+// []byte payload에서 지정된 오프셋과 크기만큼 데이터를 추출 (zero-copy)
+func extractPayloadSlice(payload []byte, offset, size int) []byte {
+	if size == 0 || offset >= len(payload) {
 		return nil
 	}
 
-	// 전체 페이로드를 하나로 합치기 (필요시에만)
-	var result []byte
-	currentOffset := 0
-	startFound := false
-	remaining := size
-
-	for _, chunk := range payload {
-		chunkLen := len(chunk)
-
-		if !startFound {
-			if currentOffset+chunkLen <= offset {
-				// 아직 시작 지점에 도달하지 않음
-				currentOffset += chunkLen
-				continue
-			}
-			// 시작 지점을 찾음
-			startFound = true
-			startIdx := offset - currentOffset
-			copyLen := chunkLen - startIdx
-			if copyLen > remaining {
-				copyLen = remaining
-			}
-			result = append(result, chunk[startIdx:startIdx+copyLen]...)
-			remaining -= copyLen
-		} else {
-			// 이미 시작지점을 지나서 계속 복사
-			copyLen := chunkLen
-			if copyLen > remaining {
-				copyLen = remaining
-			}
-			result = append(result, chunk[:copyLen]...)
-			remaining -= copyLen
-		}
-
-		if remaining <= 0 {
-			break
-		}
-		currentOffset += chunkLen
+	end := offset + size
+	if end > len(payload) {
+		end = len(payload)
 	}
 
-	return result
+	return payload[offset:end]
 }
 
 // 메시지 타입에 따라 적절한 청크 스트림 ID를 결정
@@ -267,7 +229,7 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) erro
 
 func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := NewMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
-	msg := NewMessage(header, [][]byte{payload})
+	msg := NewMessage(header, payload)
 	return mw.writeMessage(w, msg)
 }
 
@@ -277,7 +239,7 @@ func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error 
 	binary.BigEndian.PutUint32(payload, chunkSize)
 
 	header := NewMessageHeader(0, 4, MsgTypeSetChunkSize, 0)
-	msg := NewMessage(header, [][]byte{payload})
+	msg := NewMessage(header, payload)
 
 	if err := mw.writeMessage(w, msg); err != nil {
 		return err
@@ -295,28 +257,16 @@ func PutUint24(b []byte, v uint32) {
 }
 
 // 오디오 데이터 전송 (zero-copy)
-func (mw *messageWriter) writeAudioData(w io.Writer, audioData [][]byte, timestamp uint32) error {
-	// 전체 데이터 크기 계산
-	totalLength := 0
-	for _, chunk := range audioData {
-		totalLength += len(chunk)
-	}
-
-	header := NewMessageHeader(timestamp, uint32(totalLength), MsgTypeAudio, 0)
-	msg := NewMessage(header, audioData) // [][]byte 그대로 전달
+func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
+	header := NewMessageHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
+	msg := NewMessage(header, audioData)
 	return mw.writeMessage(w, msg)
 }
 
 // 비디오 데이터 전송 (zero-copy)
-func (mw *messageWriter) writeVideoData(w io.Writer, videoData [][]byte, timestamp uint32) error {
-	// 전체 데이터 크기 계산
-	totalLength := 0
-	for _, chunk := range videoData {
-		totalLength += len(chunk)
-	}
-
-	header := NewMessageHeader(timestamp, uint32(totalLength), MsgTypeVideo, 0)
-	msg := NewMessage(header, videoData) // [][]byte 그대로 전달
+func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
+	header := NewMessageHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
+	msg := NewMessage(header, videoData)
 	return mw.writeMessage(w, msg)
 }
 
@@ -329,7 +279,7 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	}
 
 	header := NewMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
-	msg := NewMessage(header, [][]byte{payload})
+	msg := NewMessage(header, payload)
 	return mw.writeMessage(w, msg)
 }
 

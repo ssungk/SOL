@@ -187,18 +187,46 @@ func (s *session) SendMetadata(streamId string, metadata map[string]string) erro
 func (s *session) handleSendFrame(e sendFrameEvent) {
 	streamId := s.getStreamIdFromPath(e.streamPath)
 
+	// Frame.Data를 단일 버퍼로 변환 (임시 처리)
+	var frameData []byte
+	if len(e.frame.Data) == 1 {
+		frameData = e.frame.Data[0]
+	} else if len(e.frame.Data) > 1 {
+		// 여러 청크를 하나로 합치기
+		totalSize := 0
+		for _, chunk := range e.frame.Data {
+			totalSize += len(chunk)
+		}
+		frameData = make([]byte, totalSize)
+		offset := 0
+		for _, chunk := range e.frame.Data {
+			copy(frameData[offset:], chunk)
+			offset += len(chunk)
+		}
+	}
+
 	var msgType uint8
+	var rtmpData []byte
+	
 	switch e.frame.Type {
 	case media.TypeVideo:
 		msgType = MsgTypeVideo
+		// 비디오: RTMP 헤더 재생성 후 데이터와 결합
+		header := GenerateVideoHeader(e.frame.SubType, 0) // composition time = 0으로 설정
+		rtmpData = CombineHeaderAndData(header, frameData)
+		
 	case media.TypeAudio:
 		msgType = MsgTypeAudio
+		// 오디오: RTMP 헤더 재생성 후 데이터와 결합
+		header := GenerateAudioHeader(e.frame.SubType)
+		rtmpData = CombineHeaderAndData(header, frameData)
+		
 	default:
 		slog.Warn("Unsupported frame type", "type", e.frame.Type, "sessionId", s.ID())
 		return
 	}
 
-	message := NewMediaMessage(msgType, streamId, e.frame.Timestamp, e.frame.Data, s.calculateDataSize(e.frame.Data))
+	message := NewMediaMessage(msgType, streamId, e.frame.Timestamp, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
 		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "subType", e.frame.SubType, "err", err)
 	}
@@ -259,30 +287,30 @@ func (s *session) Address() string {
 }
 
 func (s *session) Close() error {
-	slog.Info("RTMP session close initiated", 
+	slog.Info("RTMP session close initiated",
 		"sessionId", s.ID(),
 		"isPublisher", s.IsPublisher(),
 		"publishedStreamsCount", len(s.publishedStreams),
 		"subscribedStreamsCount", len(s.subscribedStreamIds))
-	
+
 	// 발행 중인 스트림들 로그
 	for streamId, stream := range s.publishedStreams {
 		if stream != nil {
-			slog.Info("Closing published stream", 
+			slog.Info("Closing published stream",
 				"sessionId", s.ID(),
 				"streamId", streamId,
 				"streamPath", stream.ID(),
 				"sinkCount", stream.GetSinkCount())
 		}
 	}
-	
+
 	// 구독 중인 스트림들 로그
 	for _, streamPath := range s.subscribedStreamIds {
-		slog.Info("Closing subscribed stream", 
+		slog.Info("Closing subscribed stream",
 			"sessionId", s.ID(),
 			"streamPath", streamPath)
 	}
-	
+
 	s.cancel()
 	slog.Info("RTMP session stopping", "sessionId", s.ID())
 	return nil
@@ -325,14 +353,23 @@ func (s *session) handleAudio(message *Message) {
 		return
 	}
 
-	// 첫 번째 청크의 첫 번째 바이트로 오디오 정보 추출
-	firstByte := message.payload[0][0]
+	// 첫 번째 바이트로 오디오 정보 추출
+	firstByte := message.payload[0]
 	frameType := s.parseAudioFrameType(firstByte, message.payload)
 
 	// 모든 발행된 스트림에 오디오 프레임 전송
 	if len(s.publishedStreams) > 0 {
+		// rawData 사용 (RTMP 헤더 제외된 순수 오디오 데이터)
+		var dataToSend [][]byte
+		if len(message.rawData) > 0 {
+			dataToSend = [][]byte{message.rawData}
+		} else {
+			// rawData가 없으면 기존 payload 사용 (하위 호환성)
+			dataToSend = [][]byte{message.payload}
+		}
+
 		// Pool 추적이 가능한 ManagedFrame 생성
-		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, false, s.reader.readerContext.poolManager)
+		managedFrame := createManagedFrame(frameType, message.messageHeader.timestamp, dataToSend, false, s.reader.readerContext.poolManager)
 
 		// 모든 발행된 스트림에 전송
 		for _, stream := range s.publishedStreams {
@@ -363,14 +400,23 @@ func (s *session) handleVideo(message *Message) {
 		return
 	}
 
-	// 첫 번째 청크의 첫 번째 바이트로 비디오 정보 추출
-	firstByte := message.payload[0][0]
+	// 첫 번째 바이트로 비디오 정보 추출
+	firstByte := message.payload[0]
 	frameType := s.parseVideoFrameType(firstByte, message.payload)
 
 	// 모든 발행된 스트림에 비디오 프레임 전송
 	if len(s.publishedStreams) > 0 {
+		// rawData 사용 (RTMP 헤더 제외된 순수 비디오 데이터)
+		var dataToSend [][]byte
+		if len(message.rawData) > 0 {
+			dataToSend = [][]byte{message.rawData}
+		} else {
+			// rawData가 없으면 기존 payload 사용 (하위 호환성)
+			dataToSend = [][]byte{message.payload}
+		}
+
 		// Pool 추적이 가능한 ManagedFrame 생성
-		managedFrame := convertRTMPFrameToManagedFrame(frameType, message.messageHeader.timestamp, message.payload, true, s.reader.readerContext.poolManager)
+		managedFrame := createManagedFrame(frameType, message.messageHeader.timestamp, dataToSend, true, s.reader.readerContext.poolManager)
 
 		// 모든 발행된 스트림에 전송
 		for _, stream := range s.publishedStreams {
@@ -383,57 +429,57 @@ func (s *session) handleVideo(message *Message) {
 }
 
 // parseAudioFrameType 오디오 프레임 타입 파싱
-func (s *session) parseAudioFrameType(firstByte byte, payload [][]byte) RTMPFrameType {
+func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.FrameSubType {
 	// AAC 특수 처리
-	if ((firstByte>>4)&0x0F) == 10 && len(payload[0]) > 1 {
-		switch payload[0][1] {
+	if ((firstByte>>4)&0x0F) == 10 && len(payload) > 1 {
+		switch payload[1] {
 		case 0:
-			return RTMPFrameTypeAACSequenceHeader
+			return media.AudioSequenceHeader
 		case 1:
-			return RTMPFrameTypeAACRaw
+			return media.AudioRawData
 		}
 	}
 
 	// 기본적으로는 raw 오디오로 처리
-	return RTMPFrameTypeAACRaw
+	return media.AudioRawData
 }
 
 // parseVideoFrameType 비디오 프레임 타입 파싱
-func (s *session) parseVideoFrameType(firstByte byte, payload [][]byte) RTMPFrameType {
+func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.FrameSubType {
 	// 프레임 타입 (4비트)
 	frameTypeFlag := (firstByte >> 4) & 0x0F
 	codecId := firstByte & 0x0F
 
 	// H.264 특수 처리
-	if codecId == 7 && len(payload[0]) > 1 {
-		avcPacketType := payload[0][1]
+	if codecId == 7 && len(payload) > 1 {
+		avcPacketType := payload[1]
 		switch avcPacketType {
 		case 0:
-			return RTMPFrameTypeAVCSequenceHeader
+			return media.VideoSequenceHeader
 		case 1:
 			if frameTypeFlag == 1 {
-				return RTMPFrameTypeKeyFrame
+				return media.VideoKeyFrame
 			}
-			return RTMPFrameTypeInterFrame
+			return media.VideoInterFrame
 		case 2:
-			return RTMPFrameTypeAVCEndOfSequence
+			return media.VideoEndOfSequence
 		}
 	}
 
 	// 일반적인 프레임 타입
 	switch frameTypeFlag {
 	case 1:
-		return RTMPFrameTypeKeyFrame
+		return media.VideoKeyFrame
 	case 2:
-		return RTMPFrameTypeInterFrame
+		return media.VideoInterFrame
 	case 3:
-		return RTMPFrameTypeDisposableInterFrame
+		return media.VideoDisposableInterFrame
 	case 4:
-		return RTMPFrameTypeGeneratedKeyFrame
+		return media.VideoGeneratedKeyFrame
 	case 5:
-		return RTMPFrameTypeVideoInfoFrame
+		return media.VideoInfoFrame
 	default:
-		return RTMPFrameTypeInterFrame
+		return media.VideoInterFrame
 	}
 }
 
@@ -441,7 +487,7 @@ func (s *session) parseVideoFrameType(firstByte byte, payload [][]byte) RTMPFram
 func (s *session) handleAMF0ScriptData(message *Message) {
 
 	// AMF 데이터 디코딩
-	reader := ConcatByteSlicesReader(message.payload)
+	reader := bytes.NewReader(message.payload)
 	values, err := amf.DecodeAMF0Sequence(reader)
 	if err != nil {
 		slog.Error("failed to decode script data", "err", err)
@@ -537,7 +583,6 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint
 	}
 
 	// script data 메시지로 전송
-	payload := [][]byte{encodedData}
 	message := &Message{
 		messageHeader: &messageHeader{
 			timestamp: 0,
@@ -545,7 +590,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint
 			typeId:    MsgTypeAMF0Data,
 			streamId:  streamId,
 		},
-		payload: payload,
+		payload: encodedData,
 	}
 
 	return s.writer.writeMessage(s.conn, message)
@@ -585,32 +630,13 @@ func ConcatByteSlicesReader(slices [][]byte) io.Reader {
 func (s *session) handleSetChunkSize(message *Message) {
 	slog.Debug("handleSetChunkSize", "sessionId", s.ID())
 
-	// 전체 payload 길이 계산
-	totalLength := 0
-	for _, chunk := range message.payload {
-		totalLength += len(chunk)
-	}
-
-	if totalLength != 4 {
-		slog.Error("Invalid Set Chunk Size message length", "length", totalLength, "sessionId", s.ID())
+	if len(message.payload) != 4 {
+		slog.Error("Invalid Set Chunk Size message length", "length", len(message.payload), "sessionId", s.ID())
 		return
 	}
 
-	// 첫 번째 청크에서 4바이트 읽기 (big endian)
-	var chunkSizeBytes []byte
-	if len(message.payload) > 0 && len(message.payload[0]) >= 4 {
-		chunkSizeBytes = message.payload[0][:4]
-	} else {
-		// 여러 청크에 걸쳐있는 경우 합치기
-		chunkSizeBytes = make([]byte, 0, 4)
-		for _, chunk := range message.payload {
-			chunkSizeBytes = append(chunkSizeBytes, chunk...)
-			if len(chunkSizeBytes) >= 4 {
-				chunkSizeBytes = chunkSizeBytes[:4]
-				break
-			}
-		}
-	}
+	// 4바이트 읽기 (big endian)
+	chunkSizeBytes := message.payload[:4]
 
 	newChunkSize := binary.BigEndian.Uint32(chunkSizeBytes)
 
@@ -634,32 +660,13 @@ func (s *session) handleSetChunkSize(message *Message) {
 func (s *session) handleAbort(message *Message) {
 	slog.Debug("handleAbort", "sessionId", s.ID())
 
-	// 전체 payload 길이 계산
-	totalLength := 0
-	for _, chunk := range message.payload {
-		totalLength += len(chunk)
-	}
-
-	if totalLength != 4 {
-		slog.Error("Invalid Abort message length", "length", totalLength, "sessionId", s.ID())
+	if len(message.payload) != 4 {
+		slog.Error("Invalid Abort message length", "length", len(message.payload), "sessionId", s.ID())
 		return
 	}
 
-	// 첫 번째 청크에서 4바이트 읽기 (big endian)
-	var chunkStreamIdBytes []byte
-	if len(message.payload) > 0 && len(message.payload[0]) >= 4 {
-		chunkStreamIdBytes = message.payload[0][:4]
-	} else {
-		// 여러 청크에 걸쳐있는 경우 합치기
-		chunkStreamIdBytes = make([]byte, 0, 4)
-		for _, chunk := range message.payload {
-			chunkStreamIdBytes = append(chunkStreamIdBytes, chunk...)
-			if len(chunkStreamIdBytes) >= 4 {
-				chunkStreamIdBytes = chunkStreamIdBytes[:4]
-				break
-			}
-		}
-	}
+	// 4바이트 읽기 (big endian)
+	chunkStreamIdBytes := message.payload[:4]
 
 	chunkStreamId := binary.BigEndian.Uint32(chunkStreamIdBytes)
 
@@ -672,7 +679,7 @@ func (s *session) handleAbort(message *Message) {
 // handleAMF0Command AMF0 명령어 처리
 func (s *session) handleAMF0Command(message *Message) {
 	slog.Debug("handleAMFCommand", "sessionId", s.ID())
-	reader := ConcatByteSlicesReader(message.payload)
+	reader := bytes.NewReader(message.payload)
 	values, err := amf.DecodeAMF0Sequence(reader)
 	if err != nil {
 		slog.Error("Failed to decode AMF sequence", "sessionId", s.ID(), "err", err)
@@ -867,7 +874,7 @@ func (s *session) handlePublish(values []any) {
 
 // handlePlay play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(values []any) {
-	slog.Info("Play request initiated", 
+	slog.Info("Play request initiated",
 		"sessionId", s.ID(),
 		"currentSubscriptions", len(s.subscribedStreamIds),
 		"isPublisher", s.IsPublisher())
@@ -896,16 +903,16 @@ func (s *session) handlePlay(values []any) {
 		return
 	}
 
-	slog.Info("Play request details", 
+	slog.Info("Play request details",
 		"sessionId", s.ID(),
-		"fullStreamPath", fullStreamPath, 
+		"fullStreamPath", fullStreamPath,
 		"transactionID", transactionID,
 		"currentSubscribedStreams", s.subscribedStreamIds)
 
 	// 이미 구독 중인지 체크
 	for _, existingPath := range s.subscribedStreamIds {
 		if existingPath == fullStreamPath {
-			slog.Warn("Already subscribed to stream", 
+			slog.Warn("Already subscribed to stream",
 				"sessionId", s.ID(),
 				"streamPath", fullStreamPath)
 		}
@@ -914,14 +921,14 @@ func (s *session) handlePlay(values []any) {
 	// 구독 스트림 ID에 추가
 	s.addSubscribedStreamId(fullStreamPath)
 
-	slog.Info("Sending PlayStarted event to MediaServer", 
+	slog.Info("Sending PlayStarted event to MediaServer",
 		"sessionId", s.ID(),
 		"streamPath", fullStreamPath)
 
 	// MediaServer에 play 시작 알림 (블로킹 - 중요한 이벤트)
 	select {
 	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
-		slog.Info("PlayStarted event sent successfully", 
+		slog.Info("PlayStarted event sent successfully",
 			"sessionId", s.ID(),
 			"streamPath", fullStreamPath)
 	case <-s.ctx.Done():
@@ -1016,7 +1023,7 @@ func (s *session) stopPlaying() {
 // handleAMF3ScriptData AMF3 스크립트 데이터 처리
 func (s *session) handleAMF3ScriptData(message *Message) {
 	// AMF3 데이터 디코딩
-	reader := ConcatByteSlicesReader(message.payload)
+	reader := bytes.NewReader(message.payload)
 
 	// AMF3 컨텍스트를 사용하여 디코딩
 	values, err := amf.DecodeAMF3Sequence(reader)
@@ -1054,7 +1061,7 @@ func (s *session) handleAMF3ScriptData(message *Message) {
 func (s *session) handleAMF3Command(message *Message) {
 	slog.Debug("handleAMF3Command", "sessionId", s.ID())
 
-	reader := ConcatByteSlicesReader(message.payload)
+	reader := bytes.NewReader(message.payload)
 
 	// AMF3 컨텍스트를 사용하여 디코딩
 	values, err := amf.DecodeAMF3Sequence(reader)

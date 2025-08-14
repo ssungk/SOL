@@ -4,50 +4,86 @@ import (
 	"sol/pkg/media"
 )
 
-// RTMPFrameType RTMP 프레임 타입 정의
-type RTMPFrameType string
 
-const (
-	RTMPFrameTypeKeyFrame             RTMPFrameType = "key frame"
-	RTMPFrameTypeInterFrame           RTMPFrameType = "inter frame"
-	RTMPFrameTypeDisposableInterFrame RTMPFrameType = "disposable inter frame"
-	RTMPFrameTypeGeneratedKeyFrame    RTMPFrameType = "generated key frame"
-	RTMPFrameTypeVideoInfoFrame       RTMPFrameType = "video info/command frame"
-	RTMPFrameTypeAVCSequenceHeader    RTMPFrameType = "AVC sequence header"
-	RTMPFrameTypeAVCEndOfSequence     RTMPFrameType = "AVC end of sequence"
-	RTMPFrameTypeAACSequenceHeader    RTMPFrameType = "AAC sequence header"
-	RTMPFrameTypeAACRaw               RTMPFrameType = "AAC raw"
-)
-
-// RTMPFrameTypeToFrameSubType RTMP 프레임 타입을 media.FrameSubType으로 변환
-func RTMPFrameTypeToFrameSubType(rtmpType RTMPFrameType) media.FrameSubType {
-	switch rtmpType {
-	case RTMPFrameTypeKeyFrame:
-		return media.VideoKeyFrame
-	case RTMPFrameTypeInterFrame:
-		return media.VideoInterFrame
-	case RTMPFrameTypeDisposableInterFrame:
-		return media.VideoDisposableInterFrame
-	case RTMPFrameTypeGeneratedKeyFrame:
-		return media.VideoGeneratedKeyFrame
-	case RTMPFrameTypeVideoInfoFrame:
-		return media.VideoInfoFrame
-	case RTMPFrameTypeAVCSequenceHeader:
-		return media.VideoSequenceHeader
-	case RTMPFrameTypeAVCEndOfSequence:
-		return media.VideoEndOfSequence
-	case RTMPFrameTypeAACSequenceHeader:
-		return media.AudioSequenceHeader
-	case RTMPFrameTypeAACRaw:
-		return media.AudioRawData
+// GenerateVideoHeader 비디오 프레임을 위한 RTMP 헤더 생성 (5바이트)
+func GenerateVideoHeader(frameSubType media.FrameSubType, compositionTime uint32) []byte {
+	header := make([]byte, 5)
+	
+	// Frame Type + Codec ID (1바이트)
+	switch frameSubType {
+	case media.VideoKeyFrame:
+		header[0] = 0x17 // Key frame + AVC
+	case media.VideoInterFrame:
+		header[0] = 0x27 // Inter frame + AVC
+	case media.VideoDisposableInterFrame:
+		header[0] = 0x37 // Disposable inter frame + AVC
+	case media.VideoGeneratedKeyFrame:
+		header[0] = 0x47 // Generated key frame + AVC
+	case media.VideoInfoFrame:
+		header[0] = 0x57 // Video info frame + AVC
+	case media.VideoSequenceHeader:
+		header[0] = 0x17 // Key frame + AVC
+	case media.VideoEndOfSequence:
+		header[0] = 0x17 // Key frame + AVC
 	default:
-		// 기본값 반환
-		return media.VideoInterFrame
+		header[0] = 0x27 // 기본값: Inter frame + AVC
 	}
+	
+	// AVC Packet Type (1바이트)
+	switch frameSubType {
+	case media.VideoSequenceHeader:
+		header[1] = 0x00 // AVC sequence header
+	case media.VideoEndOfSequence:
+		header[1] = 0x02 // AVC end of sequence
+	default:
+		header[1] = 0x01 // AVC NALU
+	}
+	
+	// Composition Time (3바이트, big-endian)
+	header[2] = byte((compositionTime >> 16) & 0xFF)
+	header[3] = byte((compositionTime >> 8) & 0xFF)
+	header[4] = byte(compositionTime & 0xFF)
+	
+	return header
 }
 
-// convertRTMPFrameToManagedFrame RTMP 프레임을 ManagedFrame으로 변환 (pool 추적)
-func convertRTMPFrameToManagedFrame(frameType RTMPFrameType, timestamp uint32, data [][]byte, isVideo bool, poolManager *media.PoolManager) *media.ManagedFrame {
+// GenerateAudioHeader 오디오 프레임을 위한 RTMP 헤더 생성 (2바이트)
+func GenerateAudioHeader(frameSubType media.FrameSubType) []byte {
+	header := make([]byte, 2)
+	
+	// Audio Info (1바이트): Sound Format(4bit) + Sound Rate(2bit) + Sound Size(1bit) + Sound Type(1bit)
+	// AAC: 1010 + 11 + 1 + 1 = 0xAF
+	header[0] = 0xAF
+	
+	// AAC Packet Type (1바이트)
+	switch frameSubType {
+	case media.AudioSequenceHeader:
+		header[1] = 0x00 // AAC sequence header
+	case media.AudioRawData:
+		header[1] = 0x01 // AAC raw data
+	default:
+		header[1] = 0x01 // 기본값: AAC raw data
+	}
+	
+	return header
+}
+
+// CombineHeaderAndData RTMP 헤더와 데이터를 결합하여 새로운 []byte 생성
+func CombineHeaderAndData(header []byte, data []byte) []byte {
+	if len(data) == 0 {
+		return header
+	}
+	
+	// 헤더와 데이터를 결합한 새로운 버퍼 생성
+	combined := make([]byte, len(header)+len(data))
+	copy(combined, header)
+	copy(combined[len(header):], data)
+	
+	return combined
+}
+
+// createManagedFrame 미디어 프레임을 ManagedFrame으로 변환 (pool 추적)
+func createManagedFrame(frameSubType media.FrameSubType, timestamp uint32, data [][]byte, isVideo bool, poolManager *media.PoolManager) *media.ManagedFrame {
 	var mediaType media.Type
 	if isVideo {
 		mediaType = media.TypeVideo
@@ -56,7 +92,7 @@ func convertRTMPFrameToManagedFrame(frameType RTMPFrameType, timestamp uint32, d
 	}
 
 	// ManagedFrame 생성
-	managedFrame := media.NewManagedFrame(mediaType, RTMPFrameTypeToFrameSubType(frameType), timestamp, poolManager)
+	managedFrame := media.NewManagedFrame(mediaType, frameSubType, timestamp, poolManager)
 
 	// 각 데이터 청크를 추가
 	for _, chunk := range data {
