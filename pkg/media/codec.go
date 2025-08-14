@@ -23,9 +23,6 @@ func StringToFrameSubType(frameType string, isVideo bool) FrameSubType {
 		   strings.Contains(frameTypeLower, "bi-directional") {
 			return VideoDisposableInterFrame
 		}
-		if strings.Contains(frameTypeLower, "generated key frame") {
-			return VideoGeneratedKeyFrame
-		}
 		if strings.Contains(frameTypeLower, "info") || strings.Contains(frameTypeLower, "command") {
 			return VideoInfoFrame
 		}

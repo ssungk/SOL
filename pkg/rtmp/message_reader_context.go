@@ -3,7 +3,6 @@ package rtmp
 import (
 	"fmt"
 	"log/slog"
-	"sol/pkg/media"
 	"sync"
 )
 
@@ -17,13 +16,13 @@ type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
 	payloads       map[uint32][]byte
 	payloadLengths map[uint32]uint32
+	pooledBuffers  map[uint32]*sync.Pool // 각 chunkStreamId별 pool 추적
 	chunkSize      uint32
 	
 	// 크기별 Pool 계층
-	smallPool   *sync.Pool // ~4KB
-	mediumPool  *sync.Pool // ~64KB  
-	largePool   *sync.Pool // ~1MB
-	poolManager *media.PoolManager
+	smallPool  *sync.Pool // ~4KB
+	mediumPool *sync.Pool // ~64KB  
+	largePool  *sync.Pool // ~1MB
 }
 
 func newMessageReaderContext() *messageReaderContext {
@@ -31,13 +30,13 @@ func newMessageReaderContext() *messageReaderContext {
 		messageHeaders: make(map[uint32]*messageHeader),
 		payloads:       make(map[uint32][]byte),
 		payloadLengths: make(map[uint32]uint32),
+		pooledBuffers:  make(map[uint32]*sync.Pool),
 		chunkSize:      DefaultChunkSize,
 		
 		// 크기별 Pool 계층 초기화
-		smallPool:   NewBufferPool(SmallBufferSize),
-		mediumPool:  NewBufferPool(MediumBufferSize),
-		largePool:   NewBufferPool(LargeBufferSize),
-		poolManager: media.NewPoolManager(),
+		smallPool:  NewBufferPool(SmallBufferSize),
+		mediumPool: NewBufferPool(MediumBufferSize),
+		largePool:  NewBufferPool(LargeBufferSize),
 	}
 }
 
@@ -47,10 +46,18 @@ func (mrc *messageReaderContext) setChunkSize(size uint32) {
 }
 
 func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
+	// Pool 버퍼 반납 후 상태 제거
+	if pool, exists := mrc.pooledBuffers[chunkStreamId]; exists {
+		if payload, payloadExists := mrc.payloads[chunkStreamId]; payloadExists {
+			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
+		}
+	}
+	
 	// 해당 청크 스트림의 모든 상태 제거
 	delete(mrc.messageHeaders, chunkStreamId)
 	delete(mrc.payloads, chunkStreamId)
 	delete(mrc.payloadLengths, chunkStreamId)
+	delete(mrc.pooledBuffers, chunkStreamId)
 }
 
 func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *messageHeader) {
@@ -69,7 +76,7 @@ func (ms *messageReaderContext) selectAppropriatePool(size uint32) *sync.Pool {
 	}
 }
 
-// allocateMessageBuffer 전체 메시지 크기만큼 버퍼 할당 (제로카피를 위해)
+// allocateMessageBuffer 전체 메시지 크기만큼 버퍼 할당
 func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) []byte {
 	header := ms.messageHeaders[chunkStreamId]
 	if header == nil {
@@ -79,12 +86,13 @@ func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) []by
 	// 메시지 크기에 따라 적절한 Pool 선택
 	pool := ms.selectAppropriatePool(header.length)
 	
-	// PoolManager를 통해 전체 메시지 크기만큼 버퍼 할당
-	pb := ms.poolManager.AllocateBuffer(pool, header.length)
-	ms.payloads[chunkStreamId] = pb.Data
+	// Pool에서 버퍼 할당하고 메시지 크기로 슬라이싱
+	buf := pool.Get().([]byte)[:header.length]
+	ms.payloads[chunkStreamId] = buf
 	ms.payloadLengths[chunkStreamId] = 0
+	ms.pooledBuffers[chunkStreamId] = pool // pool 추적
 	
-	return pb.Data
+	return buf
 }
 
 // getMessageBuffer 현재 메시지 버퍼와 쓰기 위치 반환
@@ -142,11 +150,22 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 			continue
 		}
 
-		msg := NewMessage(messageHeader, payload)
+		// 메시지 생성 (payload 데이터 복사)
+		payloadCopy := make([]byte, len(payload))
+		copy(payloadCopy, payload)
+		msg := NewMessage(messageHeader, payloadCopy)
+		
+		// Pool 버퍼 반납
+		if pool, exists := ms.pooledBuffers[chunkStreamId]; exists {
+			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
+			delete(ms.pooledBuffers, chunkStreamId)
+		}
+		
+		// 상태 정리
 		delete(ms.payloadLengths, chunkStreamId)
 		delete(ms.payloads, chunkStreamId)
+		
 		return msg, nil
-
 	}
 	return nil, fmt.Errorf("no complete message available")
 }

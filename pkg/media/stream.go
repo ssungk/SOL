@@ -40,15 +40,7 @@ func (s *Stream) SendFrame(frame Frame) {
 	s.broadcastFrame(frame)
 }
 
-// SendManagedFrame sends a managed frame to the stream with efficient pool handling
-func (s *Stream) SendManagedFrame(managedFrame *ManagedFrame) {
-	// Cache the frame (convert to regular frame for caching)
-	regularFrame := managedFrame.ToRegularFrame()
-	s.streamBuffer.AddFrame(regularFrame)
-
-	// Broadcast managed frame directly to sinks (zero-copy for live data)
-	s.broadcastManagedFrame(managedFrame)
-}
+// SendManagedFrame은 제거됨 - SendFrame만 사용
 
 // SendMetadata sends metadata to the stream (called by external sources)
 func (s *Stream) SendMetadata(metadata map[string]string) {
@@ -63,30 +55,16 @@ func (s *Stream) SendMetadata(metadata map[string]string) {
 func (s *Stream) broadcastFrame(frame Frame) {
 	// Send to all sinks with stream ID
 	for _, sink := range s.sinks {
-		if err := sink.SendMediaFrame(s.id, frame); err != nil {
+		// 각 sink의 선호 포맷에 맞게 변환
+		convertedFrame := s.convertFrameForSink(frame, sink)
+		
+		if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
 			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", frame.SubType, "err", err)
 		}
 	}
 }
 
-// broadcastManagedFrame sends managed frame to all sinks (zero-copy for live streaming)
-func (s *Stream) broadcastManagedFrame(managedFrame *ManagedFrame) {
-	// Clone managed frame for each sink (sharing pool references)
-	for _, sink := range s.sinks {
-		// Create a clone for this sink (shares pool references but separate lifetime)
-		sinkFrame := managedFrame.Clone()
-		
-		// Convert to regular frame for sink (this copies data but allows pool cleanup)
-		frame := sinkFrame.ToRegularFrame()
-		sinkFrame.Release() // Release pool references immediately after copying
-		
-		if err := sink.SendMediaFrame(s.id, frame); err != nil {
-			slog.Error("Failed to send managed frame to sink", "streamId", s.id, "nodeId", sink.ID(), "subType", managedFrame.SubType, "err", err)
-		}
-	}
-	
-	// Original managed frame can now be released by caller
-}
+// broadcastManagedFrame은 제거됨 - broadcastFrame만 사용
 
 // broadcastMetadata sends metadata to all sinks
 func (s *Stream) broadcastMetadata(metadata map[string]string) {
@@ -145,7 +123,10 @@ func (s *Stream) SendCachedDataToSink(sink MediaSink) error {
 		slog.Debug("Sending cached frames to new sink", "streamId", s.id, "nodeId", nodeId, "frameCount", len(cachedFrames))
 
 		for _, frame := range cachedFrames {
-			if err := sink.SendMediaFrame(s.id, frame); err != nil {
+			// 각 sink의 선호 포맷에 맞게 변환
+			convertedFrame := s.convertFrameForSink(frame, sink)
+			
+			if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
 				slog.Error("Failed to send cached frame to sink", "streamId", s.id, "nodeId", nodeId, "subType", frame.SubType, "err", err)
 				// Continue with next frame even if one fails
 			}
@@ -184,4 +165,35 @@ func (s *Stream) GetCacheStats() map[string]any {
 	stats["sink_count"] = len(s.sinks)
 
 	return stats
+}
+
+// convertFrameForSink 각 sink의 선호 포맷에 맞게 프레임 변환
+func (s *Stream) convertFrameForSink(frame Frame, sink MediaSink) Frame {
+	// sink가 선호하는 포맷 확인
+	preferredFormat := sink.PreferredFormat(frame.CodecType)
+	
+	// 포맷이 같으면 변환하지 않음
+	if frame.FormatType == preferredFormat {
+		return frame
+	}
+	
+	// H264 포맷 변환
+	if frame.CodecType == CodecH264 && frame.Type == TypeVideo {
+		convertedData, err := ConvertH264Format(frame.Data, frame.FormatType, preferredFormat)
+		if err != nil {
+			slog.Warn("Failed to convert H264 format", "streamId", s.id, "from", frame.FormatType, "to", preferredFormat, "err", err)
+			return frame // 변환 실패 시 원본 반환
+		}
+		
+		// 변환된 프레임 생성
+		convertedFrame := frame
+		convertedFrame.Data = convertedData
+		convertedFrame.FormatType = preferredFormat
+		
+		slog.Debug("Converted frame format", "streamId", s.id, "codecType", frame.CodecType, "from", frame.FormatType, "to", preferredFormat)
+		return convertedFrame
+	}
+	
+	// 변환이 필요 없거나 지원하지 않는 경우 원본 반환
+	return frame
 }

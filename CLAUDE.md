@@ -188,7 +188,7 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 
 ### 향후 고려 해볼만한 TODO 리스트
 - [ ] **프로토콜 확장**
-    - [ ] HLS 출력 지원
+   - [ ] HLS 출력 지원
    - [ ] WebRTC 지원 검토
    - [ ] SRT 지원 검토
    - [ ] Transcoder 지원 검토

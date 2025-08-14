@@ -827,31 +827,37 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 	// 페이로드 추출 (헤더 제외)
 	payload := rtpData[12:]
 
-	// 페이로드 타입에 따른 미디어 타입 결정
+	// 페이로드 타입에 따른 미디어 타입, 코덱 타입, 포맷 타입 결정
 	var mediaType media.Type
+	var codecType media.CodecType
+	var formatType media.FormatType
+	var subType media.FrameSubType
 
 	switch payloadType {
 	case 96: // H.264
 		mediaType = media.TypeVideo
+		codecType = media.CodecH264
+		formatType = media.FormatStartCode // RTSP는 StartCode 포맷 사용
+		subType = media.VideoInterFrame    // 기본값으로 Inter Frame
 	case 97: // AAC
 		mediaType = media.TypeAudio
+		codecType = media.CodecAAC
+		formatType = media.FormatRaw // 오디오는 raw 데이터
+		subType = media.AudioRawData // 기본값으로 Raw Data
 	default:
 		mediaType = media.TypeVideo
-	}
-
-	// media.Frame 생성
-	var subType media.FrameSubType
-	if mediaType == media.TypeVideo {
-		subType = media.VideoInterFrame // 기본값으로 Inter Frame
-	} else {
-		subType = media.AudioRawData    // 기본값으로 Raw Data
+		codecType = media.CodecH264
+		formatType = media.FormatStartCode
+		subType = media.VideoInterFrame
 	}
 	
 	frame := media.Frame{
-		Type:      mediaType,
-		SubType:   subType,
-		Timestamp: timestamp,
-		Data:      [][]byte{payload}, // 단일 청크로 저장
+		Type:       mediaType,
+		SubType:    subType,
+		CodecType:  codecType,
+		FormatType: formatType,
+		Timestamp:  timestamp,
+		Data:       [][]byte{payload}, // 단일 청크로 저장
 	}
 
 	slog.Debug("Converted RTP to Frame", 
@@ -938,4 +944,14 @@ func (s *Session) sendRecordErrorResponse(cseq int, message string) error {
 	response.SetHeader("Content-Length", fmt.Sprintf("%d", len(response.Body)))
 	
 	return s.writer.WriteResponse(response)
+}
+
+// PreferredFormat MediaSink 인터페이스 구현 - RTSP는 StartCode 포맷 선호
+func (s *Session) PreferredFormat(codecType media.CodecType) media.FormatType {
+	switch codecType {
+	case media.CodecH264, media.CodecH265:
+		return media.FormatStartCode // RTSP는 StartCode 포맷 사용
+	default:
+		return media.FormatRaw
+	}
 }

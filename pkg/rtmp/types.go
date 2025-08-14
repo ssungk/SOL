@@ -17,8 +17,6 @@ func GenerateVideoHeader(frameSubType media.FrameSubType, compositionTime uint32
 		header[0] = 0x27 // Inter frame + AVC
 	case media.VideoDisposableInterFrame:
 		header[0] = 0x37 // Disposable inter frame + AVC
-	case media.VideoGeneratedKeyFrame:
-		header[0] = 0x47 // Generated key frame + AVC
 	case media.VideoInfoFrame:
 		header[0] = 0x57 // Video info frame + AVC
 	case media.VideoSequenceHeader:
@@ -82,26 +80,4 @@ func CombineHeaderAndData(header []byte, data []byte) []byte {
 	return combined
 }
 
-// createManagedFrame 미디어 프레임을 ManagedFrame으로 변환 (pool 추적)
-func createManagedFrame(frameSubType media.FrameSubType, timestamp uint32, data [][]byte, isVideo bool, poolManager *media.PoolManager) *media.ManagedFrame {
-	var mediaType media.Type
-	if isVideo {
-		mediaType = media.TypeVideo
-	} else {
-		mediaType = media.TypeAudio
-	}
-
-	// ManagedFrame 생성
-	managedFrame := media.NewManagedFrame(mediaType, frameSubType, timestamp, poolManager)
-
-	// 각 데이터 청크를 추가
-	for _, chunk := range data {
-		if len(chunk) > 0 {
-			// Pool에서 할당된 버퍼인지 확인하여 적절히 추가
-			// PoolManager에 등록되어 있으면 pooled chunk로, 아니면 regular chunk로 추가
-			managedFrame.AddRegularChunk(chunk)
-		}
-	}
-
-	return managedFrame
-}
+// createManagedFrame 함수 제거됨 - 일반 Frame 사용

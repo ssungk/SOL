@@ -69,8 +69,8 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 	// 메시지 버퍼의 적절한 위치에 직접 읽기
 	readBuffer := messageBuffer[offset : offset+chunkSize]
 	if _, err := io.ReadFull(r, readBuffer); err != nil {
-		// Pool에서 할당된 버퍼인 경우 반환 필요
-		ms.readerContext.poolManager.ReleaseBuffer(messageBuffer)
+		// Pool 버퍼는 abortChunkStream에서 자동 반환
+		ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 		return nil, err
 	}
 	

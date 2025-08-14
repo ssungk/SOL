@@ -30,4 +30,7 @@ type MediaSink interface {
 	
 	// 이 싱크가 구독 중인 스트림 ID 목록 반환
 	SubscribedStreams() []string
+	
+	// 선호하는 포맷 타입 반환 (H264의 경우 AVCC 또는 StartCode)
+	PreferredFormat(codecType CodecType) FormatType
 }
