@@ -8,7 +8,7 @@ import (
 
 const (
 	SmallBufferSize  = 4 * 1024    // 4KB
-	MediumBufferSize = 64 * 1024   // 64KB  
+	MediumBufferSize = 64 * 1024   // 64KB
 	LargeBufferSize  = 1024 * 1024 // 1MB
 )
 
@@ -17,11 +17,12 @@ type messageReaderContext struct {
 	payloads       map[uint32][]byte
 	payloadLengths map[uint32]uint32
 	pooledBuffers  map[uint32]*sync.Pool // 각 chunkStreamId별 pool 추적
+	rtmpHeaders    map[uint32][]byte     // RTMP 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
-	
+
 	// 크기별 Pool 계층
 	smallPool  *sync.Pool // ~4KB
-	mediumPool *sync.Pool // ~64KB  
+	mediumPool *sync.Pool // ~64KB
 	largePool  *sync.Pool // ~1MB
 }
 
@@ -31,8 +32,9 @@ func newMessageReaderContext() *messageReaderContext {
 		payloads:       make(map[uint32][]byte),
 		payloadLengths: make(map[uint32]uint32),
 		pooledBuffers:  make(map[uint32]*sync.Pool),
+		rtmpHeaders:    make(map[uint32][]byte),
 		chunkSize:      DefaultChunkSize,
-		
+
 		// 크기별 Pool 계층 초기화
 		smallPool:  NewBufferPool(SmallBufferSize),
 		mediumPool: NewBufferPool(MediumBufferSize),
@@ -52,12 +54,13 @@ func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
 			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
 		}
 	}
-	
+
 	// 해당 청크 스트림의 모든 상태 제거
 	delete(mrc.messageHeaders, chunkStreamId)
 	delete(mrc.payloads, chunkStreamId)
 	delete(mrc.payloadLengths, chunkStreamId)
 	delete(mrc.pooledBuffers, chunkStreamId)
+	delete(mrc.rtmpHeaders, chunkStreamId)
 }
 
 func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *messageHeader) {
@@ -76,23 +79,44 @@ func (ms *messageReaderContext) selectAppropriatePool(size uint32) *sync.Pool {
 	}
 }
 
-// allocateMessageBuffer 전체 메시지 크기만큼 버퍼 할당
+// allocateMessageBuffer 순수 데이터 크기만큼 버퍼 할당 (헤더 크기 제외)
 func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) []byte {
 	header := ms.messageHeaders[chunkStreamId]
 	if header == nil {
 		return nil
 	}
-	
-	// 메시지 크기에 따라 적절한 Pool 선택
+
+	// 비디오/오디오 메시지의 경우 헤더 크기를 제외한 순수 데이터 크기 계산
+	payloadSize := header.length
+	if header.typeId == MsgTypeVideo {
+		if header.length < 5 {
+			slog.Warn("Video message too short for header", "length", header.length)
+		} else {
+			payloadSize = header.length - 5 // 비디오 헤더 5바이트 제외
+		}
+	} else if header.typeId == MsgTypeAudio {
+		if header.length < 2 {
+			slog.Warn("Audio message too short for header", "length", header.length)
+		} else {
+			payloadSize = header.length - 2 // 오디오 헤더 2바이트 제외
+		}
+	}
+
+	// 메시지 크기에 따라 적절한 Pool 선택 (전체 메시지 크기 기준)
 	pool := ms.selectAppropriatePool(header.length)
-	
-	// Pool에서 버퍼 할당하고 메시지 크기로 슬라이싱
-	buf := pool.Get().([]byte)[:header.length]
+
+	// Pool에서 버퍼 할당하고 순수 데이터 크기로 슬라이싱
+	buf := pool.Get().([]byte)[:payloadSize]
 	ms.payloads[chunkStreamId] = buf
 	ms.payloadLengths[chunkStreamId] = 0
 	ms.pooledBuffers[chunkStreamId] = pool // pool 추적
-	
+
 	return buf
+}
+
+// storeRtmpHeader RTMP 미디어 헤더 저장
+func (ms *messageReaderContext) storeRtmpHeader(chunkStreamId uint32, header []byte) {
+	ms.rtmpHeaders[chunkStreamId] = header
 }
 
 // getMessageBuffer 현재 메시지 버퍼와 쓰기 위치 반환
@@ -118,8 +142,20 @@ func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 		slog.Error("message header not found", "chunkStreamId", chunkStreamId)
 		return 0
 	}
-	currentLength := ms.payloadLengths[chunkStreamId]
-	remain := header.length - currentLength
+	
+	// 현재 읽은 순수 데이터 길이
+	currentPayloadLength := ms.payloadLengths[chunkStreamId]
+	
+	// 헤더 크기 계산
+	headerSize := uint32(0)
+	if rtmpHeader, exists := ms.rtmpHeaders[chunkStreamId]; exists {
+		headerSize = uint32(len(rtmpHeader))
+	}
+	
+	// 전체 메시지에서 헤더와 현재까지 읽은 데이터를 제외한 남은 크기
+	totalRead := headerSize + currentPayloadLength
+	remain := header.length - totalRead
+	
 	if remain > ms.chunkSize {
 		return ms.chunkSize
 	}
@@ -145,26 +181,54 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		if !ok {
 			continue
 		}
+		
+		// 헤더 크기 계산
+		headerSize := uint32(0)
+		if rtmpHeader, exists := ms.rtmpHeaders[chunkStreamId]; exists {
+			headerSize = uint32(len(rtmpHeader))
+		}
 
-		if payloadLength != messageHeader.length {
+		// 전체 메시지 길이와 비교 (헤더 + 순수 데이터)
+		if payloadLength+headerSize != messageHeader.length {
 			continue
 		}
 
-		// 메시지 생성 (payload 데이터 복사)
-		payloadCopy := make([]byte, len(payload))
-		copy(payloadCopy, payload)
-		msg := NewMessage(messageHeader, payloadCopy)
-		
+		// 메시지 생성
+		var fullPayload []byte
+
+		// 비디오/오디오 메시지의 경우 헤더와 데이터를 합쳐서 전체 페이로드 생성
+		if rtmpHeader, hasHeader := ms.rtmpHeaders[chunkStreamId]; hasHeader {
+			// 헤더 + 순수 데이터를 합친 전체 페이로드 생성
+			fullPayload = make([]byte, len(rtmpHeader)+len(payload))
+			copy(fullPayload, rtmpHeader)
+			copy(fullPayload[len(rtmpHeader):], payload)
+		} else {
+			// 일반 메시지는 payload를 그대로 복사
+			fullPayload = make([]byte, len(payload))
+			copy(fullPayload, payload)
+		}
+
+		msg := NewMessage(messageHeader, fullPayload)
+
+		// 비디어/오디오 메시지의 경우 헤더와 순수 데이터를 미리 분리하여 저장
+		if rtmpHeader, hasHeader := ms.rtmpHeaders[chunkStreamId]; hasHeader {
+			msg.rtmpHeader = make([]byte, len(rtmpHeader))
+			copy(msg.rtmpHeader, rtmpHeader)
+			msg.rawData = make([]byte, len(payload))
+			copy(msg.rawData, payload)
+		}
+
 		// Pool 버퍼 반납
 		if pool, exists := ms.pooledBuffers[chunkStreamId]; exists {
 			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
 			delete(ms.pooledBuffers, chunkStreamId)
 		}
-		
+
 		// 상태 정리
 		delete(ms.payloadLengths, chunkStreamId)
 		delete(ms.payloads, chunkStreamId)
-		
+		delete(ms.rtmpHeaders, chunkStreamId)
+
 		return msg, nil
 	}
 	return nil, fmt.Errorf("no complete message available")

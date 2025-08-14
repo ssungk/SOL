@@ -165,6 +165,7 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 - 스트림 관리는 경쟁 상태를 피하기 위해 동기식(스트림 처리에서 고루틴 없음)
 - 모든 slog 호출은 일관성을 위해 한 줄로 포맷됨
 - **커밋 메시지는 1줄로 작성** (상세 설명 없이 간결하게)
+- **커밋에 Co-Authored-By 추가 금지** (Claude Code 관련 정보 포함하지 않기)
 - 설정 변경 시 서버 재시작 필요 (핫 리로드 미지원)
 
 

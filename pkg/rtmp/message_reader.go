@@ -54,8 +54,18 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 	chunkSize := ms.readerContext.nextChunkSize(basicHeader.chunkStreamID)
 
-	// 첫 번째 청크인 경우 전체 메시지 버퍼 할당
+	// 첫 번째 청크인 경우 특별 처리
 	if ms.readerContext.isInitialChunk(basicHeader.chunkStreamID) {
+		// 비디오/오디오 메시지인 경우 헤더 먼저 읽고 분리
+		if messageHeader.typeId == MsgTypeVideo || messageHeader.typeId == MsgTypeAudio {
+			err := ms.readAndSeparateMediaHeader(r, basicHeader.chunkStreamID, messageHeader.typeId, &chunkSize)
+			if err != nil {
+				ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
+				return nil, err
+			}
+		}
+
+		// 순수 데이터 크기만큼 버퍼 할당 (헤더 크기 제외)
 		ms.readerContext.allocateMessageBuffer(basicHeader.chunkStreamID)
 	}
 
@@ -65,18 +75,62 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 		return nil, fmt.Errorf("failed to get message buffer for chunkStreamId %d", basicHeader.chunkStreamID)
 	}
 
-	// 메시지 버퍼의 적절한 위치에 직접 읽기
-	readBuffer := messageBuffer[offset : offset+chunkSize]
-	if _, err := io.ReadFull(r, readBuffer); err != nil {
-		// Pool 버퍼는 abortChunkStream에서 자동 반환
-		ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
-		return nil, err
+	// 남은 데이터가 있을 때만 읽기
+	if chunkSize > 0 {
+		// 메시지 버퍼의 적절한 위치에 직접 읽기
+		readBuffer := messageBuffer[offset : offset+chunkSize]
+		if _, err := io.ReadFull(r, readBuffer); err != nil {
+			// Pool 버퍼는 abortChunkStream에서 자동 반환
+			ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
+			return nil, err
+		}
 	}
 
 	// 읽은 데이터 길이 업데이트
 	ms.readerContext.updatePayloadLength(basicHeader.chunkStreamID, chunkSize)
 
-	return NewChunk(basicHeader, messageHeader, readBuffer), nil
+	// ReadBuffer는 실제로 읽은 데이터 참조 (chunkSize가 0일 수 있음)
+	var readData []byte
+	if chunkSize > 0 {
+		readData = messageBuffer[offset : offset+chunkSize]
+	}
+
+	return NewChunk(basicHeader, messageHeader, readData), nil
+}
+
+// readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
+func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
+	var headerSize uint32
+
+	// 메시지 타입에 따라 헤더 크기 결정
+	switch messageType {
+	case MsgTypeVideo:
+		headerSize = 5 // Frame Type(1) + AVC Packet Type(1) + Composition Time(3)
+	case MsgTypeAudio:
+		headerSize = 2 // Audio Info(1) + AAC Packet Type(1)
+	default:
+		return fmt.Errorf("unsupported message type for header separation: %d", messageType)
+	}
+
+	// 현재 청크에서 읽을 수 있는 헤더 크기 계산
+	availableHeaderSize := headerSize
+	if *chunkSize < headerSize {
+		availableHeaderSize = *chunkSize
+	}
+
+	// 헤더 읽기
+	header := make([]byte, availableHeaderSize)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return fmt.Errorf("failed to read media header: %w", err)
+	}
+
+	// 헤더 저장
+	ms.readerContext.storeRtmpHeader(chunkStreamId, header)
+
+	// 읽은 헤더 크기만큼 청크 크기에서 차감
+	*chunkSize -= availableHeaderSize
+
+	return nil
 }
 
 func readBasicHeader(r io.Reader) (*basicHeader, error) {
