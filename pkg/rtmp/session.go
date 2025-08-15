@@ -107,7 +107,6 @@ func (s *session) handleMessageOrRoute(message *Message) {
 func (s *session) readLoop() {
 	s.wg.Add(1)
 	defer s.wg.Done()
-	// readLoop가 종료되면 (연결 끊김 등) 전체 세션을 종료하도록 cancel 호출
 	defer s.cancel()
 
 	if err := ServerHandshake(s.conn); err != nil {
@@ -226,7 +225,8 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 		return
 	}
 
-	message := NewMediaMessage(msgType, uint32(streamId), e.frame.Timestamp, rtmpData)
+	messageHeader := NewMessageHeader(e.frame.Timestamp, uint32(len(rtmpData)), msgType, uint32(streamId))
+	message := NewMessage(messageHeader, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
 		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "subType", e.frame.SubType, "err", err)
 	}
@@ -317,15 +317,29 @@ func (s *session) IsPublisher() bool {
 // 오디오 데이터 처리
 func (s *session) handleAudio(message *Message) {
 	// 첫 번째 바이트로 오디오 정보 추출
-	firstByte := message.payload[0]
-	frameType := s.parseAudioFrameType(firstByte, message.payload)
-
-	// rawData 사용 (RTMP 헤더 제외된 순수 오디오 데이터)
-	var dataToSend [][]byte
-	if len(message.rawData) > 0 {
-		dataToSend = [][]byte{message.rawData}
+	var firstByte byte
+	var fullPayload []byte
+	if len(message.mediaHeader) > 0 {
+		// 미디어 메시지: mediaHeader에서 첫 번째 바이트 추출
+		firstByte = message.mediaHeader[0]
+		// parseAudioFrameType에서 전체 payload 필요할 수 있으므로 헤더+데이터 합침
+		fullPayload = make([]byte, len(message.mediaHeader)+len(message.payload))
+		copy(fullPayload, message.mediaHeader)
+		copy(fullPayload[len(message.mediaHeader):], message.payload)
 	} else {
-		// rawData가 없으면 기존 payload 사용 (하위 호환성)
+		// 컨트롤 메시지: payload에서 직접 추출
+		firstByte = message.payload[0]
+		fullPayload = message.payload
+	}
+	frameType := s.parseAudioFrameType(firstByte, fullPayload)
+
+	// 미디어 메시지는 payload에 순수 데이터, 컨트롤 메시지는 payload에 전체 데이터
+	var dataToSend [][]byte
+	if len(message.mediaHeader) > 0 {
+		// 미디어 메시지: payload는 이미 순수 오디오 데이터
+		dataToSend = [][]byte{message.payload}
+	} else {
+		// 컨트롤 메시지: payload 전체 사용
 		dataToSend = [][]byte{message.payload}
 	}
 
@@ -348,15 +362,29 @@ func (s *session) handleAudio(message *Message) {
 // 비디오 데이터 처리
 func (s *session) handleVideo(message *Message) {
 	// 첫 번째 바이트로 비디오 정보 추출
-	firstByte := message.payload[0]
-	frameType := s.parseVideoFrameType(firstByte, message.payload)
-
-	// rawData 사용 (RTMP 헤더 제외된 순수 비디오 데이터)
-	var dataToSend [][]byte
-	if len(message.rawData) > 0 {
-		dataToSend = [][]byte{message.rawData}
+	var firstByte byte
+	var fullPayload []byte
+	if len(message.mediaHeader) > 0 {
+		// 미디어 메시지: mediaHeader에서 첫 번째 바이트 추출
+		firstByte = message.mediaHeader[0]
+		// parseVideoFrameType에서 전체 payload 필요할 수 있으므로 헤더+데이터 합침
+		fullPayload = make([]byte, len(message.mediaHeader)+len(message.payload))
+		copy(fullPayload, message.mediaHeader)
+		copy(fullPayload[len(message.mediaHeader):], message.payload)
 	} else {
-		// rawData가 없으면 기존 payload 사용 (하위 호환성)
+		// 컨트롤 메시지: payload에서 직접 추출
+		firstByte = message.payload[0]
+		fullPayload = message.payload
+	}
+	frameType := s.parseVideoFrameType(firstByte, fullPayload)
+
+	// 미디어 메시지는 payload에 순수 데이터, 컨트롤 메시지는 payload에 전체 데이터
+	var dataToSend [][]byte
+	if len(message.mediaHeader) > 0 {
+		// 미디어 메시지: payload는 이미 순수 비디오 데이터
+		dataToSend = [][]byte{message.payload}
+	} else {
+		// 컨트롤 메시지: payload 전체 사용
 		dataToSend = [][]byte{message.payload}
 	}
 
@@ -543,7 +571,6 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint
 
 	return s.writer.writeMessage(s.conn, message)
 }
-
 
 // calculateDataSize 데이터 크기 계산 헬퍼 함수
 func (s *session) calculateDataSize(data [][]byte) uint32 {

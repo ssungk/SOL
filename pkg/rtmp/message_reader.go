@@ -49,7 +49,7 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 		return nil, err
 	}
 
-	// 모든 경우에 헤더를 업데이트 (Fmt1/2/3의 경우 상속받은 완전한 헤더로 업데이트)
+	// 모든 경우에 헤더를 업데이트
 	ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, messageHeader)
 
 	chunkSize := ms.readerContext.nextChunkSize(basicHeader.chunkStreamID)
@@ -125,7 +125,7 @@ func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId u
 	}
 
 	// 헤더 저장
-	ms.readerContext.storeRtmpHeader(chunkStreamId, header)
+	ms.readerContext.storeMediaHeader(chunkStreamId, header)
 
 	// 읽은 헤더 크기만큼 청크 크기에서 차감
 	*chunkSize -= availableHeaderSize
