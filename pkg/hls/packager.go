@@ -347,3 +347,15 @@ func (p *Packager) SubscribedStreams() []string {
 	}
 	return nil
 }
+
+// PreferredFormat MediaSink 인터페이스 구현 - HLS는 MPEG-TS용 StartCode 포맷 선호
+func (p *Packager) PreferredFormat(codecType media.CodecType) media.FormatType {
+	switch codecType {
+	case media.CodecH264, media.CodecH265:
+		return media.FormatStartCode // MPEG-TS는 StartCode 포맷 사용
+	case media.CodecAAC:
+		return media.FormatADTS // AAC는 ADTS 포맷 선호
+	default:
+		return media.FormatRaw
+	}
+}

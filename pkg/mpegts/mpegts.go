@@ -176,11 +176,44 @@ func CreatePESPacket(streamID uint8, pts, dts uint64, data []byte) ([]byte, erro
 func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) media.Frame {
 	var frameType media.Type
 	var frameSubType media.FrameSubType
+	var codecType media.CodecType
+	var formatType media.FormatType
 	var data [][]byte
 	
 	switch streamType {
-	case StreamTypeH264, StreamTypeH265:
+	case StreamTypeH264:
 		frameType = media.TypeVideo
+		codecType = media.CodecH264
+		formatType = media.FormatStartCode // MPEGTS는 StartCode 포맷 사용
+		
+		// 키프레임 또는 설정 프레임 판별
+		isKeyFrame := false
+		isConfigFrame := false
+		
+		for _, nalu := range nalus {
+			if nalu.IsKey {
+				isKeyFrame = true
+			}
+			if nalu.IsConfig {
+				isConfigFrame = true
+			}
+			
+			// NALU 데이터를 [][]byte로 변환 (제로카피)
+			data = append(data, nalu.Data)
+		}
+		
+		if isConfigFrame {
+			frameSubType = media.VideoSequenceHeader
+		} else if isKeyFrame {
+			frameSubType = media.VideoKeyFrame
+		} else {
+			frameSubType = media.VideoInterFrame
+		}
+		
+	case StreamTypeH265:
+		frameType = media.TypeVideo
+		codecType = media.CodecH265
+		formatType = media.FormatStartCode // MPEGTS는 StartCode 포맷 사용
 		
 		// 키프레임 또는 설정 프레임 판별
 		isKeyFrame := false
@@ -208,6 +241,8 @@ func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) 
 		
 	case StreamTypeADTS, StreamTypeAAC:
 		frameType = media.TypeAudio
+		codecType = media.CodecAAC
+		formatType = media.FormatADTS // AAC는 ADTS 포맷 사용
 		
 		// AAC 프레임의 경우 설정 정보가 포함되어 있는지 확인
 		if len(nalus) > 0 && nalus[0].IsConfig {
@@ -225,6 +260,8 @@ func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) 
 		// 알 수 없는 스트림 타입의 경우 메타데이터로 처리
 		frameType = media.TypeMetadata
 		frameSubType = media.FrameSubType(0)
+		codecType = media.CodecUnknown
+		formatType = media.FormatRaw
 		
 		for _, nalu := range nalus {
 			data = append(data, nalu.Data)
@@ -232,10 +269,12 @@ func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) 
 	}
 	
 	return media.Frame{
-		Type:      frameType,
-		SubType:   frameSubType,
-		Timestamp: timestamp,
-		Data:      data,
+		Type:       frameType,
+		SubType:    frameSubType,
+		CodecType:  codecType,
+		FormatType: formatType,
+		Timestamp:  timestamp,
+		Data:       data,
 	}
 }
 
