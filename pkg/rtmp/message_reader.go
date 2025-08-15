@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sol/pkg/media"
 )
 
 type messageReader struct {
@@ -100,35 +101,49 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
 func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
-	var headerSize uint32
-
-	// 메시지 타입에 따라 헤더 크기 결정
-	switch messageType {
-	case MsgTypeVideo:
-		headerSize = 5 // Frame Type(1) + AVC Packet Type(1) + Composition Time(3)
-	case MsgTypeAudio:
-		headerSize = 2 // Audio Info(1) + AAC Packet Type(1)
-	default:
-		return fmt.Errorf("unsupported message type for header separation: %d", messageType)
+	// 최소한 첫 바이트는 읽어서 코덱을 판단해야 함
+	if *chunkSize == 0 {
+		return fmt.Errorf("chunk size is 0, cannot read media header")
 	}
 
-	// 현재 청크에서 읽을 수 있는 헤더 크기 계산
-	availableHeaderSize := headerSize
-	if *chunkSize < headerSize {
-		availableHeaderSize = *chunkSize
+	// 첫 바이트 읽기 (코덱 정보가 포함됨)
+	firstByte := make([]byte, 1)
+	if _, err := io.ReadFull(r, firstByte); err != nil {
+		return fmt.Errorf("failed to read first byte of media header: %w", err)
 	}
 
-	// 헤더 읽기
-	header := make([]byte, availableHeaderSize)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return fmt.Errorf("failed to read media header: %w", err)
+	// 첫 바이트를 기준으로 헤더 크기 동적 계산
+	headerSize, err := getMediaHeaderSize(messageType, firstByte[0])
+	if err != nil {
+		return fmt.Errorf("failed to determine media header size: %w", err)
 	}
+
+	// 현재 청크에서 읽을 수 있는 헤더 크기 계산 (첫 바이트는 이미 읽음)
+	remainingHeaderSize := uint32(headerSize - 1) // 첫 바이트 제외
+	availableRemainingSize := remainingHeaderSize
+	if *chunkSize-1 < remainingHeaderSize {
+		availableRemainingSize = *chunkSize - 1
+	}
+
+	// 나머지 헤더 읽기
+	var remainingHeader []byte
+	if availableRemainingSize > 0 {
+		remainingHeader = make([]byte, availableRemainingSize)
+		if _, err := io.ReadFull(r, remainingHeader); err != nil {
+			return fmt.Errorf("failed to read remaining media header: %w", err)
+		}
+	}
+
+	// 전체 헤더 조합 (첫 바이트 + 나머지)
+	fullHeader := make([]byte, 1+len(remainingHeader))
+	fullHeader[0] = firstByte[0]
+	copy(fullHeader[1:], remainingHeader)
 
 	// 헤더 저장
-	ms.readerContext.storeMediaHeader(chunkStreamId, header)
+	ms.readerContext.storeMediaHeader(chunkStreamId, fullHeader)
 
 	// 읽은 헤더 크기만큼 청크 크기에서 차감
-	*chunkSize -= availableHeaderSize
+	*chunkSize -= (1 + availableRemainingSize)
 
 	return nil
 }
@@ -286,4 +301,130 @@ func readUint24BE(buf []byte) uint32 {
 // abortChunkStream aborts a specific chunk stream
 func (mr *messageReader) abortChunkStream(chunkStreamId uint32) {
 	mr.readerContext.abortChunkStream(chunkStreamId)
+}
+
+// --- 코덱 감지 및 헤더 크기 계산 함수들 ---
+
+// getMediaHeaderSize 메시지 타입과 첫 바이트를 기준으로 미디어 헤더 크기 계산
+func getMediaHeaderSize(msgTypeId uint8, firstByte byte) (int, error) {
+	switch msgTypeId {
+	case MsgTypeVideo:
+		return getVideoHeaderSize(firstByte)
+	case MsgTypeAudio:
+		return getAudioHeaderSize(firstByte)
+	default:
+		return 0, fmt.Errorf("not a media message type: %d", msgTypeId)
+	}
+}
+
+// getVideoHeaderSize 비디오 첫 바이트를 기준으로 헤더 크기 계산
+func getVideoHeaderSize(firstByte byte) (int, error) {
+	codecId := firstByte & 0x0F // 하위 4비트: Codec ID
+
+	switch codecId {
+	case 2: // Sorenson H.263
+		return 1, nil // Frame Type (4bits) + Codec ID (4bits)
+	case 3: // Screen Video v1
+		return 1, nil // Frame Type (4bits) + Codec ID (4bits)
+	case 4: // VP6
+		return 1, nil // Frame Type (4bits) + Codec ID (4bits)
+	case 5: // VP6 with alpha
+		return 1, nil // Frame Type (4bits) + Codec ID (4bits)
+	case 6: // Screen Video
+		return 1, nil // Frame Type (4bits) + Codec ID (4bits)
+	case 7: // AVC (H.264)
+		return 5, nil // Frame Type (4bits) + Codec ID (4bits) + AVC Packet Type (8bits) + Composition Time (24bits)
+	case 12: // HEVC (H.265)
+		return 5, nil // Frame Type (4bits) + Codec ID (4bits) + HEVC Packet Type (8bits) + Composition Time (24bits)
+	case 13: // AV1 (Enhanced RTMP)
+		return 5, nil // Frame Type (4bits) + Codec ID (4bits) + AV1 Packet Type (8bits) + Composition Time (24bits)
+	default:
+		return 0, fmt.Errorf("unsupported video codec: %d", codecId)
+	}
+}
+
+// getAudioHeaderSize 오디오 첫 바이트를 기준으로 헤더 크기 계산
+func getAudioHeaderSize(firstByte byte) (int, error) {
+	soundFormat := (firstByte & 0xF0) >> 4 // 상위 4비트: Sound Format
+
+	switch soundFormat {
+	case 2: // MP3
+		return 1, nil // Sound Format (4bits) + Sound Rate (2bits) + Sound Size (1bit) + Sound Type (1bit)
+	case 5: // Nellymoser 8kHz mono
+		return 1, nil
+	case 6: // Nellymoser
+		return 1, nil
+	case 7: // G.711 A-law
+		return 1, nil
+	case 8: // G.711 μ-law
+		return 1, nil
+	case 10: // AAC
+		return 2, nil // Sound Format (4bits) + Sound Rate (2bits) + Sound Size (1bit) + Sound Type (1bit) + AAC Packet Type (8bits)
+	case 11: // Speex
+		return 1, nil
+	case 13: // Opus (Enhanced RTMP)
+		return 2, nil // Sound Format (4bits) + Sound Rate (2bits) + Sound Size (1bit) + Sound Type (1bit) + Opus Packet Type (8bits)
+	case 14: // MP3 8kHz
+		return 1, nil
+	case 15: // Device-specific sound
+		return 1, nil
+	default:
+		return 0, fmt.Errorf("unsupported audio format: %d", soundFormat)
+	}
+}
+
+// detectVideoCodec 비디오 첫 바이트에서 코덱 감지
+func detectVideoCodec(firstByte byte) (media.CodecType, error) {
+	codecId := firstByte & 0x0F
+
+	switch codecId {
+	case 2: // Sorenson H.263
+		return media.CodecUnknown, fmt.Errorf("sorenson H.263 codec not supported")
+	case 3: // Screen Video v1
+		return media.CodecUnknown, fmt.Errorf("screen video v1 codec not supported")
+	case 4: // VP6
+		return media.CodecUnknown, fmt.Errorf("VP6 codec not supported")
+	case 5: // VP6 with alpha
+		return media.CodecUnknown, fmt.Errorf("VP6 with alpha codec not supported")
+	case 6: // Screen Video
+		return media.CodecUnknown, fmt.Errorf("screen video codec not supported")
+	case 7: // AVC (H.264)
+		return media.CodecH264, nil
+	case 12: // HEVC (H.265)
+		return media.CodecH265, nil
+	case 13: // AV1
+		return media.CodecUnknown, fmt.Errorf("AV1 codec not supported")
+	default:
+		return media.CodecUnknown, fmt.Errorf("unknown video codec: %d", codecId)
+	}
+}
+
+// detectAudioCodec 오디오 첫 바이트에서 코덱 감지
+func detectAudioCodec(firstByte byte) (media.CodecType, error) {
+	soundFormat := (firstByte & 0xF0) >> 4
+
+	switch soundFormat {
+	case 2: // MP3
+		return media.CodecUnknown, fmt.Errorf("MP3 codec not supported")
+	case 5: // Nellymoser 8kHz mono
+		return media.CodecUnknown, fmt.Errorf("Nellymoser codec not supported")
+	case 6: // Nellymoser
+		return media.CodecUnknown, fmt.Errorf("Nellymoser codec not supported")
+	case 7: // G.711 A-law
+		return media.CodecUnknown, fmt.Errorf("G.711 A-law codec not supported")
+	case 8: // G.711 μ-law
+		return media.CodecUnknown, fmt.Errorf("G.711 μ-law codec not supported")
+	case 10: // AAC
+		return media.CodecAAC, nil
+	case 11: // Speex
+		return media.CodecUnknown, fmt.Errorf("Speex codec not supported")
+	case 13: // Opus
+		return media.CodecUnknown, fmt.Errorf("Opus codec not supported")
+	case 14: // MP3 8kHz
+		return media.CodecUnknown, fmt.Errorf("MP3 8kHz codec not supported")
+	case 15: // Device-specific
+		return media.CodecUnknown, fmt.Errorf("device-specific codec not supported")
+	default:
+		return media.CodecUnknown, fmt.Errorf("unknown audio format: %d", soundFormat)
+	}
 }

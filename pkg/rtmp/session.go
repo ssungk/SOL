@@ -26,15 +26,15 @@ type session struct {
 	appName string
 
 	// 발행용 (MediaSource) - RTMP streamId 기반
-	publishedStreams map[int]*media.Stream // streamId(int) -> Stream
+	publishedStreams map[uint32]*media.Stream // streamId(uint32) -> Stream
 
 	// 상호 참조 테이블
-	streamIdToPath map[int]string // streamId -> streamPath
-	streamPathToId map[string]int // streamPath -> streamId
+	streamIdToPath map[uint32]string // streamId -> streamPath
+	streamPathToId map[string]uint32 // streamPath -> streamId
 	nextStreamId   int            // 다음 할당할 streamId (1부터 시작)
 
 	// 재생용 (MediaSink)
-	subscribedStreams map[int]string // streamId -> streamPath 구독 스트림 매핑
+	subscribedStreams map[uint32]string // streamId -> streamPath 구독 스트림 매핑
 
 	// MediaServer와의 통신 관리
 	mediaServerChannel chan<- any
@@ -58,11 +58,11 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		ctx:                ctx,
 		cancel:             cancel,
 		wg:                 wg,
-		publishedStreams:   make(map[int]*media.Stream), // 발행용 스트림 맵 초기화
-		streamIdToPath:     make(map[int]string),        // streamId -> streamPath 매핑
-		streamPathToId:     make(map[string]int),        // streamPath -> streamId 매핑
+		publishedStreams:   make(map[uint32]*media.Stream), // 발행용 스트림 맵 초기화
+		streamIdToPath:     make(map[uint32]string),        // streamId -> streamPath 매핑
+		streamPathToId:     make(map[string]uint32),        // streamPath -> streamId 매핑
 		nextStreamId:       1,                           // 1부터 시작
-		subscribedStreams:  make(map[int]string),        // 재생용 스트림 매핑 초기화
+		subscribedStreams:  make(map[uint32]string),        // 재생용 스트림 매핑 초기화
 	}
 
 	// NodeCreated 이벤트를 MediaServer로 전송
@@ -316,90 +316,66 @@ func (s *session) IsPublisher() bool {
 
 // 오디오 데이터 처리
 func (s *session) handleAudio(message *Message) {
-	// 첫 번째 바이트로 오디오 정보 추출
-	var firstByte byte
-	var fullPayload []byte
-	if len(message.mediaHeader) > 0 {
-		// 미디어 메시지: mediaHeader에서 첫 번째 바이트 추출
-		firstByte = message.mediaHeader[0]
-		// parseAudioFrameType에서 전체 payload 필요할 수 있으므로 헤더+데이터 합침
-		fullPayload = make([]byte, len(message.mediaHeader)+len(message.payload))
-		copy(fullPayload, message.mediaHeader)
-		copy(fullPayload[len(message.mediaHeader):], message.payload)
-	} else {
-		// 컨트롤 메시지: payload에서 직접 추출
-		firstByte = message.payload[0]
-		fullPayload = message.payload
+	// mediaHeader에서 직접 정보 추출 (제로카피)
+	firstByte := message.mediaHeader[0] // Audio Info
+	
+	// 코덱 동적 감지
+	codecType, err := detectAudioCodec(firstByte)
+	if err != nil {
+		slog.Error("Unsupported audio codec", "sessionId", s.ID(), "firstByte", firstByte, "err", err)
+		return
 	}
-	frameType := s.parseAudioFrameType(firstByte, fullPayload)
+	
+	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
 
-	// 미디어 메시지는 payload에 순수 데이터, 컨트롤 메시지는 payload에 전체 데이터
-	var dataToSend [][]byte
-	if len(message.mediaHeader) > 0 {
-		// 미디어 메시지: payload는 이미 순수 오디오 데이터
-		dataToSend = [][]byte{message.payload}
-	} else {
-		// 컨트롤 메시지: payload 전체 사용
-		dataToSend = [][]byte{message.payload}
-	}
+	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
+	dataToSend := [][]byte{message.payload}
 
 	// 일반 Frame 생성
 	frame := media.Frame{
 		Type:       media.TypeAudio,
 		SubType:    frameType,
-		CodecType:  media.CodecAAC,
+		CodecType:  codecType,
 		FormatType: media.FormatRaw,
 		Timestamp:  message.messageHeader.timestamp,
 		Data:       dataToSend,
 	}
 
-	// 모든 발행된 스트림에 전송
-	for _, stream := range s.publishedStreams {
+	// message의 streamId에 해당하는 스트림에 전송
+	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
 		stream.SendFrame(frame)
 	}
 }
 
 // 비디오 데이터 처리
 func (s *session) handleVideo(message *Message) {
-	// 첫 번째 바이트로 비디오 정보 추출
-	var firstByte byte
-	var fullPayload []byte
-	if len(message.mediaHeader) > 0 {
-		// 미디어 메시지: mediaHeader에서 첫 번째 바이트 추출
-		firstByte = message.mediaHeader[0]
-		// parseVideoFrameType에서 전체 payload 필요할 수 있으므로 헤더+데이터 합침
-		fullPayload = make([]byte, len(message.mediaHeader)+len(message.payload))
-		copy(fullPayload, message.mediaHeader)
-		copy(fullPayload[len(message.mediaHeader):], message.payload)
-	} else {
-		// 컨트롤 메시지: payload에서 직접 추출
-		firstByte = message.payload[0]
-		fullPayload = message.payload
+	// mediaHeader에서 직접 정보 추출 (제로카피)
+	firstByte := message.mediaHeader[0] // Frame Type + Codec ID
+	
+	// 코덱 동적 감지
+	codecType, err := detectVideoCodec(firstByte)
+	if err != nil {
+		slog.Error("Unsupported video codec", "sessionId", s.ID(), "firstByte", firstByte, "err", err)
+		return
 	}
-	frameType := s.parseVideoFrameType(firstByte, fullPayload)
+	
+	frameType := s.parseVideoFrameType(firstByte, message.mediaHeader)
 
-	// 미디어 메시지는 payload에 순수 데이터, 컨트롤 메시지는 payload에 전체 데이터
-	var dataToSend [][]byte
-	if len(message.mediaHeader) > 0 {
-		// 미디어 메시지: payload는 이미 순수 비디오 데이터
-		dataToSend = [][]byte{message.payload}
-	} else {
-		// 컨트롤 메시지: payload 전체 사용
-		dataToSend = [][]byte{message.payload}
-	}
+	// payload는 이미 순수 비디오 데이터 (헤더 제외됨)
+	dataToSend := [][]byte{message.payload}
 
 	// 일반 Frame 생성
 	frame := media.Frame{
 		Type:       media.TypeVideo,
 		SubType:    frameType,
-		CodecType:  media.CodecH264,
+		CodecType:  codecType,
 		FormatType: media.FormatAVCC,
 		Timestamp:  message.messageHeader.timestamp,
 		Data:       dataToSend,
 	}
 
-	// 모든 발행된 스트림에 전송
-	for _, stream := range s.publishedStreams {
+	// message의 streamId에 해당하는 스트림에 전송
+	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
 		stream.SendFrame(frame)
 	}
 }
@@ -821,7 +797,7 @@ func (s *session) handlePublish(message *Message, values []any) {
 	slog.Info("publish request", "fullStreamPath", fullStreamPath, "publishType", publishType, "transactionID", transactionID)
 
 	// 1단계: message의 streamId 사용 및 스트림 준비
-	streamId := int(message.messageHeader.streamId)
+	streamId := message.messageHeader.streamId
 	stream := media.NewStream(fullStreamPath)
 	s.addPublishedStream(streamId, fullStreamPath, stream)
 
@@ -851,7 +827,7 @@ func (s *session) handleReleaseStream(_ []any) {
 
 // handlePlay play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(message *Message, values []any) {
-	streamId := int(message.messageHeader.streamId)
+	streamId := message.messageHeader.streamId
 
 	slog.Info("Play request initiated", "sessionId", s.ID(), "streamId", streamId, "currentSubscriptions", len(s.subscribedStreams), "isPublisher", s.IsPublisher())
 
@@ -953,9 +929,9 @@ func (s *session) stopPublishing() {
 	}
 
 	// 스트림 정리
-	s.publishedStreams = make(map[int]*media.Stream)
-	s.streamIdToPath = make(map[int]string)
-	s.streamPathToId = make(map[string]int)
+	s.publishedStreams = make(map[uint32]*media.Stream)
+	s.streamIdToPath = make(map[uint32]string)
+	s.streamPathToId = make(map[string]uint32)
 }
 
 // stopSubscribing 구독 중단 처리
@@ -966,7 +942,7 @@ func (s *session) stopSubscribing() {
 	}
 
 	// 구독 스트림 정리
-	s.subscribedStreams = make(map[int]string)
+	s.subscribedStreams = make(map[uint32]string)
 }
 
 // handleAMF3ScriptData AMF3 스크립트 데이터 처리
@@ -1067,14 +1043,14 @@ func (s *session) handleAMF3Command(message *Message) {
 // --- 다중 스트림 관리 메서드들 ---
 
 // addPublishedStream 발행 스트림 추가 (streamId 기반)
-func (s *session) addPublishedStream(streamId int, streamPath string, stream *media.Stream) {
+func (s *session) addPublishedStream(streamId uint32, streamPath string, stream *media.Stream) {
 	s.publishedStreams[streamId] = stream
 	s.addStreamMapping(streamId, streamPath)
 	slog.Debug("Published stream added", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath, "mediaStreamId", stream.ID())
 }
 
 // removePublishedStream 발행 스트림 제거 (streamId 기반)
-func (s *session) removePublishedStream(streamId int) *media.Stream {
+func (s *session) removePublishedStream(streamId uint32) *media.Stream {
 	stream, exists := s.publishedStreams[streamId]
 	if exists {
 		delete(s.publishedStreams, streamId)
@@ -1085,7 +1061,7 @@ func (s *session) removePublishedStream(streamId int) *media.Stream {
 }
 
 // getPublishedStream 발행 스트림 가져오기 (streamId 기반)
-func (s *session) getPublishedStream(streamId int) (*media.Stream, bool) {
+func (s *session) getPublishedStream(streamId uint32) (*media.Stream, bool) {
 	stream, exists := s.publishedStreams[streamId]
 	return stream, exists
 }
@@ -1100,14 +1076,14 @@ func (s *session) getAllPublishedStreams() []*media.Stream {
 }
 
 // addSubscribedStream 구독 스트림 추가
-func (s *session) addSubscribedStream(streamId int, streamPath string) {
+func (s *session) addSubscribedStream(streamId uint32, streamPath string) {
 	s.subscribedStreams[streamId] = streamPath
 	s.streamPathToId[streamPath] = streamId // 역방향 매핑도 추가
 	slog.Debug("Subscribed stream added", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
 }
 
 // removeSubscribedStream 구독 스트림 제거
-func (s *session) removeSubscribedStream(streamId int) {
+func (s *session) removeSubscribedStream(streamId uint32) {
 	if streamPath, exists := s.subscribedStreams[streamId]; exists {
 		delete(s.subscribedStreams, streamId)
 		delete(s.streamPathToId, streamPath) // 역방향 매핑도 제거
@@ -1117,8 +1093,8 @@ func (s *session) removeSubscribedStream(streamId int) {
 
 // clearSubscribedStreams 모든 구독 스트림 제거
 func (s *session) clearSubscribedStreams() {
-	s.subscribedStreams = make(map[int]string)
-	s.streamPathToId = make(map[string]int) // 역방향 매핑도 초기화
+	s.subscribedStreams = make(map[uint32]string)
+	s.streamPathToId = make(map[string]uint32) // 역방향 매핑도 초기화
 	slog.Debug("All subscribed streams cleared", "sessionId", s.ID())
 }
 
@@ -1156,13 +1132,13 @@ func (s *session) generateStreamId() int {
 }
 
 // addStreamMapping streamId와 streamPath 매핑 추가
-func (s *session) addStreamMapping(streamId int, streamPath string) {
+func (s *session) addStreamMapping(streamId uint32, streamPath string) {
 	s.streamIdToPath[streamId] = streamPath
 	s.streamPathToId[streamPath] = streamId
 }
 
 // removeStreamMapping streamId 매핑 제거
-func (s *session) removeStreamMapping(streamId int) {
+func (s *session) removeStreamMapping(streamId uint32) {
 	if streamPath, exists := s.streamIdToPath[streamId]; exists {
 		delete(s.streamIdToPath, streamId)
 		delete(s.streamPathToId, streamPath)
@@ -1259,10 +1235,10 @@ func (s *session) handleCloseStream(_ []any) {
 	s.stopSubscribing() // 상태 체크 없이 항상 호출
 
 	// 다중 스트림 정리
-	s.publishedStreams = make(map[int]*media.Stream)
-	s.streamIdToPath = make(map[int]string)
-	s.streamPathToId = make(map[string]int)
-	s.subscribedStreams = make(map[int]string)
+	s.publishedStreams = make(map[uint32]*media.Stream)
+	s.streamIdToPath = make(map[uint32]string)
+	s.streamPathToId = make(map[string]uint32)
+	s.subscribedStreams = make(map[uint32]string)
 }
 
 // handleDeleteStream deleteStream 명령어 처리
@@ -1277,10 +1253,10 @@ func (s *session) handleDeleteStream(_ []any) {
 	s.stopSubscribing()
 
 	// 다중 스트림 정리
-	s.publishedStreams = make(map[int]*media.Stream)
-	s.streamIdToPath = make(map[int]string)
-	s.streamPathToId = make(map[string]int)
-	s.subscribedStreams = make(map[int]string)
+	s.publishedStreams = make(map[uint32]*media.Stream)
+	s.streamIdToPath = make(map[uint32]string)
+	s.streamPathToId = make(map[string]uint32)
+	s.subscribedStreams = make(map[uint32]string)
 }
 
 // handleGetStreamLength getStreamLength 명령어 처리 (Flash Media Server 호환)

@@ -85,17 +85,17 @@ func (s *Server) Name() string {
 func (s *Server) eventLoop() {
 	s.wg.Add(1)
 	defer s.wg.Done()
-	defer utils.CloseWithLog(s.listener)
+	defer s.shutdown()
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.shutdown()
 			return
 		}
 	}
 }
 
 func (s *Server) shutdown() {
+	utils.CloseWithLog(s.listener)
 	slog.Info("RTMP server shutdown completed")
 }
 
