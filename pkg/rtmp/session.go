@@ -396,7 +396,8 @@ func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.Fram
 			}
 			return media.VideoInterFrame
 		case 2:
-			return media.VideoEndOfSequence
+			// RTMP 전용 EndOfSequence는 키프레임으로 처리
+			return media.VideoKeyFrame
 		}
 	}
 
@@ -411,7 +412,8 @@ func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.Fram
 	case 4:
 		return media.VideoKeyFrame
 	case 5:
-		return media.VideoInfoFrame
+		// RTMP 전용 InfoFrame은 인터프레임으로 처리
+		return media.VideoInterFrame
 	default:
 		return media.VideoInterFrame
 	}

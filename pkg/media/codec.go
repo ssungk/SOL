@@ -15,16 +15,10 @@ func StringToFrameSubType(frameType string, isVideo bool) FrameSubType {
 		   strings.Contains(frameTypeLower, "vps") {
 			return VideoSequenceHeader
 		}
-		if strings.Contains(frameTypeLower, "end of sequence") {
-			return VideoEndOfSequence
-		}
 		if strings.Contains(frameTypeLower, "disposable inter frame") ||
 		   strings.Contains(frameTypeLower, "b-frame") ||
 		   strings.Contains(frameTypeLower, "bi-directional") {
 			return VideoDisposableInterFrame
-		}
-		if strings.Contains(frameTypeLower, "info") || strings.Contains(frameTypeLower, "command") {
-			return VideoInfoFrame
 		}
 		if strings.Contains(frameTypeLower, "key frame") ||
 		   strings.Contains(frameTypeLower, "i-frame") ||

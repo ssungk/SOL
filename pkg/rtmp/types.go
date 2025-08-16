@@ -16,11 +16,7 @@ func GenerateVideoHeader(frameSubType media.FrameSubType, compositionTime uint32
 		header[0] = 0x27 // Inter frame + AVC
 	case media.VideoDisposableInterFrame:
 		header[0] = 0x37 // Disposable inter frame + AVC
-	case media.VideoInfoFrame:
-		header[0] = 0x57 // Video info frame + AVC
 	case media.VideoSequenceHeader:
-		header[0] = 0x17 // Key frame + AVC
-	case media.VideoEndOfSequence:
 		header[0] = 0x17 // Key frame + AVC
 	default:
 		header[0] = 0x27 // 기본값: Inter frame + AVC
@@ -30,8 +26,6 @@ func GenerateVideoHeader(frameSubType media.FrameSubType, compositionTime uint32
 	switch frameSubType {
 	case media.VideoSequenceHeader:
 		header[1] = 0x00 // AVC sequence header
-	case media.VideoEndOfSequence:
-		header[1] = 0x02 // AVC end of sequence
 	default:
 		header[1] = 0x01 // AVC NALU
 	}

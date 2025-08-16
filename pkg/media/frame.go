@@ -28,10 +28,10 @@ type FormatType uint8
 
 const (
 	FormatUnknown FormatType = iota
-	FormatRaw               // 원본 데이터
-	FormatAVCC              // H264/H265 AVCC 포맷 (length-prefix)
-	FormatAnnexB            // H264/H265 Annex-B 포맷 (0x00 0x00 0x01)
-	FormatADTS              // AAC ADTS 포맷
+	FormatRaw                // 원본 데이터
+	FormatAVCC               // H264/H265 AVCC 포맷 (length-prefix)
+	FormatAnnexB             // H264/H265 Annex-B 포맷 (0x00 0x00 0x01)
+	FormatADTS               // AAC ADTS 포맷
 )
 
 // FrameSubType 미디어 프레임의 세부 타입
@@ -42,9 +42,7 @@ const (
 	VideoKeyFrame FrameSubType = iota + 1
 	VideoInterFrame
 	VideoDisposableInterFrame // B-frame
-	VideoInfoFrame
-	VideoSequenceHeader // SPS/PPS/VPS 등
-	VideoEndOfSequence
+	VideoSequenceHeader       // SPS/PPS/VPS 등
 
 	// Audio subtypes
 	AudioRawData
