@@ -1,5 +1,90 @@
 package media
 
+// === 새로운 통합 타입 시스템 ===
+
+// MediaCodec 비디오/오디오/데이터를 포함하는 통합 코덱 타입
+type MediaCodec uint8
+
+const (
+	// Video codecs: 0-127
+	MediaVideoUnknown MediaCodec = 0
+	MediaH264         MediaCodec = 1
+	MediaH265         MediaCodec = 2
+	MediaVP8          MediaCodec = 3
+	MediaVP9          MediaCodec = 4
+	MediaAV1          MediaCodec = 5
+
+	// Audio codecs: 128-191
+	MediaAudioUnknown MediaCodec = 128
+	MediaAAC          MediaCodec = 129
+	MediaOpus         MediaCodec = 130
+	MediaMP3          MediaCodec = 131
+
+	// Data/Metadata: 192-255
+	MediaMetadata     MediaCodec = 192
+	MediaSubtitle     MediaCodec = 193
+)
+
+// MediaCodec 헬퍼 함수들
+func (c MediaCodec) IsVideo() bool { return c < 128 }
+func (c MediaCodec) IsAudio() bool { return c >= 128 && c < 192 }
+func (c MediaCodec) IsData() bool  { return c >= 192 }
+
+// BitstreamFormat 코덱별 비트스트림 포맷 (코덱마다 0부터 시작)
+type BitstreamFormat uint8
+
+const (
+	// 모든 코덱 공통
+	FormatUnknownBitstream BitstreamFormat = 0
+	FormatRawBitstream     BitstreamFormat = 1
+
+	// H264/H265 전용 (같은 번호 재사용)
+	FormatAVCCBitstream   BitstreamFormat = 2
+	FormatAnnexBBitstream BitstreamFormat = 3
+
+	// AAC 전용 (같은 번호 재사용)
+	FormatADTSBitstream BitstreamFormat = 2
+)
+
+// FrameKind 프레임 종류 (비디오/오디오 통합)
+type FrameKind uint8
+
+const (
+	KindUnknown    FrameKind = 0
+	KindKeyFrame   FrameKind = 1 // 비디오: I-frame, 오디오: 설정 프레임
+	KindInterFrame FrameKind = 2 // 비디오: P-frame
+	KindBFrame     FrameKind = 3 // 비디오: B-frame
+	KindRawData    FrameKind = 4 // 일반 데이터
+)
+
+// MediaFrame 새로운 단순화된 프레임 구조
+type MediaFrame struct {
+	Codec     MediaCodec      // 통합된 코덱 (비디오/오디오 구분 포함)
+	Format    BitstreamFormat // 코덱별 비트스트림 포맷
+	Kind      FrameKind       // 프레임 종류
+	Timestamp uint32          // 타임스탬프 (밀리초)
+	Data      []byte          // 프레임 데이터
+}
+
+// MediaFrame 헬퍼 함수들
+func (f *MediaFrame) IsVideo() bool { return f.Codec.IsVideo() }
+func (f *MediaFrame) IsAudio() bool { return f.Codec.IsAudio() }
+func (f *MediaFrame) IsData() bool  { return f.Codec.IsData() }
+func (f *MediaFrame) IsKeyFrame() bool { return f.Kind == KindKeyFrame }
+
+// NewMediaFrame 새로운 미디어 프레임 생성
+func NewMediaFrame(codec MediaCodec, format BitstreamFormat, kind FrameKind, timestamp uint32, data []byte) MediaFrame {
+	return MediaFrame{
+		Codec:     codec,
+		Format:    format,
+		Kind:      kind,
+		Timestamp: timestamp,
+		Data:      data,
+	}
+}
+
+// === 기존 호환성 타입들 ===
+
 // Type represents the type of media
 type Type uint8
 
