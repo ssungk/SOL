@@ -99,7 +99,11 @@ func (s *session) handleMessageOrRoute(message *Message) {
 	case MsgTypeAbort:
 		s.handleAbort(message)
 	default:
-		s.channel <- commandEvent{message: message}
+		select {
+		case s.channel <- commandEvent{message: message}:
+		case <-s.ctx.Done():
+
+		}
 	}
 }
 
@@ -186,24 +190,6 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 		return
 	}
 
-	// Frame.Data를 단일 버퍼로 변환 (임시 처리)
-	var frameData []byte
-	if len(e.frame.Data) == 1 {
-		frameData = e.frame.Data[0]
-	} else if len(e.frame.Data) > 1 {
-		// 여러 청크를 하나로 합치기
-		totalSize := 0
-		for _, chunk := range e.frame.Data {
-			totalSize += len(chunk)
-		}
-		frameData = make([]byte, totalSize)
-		offset := 0
-		for _, chunk := range e.frame.Data {
-			copy(frameData[offset:], chunk)
-			offset += len(chunk)
-		}
-	}
-
 	var msgType uint8
 	var rtmpData []byte
 
@@ -212,13 +198,13 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 		msgType = MsgTypeVideo
 		// 비디오: RTMP 헤더 재생성 후 데이터와 결합
 		header := GenerateVideoHeader(e.frame.SubType, 0) // composition time = 0으로 설정
-		rtmpData = CombineHeaderAndData(header, frameData)
+		rtmpData = CombineHeaderAndData(header, e.frame.Data)
 
 	case media.TypeAudio:
 		msgType = MsgTypeAudio
 		// 오디오: RTMP 헤더 재생성 후 데이터와 결합
 		header := GenerateAudioHeader(e.frame.SubType)
-		rtmpData = CombineHeaderAndData(header, frameData)
+		rtmpData = CombineHeaderAndData(header, e.frame.Data)
 
 	default:
 		slog.Warn("Unsupported frame type", "type", e.frame.Type, "sessionId", s.ID())
@@ -329,8 +315,6 @@ func (s *session) handleAudio(message *Message) {
 	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
 
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
-	dataToSend := [][]byte{message.payload}
-
 	// 일반 Frame 생성
 	frame := media.Frame{
 		Type:       media.TypeAudio,
@@ -338,7 +322,7 @@ func (s *session) handleAudio(message *Message) {
 		CodecType:  codecType,
 		FormatType: media.FormatRaw,
 		Timestamp:  message.messageHeader.timestamp,
-		Data:       dataToSend,
+		Data:       message.payload,
 	}
 
 	// message의 streamId에 해당하는 스트림에 전송
@@ -362,8 +346,6 @@ func (s *session) handleVideo(message *Message) {
 	frameType := s.parseVideoFrameType(firstByte, message.mediaHeader)
 
 	// payload는 이미 순수 비디오 데이터 (헤더 제외됨)
-	dataToSend := [][]byte{message.payload}
-
 	// 일반 Frame 생성
 	frame := media.Frame{
 		Type:       media.TypeVideo,
@@ -371,7 +353,7 @@ func (s *session) handleVideo(message *Message) {
 		CodecType:  codecType,
 		FormatType: media.FormatAVCC,
 		Timestamp:  message.messageHeader.timestamp,
-		Data:       dataToSend,
+		Data:       message.payload,
 	}
 
 	// message의 streamId에 해당하는 스트림에 전송
@@ -549,12 +531,8 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint
 }
 
 // calculateDataSize 데이터 크기 계산 헬퍼 함수
-func (s *session) calculateDataSize(data [][]byte) uint32 {
-	totalSize := uint32(0)
-	for _, chunk := range data {
-		totalSize += uint32(len(chunk))
-	}
-	return totalSize
+func (s *session) calculateDataSize(data []byte) uint32 {
+	return uint32(len(data))
 }
 
 // 바이트 슬라이스들을 Reader로 변환

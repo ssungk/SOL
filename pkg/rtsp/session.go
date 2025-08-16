@@ -764,11 +764,8 @@ func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
 	// RTP 헤더 (12바이트) + 페이로드
 	
-	// 프레임 데이터를 평면 배열로 결합
-	var payload []byte
-	for _, chunk := range frame.Data {
-		payload = append(payload, chunk...)
-	}
+	// 프레임 데이터 사용 (이미 []byte)
+	payload := frame.Data
 
 	// 간단한 RTP 헤더 생성
 	rtpHeader := make([]byte, 12)
@@ -857,7 +854,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 		CodecType:  codecType,
 		FormatType: formatType,
 		Timestamp:  timestamp,
-		Data:       [][]byte{payload}, // 단일 청크로 저장
+		Data:       payload, // 단일 버퍼로 저장
 	}
 
 	slog.Debug("Converted RTP to Frame", 

@@ -111,12 +111,12 @@ func (s *srtMediaSink) PreferredFormat(codecType media.CodecType) media.FormatTy
 func (s *srtMediaSink) frameToSRTData(frame media.Frame) []byte {
 	// 프레임 타입에 따라 처리
 	if frame.Type == media.TypeVideo {
-		if len(frame.Data) > 0 && len(frame.Data[0]) > 0 {
-			return frame.Data[0]
+		if len(frame.Data) > 0 {
+			return frame.Data
 		}
 	} else if frame.Type == media.TypeAudio {
-		if len(frame.Data) > 0 && len(frame.Data[0]) > 0 {
-			return frame.Data[0]
+		if len(frame.Data) > 0 {
+			return frame.Data
 		}
 	}
 	return nil

@@ -132,8 +132,8 @@ func (w *TSWriter) writeFrame(frame media.Frame, isFirst bool) error {
 		return nil // 지원하지 않는 타입 무시
 	}
 
-	// 프레임 데이터 병합
-	frameData := w.mergeFrameData(frame.Data)
+	// 프레임 데이터 사용 (이미 []byte)
+	frameData := frame.Data
 
 	// PES 패킷 생성
 	pesData := w.generatePES(streamID, frameData, frame.Timestamp)

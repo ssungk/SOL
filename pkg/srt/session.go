@@ -646,7 +646,7 @@ func (s *Session) handlePublishData(data []byte) {
 			Type:      media.TypeVideo,
 			SubType:   media.VideoKeyFrame,                     // 임시로 키프레임으로 설정
 			Timestamp: uint32(time.Now().UnixNano() / 1000000), // ms
-			Data:      [][]byte{data},
+			Data:      data,
 		}
 
 		// MediaSource를 통해 프레임 전송 (향후 구현)
