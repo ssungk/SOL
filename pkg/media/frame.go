@@ -30,7 +30,7 @@ const (
 	FormatUnknown FormatType = iota
 	FormatRaw               // 원본 데이터
 	FormatAVCC              // H264/H265 AVCC 포맷 (length-prefix)
-	FormatStartCode         // H264/H265 StartCode 포맷 (0x00 0x00 0x01)
+	FormatAnnexB            // H264/H265 Annex-B 포맷 (0x00 0x00 0x01)
 	FormatADTS              // AAC ADTS 포맷
 )
 
@@ -127,17 +127,17 @@ func ConvertH264Format(data []byte, fromFormat, toFormat FormatType) ([]byte, er
 	}
 
 	switch {
-	case fromFormat == FormatAVCC && toFormat == FormatStartCode:
-		return convertAVCCToStartCode(data), nil
-	case fromFormat == FormatStartCode && toFormat == FormatAVCC:
-		return convertStartCodeToAVCC(data), nil
+	case fromFormat == FormatAVCC && toFormat == FormatAnnexB:
+		return convertAVCCToAnnexB(data), nil
+	case fromFormat == FormatAnnexB && toFormat == FormatAVCC:
+		return convertAnnexBToAVCC(data), nil
 	default:
 		return data, nil // 지원하지 않는 변환은 원본 반환
 	}
 }
 
-// convertAVCCToStartCode AVCC 포맷을 StartCode 포맷으로 변환
-func convertAVCCToStartCode(data []byte) []byte {
+// convertAVCCToAnnexB AVCC 포맷을 Annex-B 포맷으로 변환
+func convertAVCCToAnnexB(data []byte) []byte {
 	var result []byte
 	startCode := []byte{0x00, 0x00, 0x00, 0x01}
 
@@ -165,8 +165,8 @@ func convertAVCCToStartCode(data []byte) []byte {
 	return result
 }
 
-// convertStartCodeToAVCC StartCode 포맷을 AVCC 포맷으로 변환
-func convertStartCodeToAVCC(data []byte) []byte {
+// convertAnnexBToAVCC Annex-B 포맷을 AVCC 포맷으로 변환
+func convertAnnexBToAVCC(data []byte) []byte {
 	var result []byte
 
 	pos := 0

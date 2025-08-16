@@ -834,7 +834,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 	case 96: // H.264
 		mediaType = media.TypeVideo
 		codecType = media.CodecH264
-		formatType = media.FormatStartCode // RTSP는 StartCode 포맷 사용
+		formatType = media.FormatAnnexB // RTSP는 StartCode 포맷 사용
 		subType = media.VideoInterFrame    // 기본값으로 Inter Frame
 	case 97: // AAC
 		mediaType = media.TypeAudio
@@ -844,7 +844,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 	default:
 		mediaType = media.TypeVideo
 		codecType = media.CodecH264
-		formatType = media.FormatStartCode
+		formatType = media.FormatAnnexB
 		subType = media.VideoInterFrame
 	}
 	
@@ -947,7 +947,7 @@ func (s *Session) sendRecordErrorResponse(cseq int, message string) error {
 func (s *Session) PreferredFormat(codecType media.CodecType) media.FormatType {
 	switch codecType {
 	case media.CodecH264, media.CodecH265:
-		return media.FormatStartCode // RTSP는 StartCode 포맷 사용
+		return media.FormatAnnexB // RTSP는 StartCode 포맷 사용
 	default:
 		return media.FormatRaw
 	}

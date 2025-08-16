@@ -101,7 +101,7 @@ func (s *srtMediaSink) SubscribedStreams() []string {
 func (s *srtMediaSink) PreferredFormat(codecType media.CodecType) media.FormatType {
 	switch codecType {
 	case media.CodecH264, media.CodecH265:
-		return media.FormatStartCode // SRT는 StartCode 포맷 사용
+		return media.FormatAnnexB // SRT는 StartCode 포맷 사용
 	default:
 		return media.FormatRaw
 	}

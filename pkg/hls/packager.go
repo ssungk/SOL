@@ -352,7 +352,7 @@ func (p *Packager) SubscribedStreams() []string {
 func (p *Packager) PreferredFormat(codecType media.CodecType) media.FormatType {
 	switch codecType {
 	case media.CodecH264, media.CodecH265:
-		return media.FormatStartCode // MPEG-TS는 StartCode 포맷 사용
+		return media.FormatAnnexB // MPEG-TS는 StartCode 포맷 사용
 	case media.CodecAAC:
 		return media.FormatADTS // AAC는 ADTS 포맷 선호
 	default:
