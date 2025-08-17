@@ -162,15 +162,10 @@ func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
 	}
 	
 	if sink, ok := node.(media.MediaSink); ok {
-		// Sink 등록 - 스트림에 추가
+		// Sink 등록 - 스트림에 추가 (캐시된 데이터 자동 전송 포함)
 		if err := stream.AddSink(sink); err != nil {
 			slog.Error("Failed to add sink to stream", "streamId", streamId, "nodeId", nodeId, "err", err)
 			return
-		}
-		
-		// 캐시된 데이터 전송
-		if err := stream.SendCachedDataToSink(sink); err != nil {
-			slog.Error("Failed to send cached data to sink", "streamId", streamId, "nodeId", nodeId, "err", err)
 		}
 		
 		slog.Info("Registered sink", "streamId", streamId, "nodeId", nodeId, "nodeType", node.NodeType())
@@ -533,7 +528,7 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 	// 스트림 가져오거나 생성
 	stream := s.GetOrCreateStream(event.StreamId)
 	
-	// Sink를 스트림에 추가
+	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
 	if err := stream.AddSink(sink); err != nil {
 		slog.Error("Failed to add sink to stream", "streamId", event.StreamId, "sinkId", event.NodeId(), "err", err)
 		return
@@ -545,11 +540,6 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 			rtspSession.Stream = stream
 			slog.Info("Stream reference set for RTSP session", "streamId", event.StreamId, "sessionId", rtspSession.GetStreamPath())
 		}
-	}
-	
-	// 캐시된 데이터 전송
-	if err := stream.SendCachedDataToSink(sink); err != nil {
-		slog.Error("Failed to send cached data to sink", "streamId", event.StreamId, "sinkId", event.NodeId(), "err", err)
 	}
 	
 	slog.Info("Sink registered for play", "streamId", event.StreamId, "sinkId", event.NodeId())

@@ -40,8 +40,6 @@ func (s *Stream) SendFrame(frame MediaFrame) {
 	s.broadcastFrame(frame)
 }
 
-// SendManagedFrame은 제거됨 - SendFrame만 사용
-
 // SendMetadata sends metadata to the stream (called by external sources)
 func (s *Stream) SendMetadata(metadata map[string]string) {
 	// Cache the metadata
@@ -57,7 +55,7 @@ func (s *Stream) broadcastFrame(frame MediaFrame) {
 	for _, sink := range s.sinks {
 		// 각 sink의 선호 포맷에 맞게 변환
 		convertedFrame := s.convertFrameForSink(frame, sink)
-		
+
 		if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
 			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
 		}
@@ -86,12 +84,18 @@ func (s *Stream) Stop() {
 	slog.Info("Stream stopped", "streamId", s.id)
 }
 
-// AddSink adds a stream sink
+// AddSink adds a stream sink and automatically sends cached data
 func (s *Stream) AddSink(sink MediaSink) error {
 	nodeId := sink.ID()
 	s.sinks[nodeId] = sink
 
 	slog.Info("Sink added to stream", "streamId", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
+
+	// 자동으로 캐시된 데이터 전송
+	if err := s.sendCachedDataToSink(sink); err != nil {
+		slog.Error("Failed to send cached data to newly added sink", "streamId", s.id, "nodeId", nodeId, "err", err)
+		// sink는 이미 추가되었으므로 에러가 있어도 제거하지 않음
+	}
 
 	return nil
 }
@@ -104,8 +108,8 @@ func (s *Stream) RemoveSink(sink MediaSink) {
 	slog.Info("Sink removed from stream", "streamId", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
 }
 
-// SendCachedDataToSink sends all cached data to a new sink
-func (s *Stream) SendCachedDataToSink(sink MediaSink) error {
+// sendCachedDataToSink sends all cached data to a new sink (private)
+func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	nodeId := sink.ID()
 
 	// Send cached metadata first
@@ -125,7 +129,7 @@ func (s *Stream) SendCachedDataToSink(sink MediaSink) error {
 		for _, frame := range cachedFrames {
 			// 각 sink의 선호 포맷에 맞게 변환
 			convertedFrame := s.convertFrameForSink(frame, sink)
-			
+
 			if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
 				slog.Error("Failed to send cached frame to sink", "streamId", s.id, "nodeId", nodeId, "codec", frame.Codec, "err", err)
 				// Continue with next frame even if one fails

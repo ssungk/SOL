@@ -4,23 +4,21 @@ import (
 	"log/slog"
 )
 
-// 모든 유형의 미디어 캐싱을 관리합니다
-// 이벤트 드리븐 모델: 경쟁 상태를 피하기 위해 모든 접근은 이벤트 루프를 통해야 합니다
 type StreamBuffer struct {
 	// 시간순으로 정렬된 모든 프레임 (MediaFrame)
 	frames []MediaFrame
-	
+
 	// 코덱 설정 데이터 (SPS/PPS, AudioSpecificConfig 등)
 	extraData map[Codec]MediaFrame
-	
+
 	// 스트림 메타데이터 (width, height, framerate, audiocodecid 등)
 	metadata map[string]string
-	
+
 	// 시간 기반 버퍼링 설정
 	minBufferDurationMs uint32 // 최소 버퍼 시간 (ms) - 기본 2초
 	maxBufferDurationMs uint32 // 최대 버퍼 시간 (ms) - 기본 10초
 	maxFrames           int    // 안전장치로 최대 프레임 수
-	
+
 	// 키프레임 추적
 	lastKeyFrameIndex int // 마지막 키프레임 위치
 }
@@ -60,7 +58,7 @@ func (sb *StreamBuffer) AddFrame(frame MediaFrame) {
 
 	// Add frame to cache
 	sb.frames = append(sb.frames, frame)
-	
+
 	// 시간 기준으로 오래된 프레임 정리
 	sb.cleanupOldFrames()
 }
@@ -70,10 +68,10 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 	if len(sb.frames) == 0 {
 		return
 	}
-	
+
 	currentTime := sb.getCurrentTimestamp() // 최신 프레임 타임스탬프
 	minTime := currentTime - sb.minBufferDurationMs
-	
+
 	// 최소 버퍼 시간 이상 유지하면서 정리
 	// 단, 키프레임은 보존하여 재생 연속성 확보
 	cleanupIndex := 0
@@ -81,7 +79,7 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 		if frame.Timestamp >= minTime {
 			break // 최소 시간 이후 프레임들은 모두 유지
 		}
-		
+
 		// 키프레임이면서 최소 시간 내에 다른 키프레임이 있으면 제거 가능
 		if frame.IsKeyFrame() {
 			if sb.hasKeyFrameAfter(i, minTime) {
@@ -91,7 +89,7 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 			cleanupIndex = i + 1
 		}
 	}
-	
+
 	// 정리 실행
 	if cleanupIndex > 0 {
 		sb.frames = sb.frames[cleanupIndex:]
@@ -101,10 +99,10 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 		} else {
 			sb.lastKeyFrameIndex = -1 // 키프레임이 정리됨
 		}
-		
+
 		slog.Debug("Old frames cleaned up", "removedCount", cleanupIndex, "remainingCount", len(sb.frames))
 	}
-	
+
 	// 안전장치: 최대 프레임 수 제한
 	if len(sb.frames) > sb.maxFrames {
 		excessCount := len(sb.frames) - sb.maxFrames
@@ -115,7 +113,7 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 		} else {
 			sb.lastKeyFrameIndex = -1
 		}
-		
+
 		slog.Warn("Buffer overflow protection triggered", "removedCount", excessCount, "maxFrames", sb.maxFrames)
 	}
 }
@@ -146,7 +144,6 @@ func (sb *StreamBuffer) getBufferDuration() uint32 {
 	}
 	return sb.frames[len(sb.frames)-1].Timestamp - sb.frames[0].Timestamp
 }
-
 
 // 메타데이터를 캐시에 추가합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
@@ -188,21 +185,20 @@ func (sb *StreamBuffer) GetCachedFrames() []MediaFrame {
 		// 마지막 키프레임부터 끝까지의 프레임들
 		keyFrameBasedFrames := sb.frames[sb.lastKeyFrameIndex:]
 		allFrames = append(allFrames, keyFrameBasedFrames...)
-		
-		slog.Debug("Cached frames prepared with key frame GOP", 
-			"totalFrames", len(keyFrameBasedFrames), 
+
+		slog.Debug("Cached frames prepared with key frame GOP",
+			"totalFrames", len(keyFrameBasedFrames),
 			"keyFrameIndex", sb.lastKeyFrameIndex,
 			"extraDataCount", len(sb.extraData))
 	} else if len(sb.frames) > 0 {
 		// 키프레임이 없는 경우 경고하고 모든 프레임 포함 (fallback)
-		slog.Warn("No key frame available for new player, this may cause decoding issues", 
+		slog.Warn("No key frame available for new player, this may cause decoding issues",
 			"totalFrames", len(sb.frames))
 		allFrames = append(allFrames, sb.frames...)
 	}
 
 	return allFrames
 }
-
 
 // 캐시된 메타데이터를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
@@ -245,34 +241,34 @@ func (sb *StreamBuffer) HasCachedData() bool {
 func (sb *StreamBuffer) GetCacheStats() map[string]any {
 	bufferDuration := sb.getBufferDuration()
 	keyFrameCount := sb.getKeyFrameCount()
-	
+
 	stats := map[string]any{
 		// 기본 정보
 		"total_frame_count": len(sb.frames),
 		"extra_data_count":  len(sb.extraData),
 		"has_metadata":      sb.metadata != nil,
-		
+
 		// 시간 기반 통계
 		"buffer_duration_ms":     bufferDuration,
 		"buffer_duration_sec":    float64(bufferDuration) / 1000.0,
 		"min_buffer_duration_ms": sb.minBufferDurationMs,
 		"max_buffer_duration_ms": sb.maxBufferDurationMs,
-		
+
 		// 키프레임 통계
-		"key_frame_count":     keyFrameCount,
+		"key_frame_count":      keyFrameCount,
 		"last_key_frame_index": sb.lastKeyFrameIndex,
-		
+
 		// 버퍼 효율성
 		"buffer_utilization": sb.getBufferUtilization(),
 		"max_frames_limit":   sb.maxFrames,
 	}
-	
+
 	// 평균 키프레임 간격 계산 (키프레임이 2개 이상일 때)
 	if avgInterval := sb.getAverageKeyFrameInterval(); avgInterval > 0 {
 		stats["avg_keyframe_interval_ms"] = avgInterval
 		stats["avg_keyframe_interval_sec"] = float64(avgInterval) / 1000.0
 	}
-	
+
 	return stats
 }
 
@@ -290,22 +286,22 @@ func (sb *StreamBuffer) getKeyFrameCount() int {
 // getAverageKeyFrameInterval 평균 키프레임 간격 반환 (ms)
 func (sb *StreamBuffer) getAverageKeyFrameInterval() uint32 {
 	keyFrameTimes := make([]uint32, 0)
-	
+
 	for _, frame := range sb.frames {
 		if frame.IsKeyFrame() {
 			keyFrameTimes = append(keyFrameTimes, frame.Timestamp)
 		}
 	}
-	
+
 	if len(keyFrameTimes) < 2 {
 		return 0
 	}
-	
+
 	totalInterval := uint32(0)
 	for i := 1; i < len(keyFrameTimes); i++ {
 		totalInterval += keyFrameTimes[i] - keyFrameTimes[i-1]
 	}
-	
+
 	return totalInterval / uint32(len(keyFrameTimes)-1)
 }
 
@@ -314,11 +310,11 @@ func (sb *StreamBuffer) getBufferUtilization() float64 {
 	if sb.maxBufferDurationMs == 0 {
 		return 0.0
 	}
-	
+
 	currentDuration := sb.getBufferDuration()
 	if currentDuration >= sb.maxBufferDurationMs {
 		return 1.0
 	}
-	
+
 	return float64(currentDuration) / float64(sb.maxBufferDurationMs)
 }

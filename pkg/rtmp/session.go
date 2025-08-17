@@ -1275,5 +1275,3 @@ func (s *session) handleGetStreamLength(values []any) {
 
 	slog.Debug("getStreamLength response sent", "sessionId", s.ID(), "streamName", streamName, "length", streamLength, "transactionID", transactionID)
 }
-
-
