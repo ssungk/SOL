@@ -12,7 +12,6 @@ import (
 	"sol/pkg/rtmp/amf"
 	"sol/pkg/utils"
 	"sync"
-	"time"
 	"unsafe"
 )
 
@@ -854,41 +853,32 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
 	responseChan := make(chan media.Response, 1)
+	
+	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
+	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, responseChan)
+	
+	// 응답 대기
 	select {
-	case s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, responseChan):
-		// 응답 대기 (타임아웃 5초)
-		select {
-		case response := <-responseChan:
-			if !response.Success {
-				slog.Error("Subscribe attempt failed", "sessionId", s.ID(), "streamPath", fullStreamPath, "error", response.Error)
-				// 실패 시 미리 추가한 매핑 제거
-				s.removeSubscribedStream(streamId)
-				// NetStream.Play.Failed 전송
-				failedStatusObj := map[string]any{
-					"level":       "error",
-					"code":        "NetStream.Play.Failed",
-					"description": response.Error,
-				}
-				if failedSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, failedStatusObj); err == nil {
-					s.writer.writeCommand(s.conn, failedSequence)
-				}
-				return
+	case response := <-responseChan:
+		if !response.Success {
+			slog.Error("Subscribe attempt failed", "sessionId", s.ID(), "streamPath", fullStreamPath, "error", response.Error)
+			// 실패 시 미리 추가한 매핑 제거
+			s.removeSubscribedStream(streamId)
+			// NetStream.Play.Failed 전송
+			failedStatusObj := map[string]any{
+				"level":       "error",
+				"code":        "NetStream.Play.Failed",
+				"description": response.Error,
 			}
-			slog.Info("Subscribe attempt succeeded", "sessionId", s.ID(), "streamPath", fullStreamPath)
-		case <-time.After(5 * time.Second):
-			slog.Error("Subscribe attempt timeout", "sessionId", s.ID(), "streamPath", fullStreamPath)
-			// 타임아웃 시 미리 추가한 매핑 제거
-			s.removeSubscribedStream(streamId)
-			return
-		case <-s.ctx.Done():
-			slog.Error("Subscribe attempt cancelled - context done", "sessionId", s.ID(), "streamPath", fullStreamPath)
-			// 취소 시 미리 추가한 매핑 제거
-			s.removeSubscribedStream(streamId)
+			if failedSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, failedStatusObj); err == nil {
+				s.writer.writeCommand(s.conn, failedSequence)
+			}
 			return
 		}
+		slog.Info("Subscribe attempt succeeded", "sessionId", s.ID(), "streamPath", fullStreamPath)
 	case <-s.ctx.Done():
-		slog.Error("Failed to send SubscribeStarted event - context cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
-		// 전송 실패 시 미리 추가한 매핑 제거
+		slog.Error("Subscribe attempt cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
+		// 취소 시 미리 추가한 매핑 제거
 		s.removeSubscribedStream(streamId)
 		return
 	}
@@ -1168,23 +1158,21 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 	responseChan := make(chan media.Response, 1)
 	publishAttempt := media.NewPublishStarted(s.ID(), media.NodeTypeRTMP, stream, responseChan)
 
+	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
+	s.mediaServerChannel <- publishAttempt
+	
+	// 응답 대기
 	select {
-	case s.mediaServerChannel <- publishAttempt:
-		// 응답 대기 (타임아웃 5초)
-		select {
-		case response := <-responseChan:
-			if response.Success {
-				slog.Info("Stream publish attempt succeeded", "sessionId", s.ID(), "streamKey", streamKey)
-				return true
-			} else {
-				slog.Error("Stream publish attempt failed", "sessionId", s.ID(), "streamKey", streamKey, "error", response.Error)
-				return false
-			}
-		case <-time.After(5 * time.Second):
-			slog.Error("Stream publish attempt timeout", "sessionId", s.ID(), "streamKey", streamKey)
+	case response := <-responseChan:
+		if response.Success {
+			slog.Info("Stream publish attempt succeeded", "sessionId", s.ID(), "streamKey", streamKey)
+			return true
+		} else {
+			slog.Error("Stream publish attempt failed", "sessionId", s.ID(), "streamKey", streamKey, "error", response.Error)
 			return false
 		}
 	case <-s.ctx.Done():
+		slog.Error("Stream publish cancelled", "sessionId", s.ID(), "streamKey", streamKey)
 		return false
 	}
 }

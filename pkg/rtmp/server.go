@@ -77,8 +77,8 @@ func (s *Server) Stop() {
 	s.cancel()
 }
 
-// Name 서버 이름 반환 (ProtocolServer 인터페이스 구현)
-func (s *Server) Name() string {
+// ID 서버 ID 반환 (ServerInterface 인터페이스 구현)
+func (s *Server) ID() string {
 	return "rtmp"
 }
 

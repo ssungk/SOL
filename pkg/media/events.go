@@ -58,6 +58,30 @@ type Response struct {
 	Error   string
 }
 
+// NewResponse Response 생성자
+func NewResponse(success bool, error string) Response {
+	return Response{
+		Success: success,
+		Error:   error,
+	}
+}
+
+// NewSuccessResponse 성공 응답 생성자
+func NewSuccessResponse() Response {
+	return Response{
+		Success: true,
+		Error:   "",
+	}
+}
+
+// NewErrorResponse 실패 응답 생성자
+func NewErrorResponse(error string) Response {
+	return Response{
+		Success: false,
+		Error:   error,
+	}
+}
+
 // 이벤트 생성자 함수들
 
 // NewNodeCreated 노드 생성 이벤트 생성자
