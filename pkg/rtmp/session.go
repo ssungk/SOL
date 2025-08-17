@@ -848,17 +848,48 @@ func (s *session) handlePlay(message *Message, values []any) {
 		}
 	}
 
-	// 구독 스트림 추가
+	// 먼저 구독 스트림 매핑을 설정 (MediaServer 신호 보내기 전에)
 	s.addSubscribedStream(streamId, fullStreamPath)
+	slog.Info("Stream mapping added, now sending SubscribeStarted event to MediaServer", "sessionId", s.ID(), "streamPath", fullStreamPath)
 
-	slog.Info("Sending PlayStarted event to MediaServer", "sessionId", s.ID(), "streamPath", fullStreamPath)
-
-	// MediaServer에 play 시작 알림 (블로킹 - 중요한 이벤트)
+	// MediaServer에 subscribe 시작 알림 및 응답 대기
+	responseChan := make(chan media.Response, 1)
 	select {
-	case s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
-		slog.Info("PlayStarted event sent successfully", "sessionId", s.ID(), "streamPath", fullStreamPath)
+	case s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, responseChan):
+		// 응답 대기 (타임아웃 5초)
+		select {
+		case response := <-responseChan:
+			if !response.Success {
+				slog.Error("Subscribe attempt failed", "sessionId", s.ID(), "streamPath", fullStreamPath, "error", response.Error)
+				// 실패 시 미리 추가한 매핑 제거
+				s.removeSubscribedStream(streamId)
+				// NetStream.Play.Failed 전송
+				failedStatusObj := map[string]any{
+					"level":       "error",
+					"code":        "NetStream.Play.Failed",
+					"description": response.Error,
+				}
+				if failedSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, failedStatusObj); err == nil {
+					s.writer.writeCommand(s.conn, failedSequence)
+				}
+				return
+			}
+			slog.Info("Subscribe attempt succeeded", "sessionId", s.ID(), "streamPath", fullStreamPath)
+		case <-time.After(5 * time.Second):
+			slog.Error("Subscribe attempt timeout", "sessionId", s.ID(), "streamPath", fullStreamPath)
+			// 타임아웃 시 미리 추가한 매핑 제거
+			s.removeSubscribedStream(streamId)
+			return
+		case <-s.ctx.Done():
+			slog.Error("Subscribe attempt cancelled - context done", "sessionId", s.ID(), "streamPath", fullStreamPath)
+			// 취소 시 미리 추가한 매핑 제거
+			s.removeSubscribedStream(streamId)
+			return
+		}
 	case <-s.ctx.Done():
-		slog.Error("Failed to send PlayStarted event - context cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
+		slog.Error("Failed to send SubscribeStarted event - context cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
+		// 전송 실패 시 미리 추가한 매핑 제거
+		s.removeSubscribedStream(streamId)
 		return
 	}
 

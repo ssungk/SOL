@@ -42,7 +42,8 @@ type PublishStopped struct {
 // 재생 시작 이벤트
 type SubscribeStarted struct {
 	BaseNodeEvent
-	StreamId string
+	StreamId     string
+	ResponseChan chan<- Response
 }
 
 // 재생 중지 이벤트
@@ -92,10 +93,11 @@ func NewPublishStopped(id uintptr, nodeType NodeType, streamId string) PublishSt
 }
 
 // NewSubscribeStarted 재생 시작 이벤트 생성자
-func NewSubscribeStarted(id uintptr, nodeType NodeType, streamId string) SubscribeStarted {
+func NewSubscribeStarted(id uintptr, nodeType NodeType, streamId string, responseChan chan<- Response) SubscribeStarted {
 	return SubscribeStarted{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
+		ResponseChan:  responseChan,
 	}
 }
 
