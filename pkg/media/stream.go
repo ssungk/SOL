@@ -131,7 +131,7 @@ func (s *Stream) Stop() {
 }
 
 // AddSink adds a stream sink and automatically sends cached data
-func (s *Stream) AddSink(sink MediaSink) error {
+func (s *Stream) AddSink(sink MediaSink) {
 	nodeId := sink.ID()
 	s.sinks[nodeId] = sink
 
@@ -142,8 +142,6 @@ func (s *Stream) AddSink(sink MediaSink) error {
 		slog.Error("Failed to send cached data to newly added sink", "streamId", s.id, "nodeId", nodeId, "err", err)
 		// sink는 이미 추가되었으므로 에러가 있어도 제거하지 않음
 	}
-
-	return nil
 }
 
 // RemoveSink removes a stream sink

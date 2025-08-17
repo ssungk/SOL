@@ -316,15 +316,14 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 		return
 	}
 
-	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
-	if err := stream.AddSink(sink); err != nil {
-		sendResponse(false, fmt.Sprintf("Failed to add sink to stream: %v", err))
-		slog.Error("Failed to add sink to stream", "streamId", event.StreamId, "sinkId", event.NodeId(), "err", err)
-		return
-	}
+	// TODO TODO TODO TODO TODO TODO TODO TODO TODO
+	// sink 코덱 등 검사해서 addSink문제 없게 해야됨!!
 
-	// 성공 응답 (이제 RTMP 세션이 이미 매핑을 설정했으므로 안전)
+	// 성공 응답 먼저 전송 (AddSink에서 캐시 데이터 전송 시 데드락 방지)
 	sendResponse(true, "")
+
+	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
+	stream.AddSink(sink)
 
 	// RTSP 세션인 경우 스트림 참조 설정
 	if event.NodeType == media.NodeTypeRTSP {
