@@ -824,22 +824,22 @@ func (s *Session) convertRTPToMediaFrame(rtpData []byte, streamId string) (media
 	// 페이로드 추출 (헤더 제외)
 	payload := rtpData[12:]
 
-	// 페이로드 타입에 따른 MediaCodec, BitstreamFormat, FrameType 결정
-	var codec media.MediaCodec
+	// 페이로드 타입에 따른 Codec, BitstreamFormat, FrameType 결정
+	var codec media.Codec
 	var format media.BitstreamFormat
 	var frameType media.FrameType
 
 	switch payloadType {
 	case 96: // H.264
-		codec = media.MediaH264
+		codec = media.H264
 		format = media.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
 		frameType = media.TypeData    // 기본값으로 Data
 	case 97: // AAC
-		codec = media.MediaAAC
+		codec = media.AAC
 		format = media.FormatRawStream // 오디오는 raw 데이터
 		frameType = media.TypeData // 기본값으로 Data
 	default:
-		codec = media.MediaH264
+		codec = media.H264
 		format = media.FormatH26xAnnexB
 		frameType = media.TypeData
 	}

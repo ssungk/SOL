@@ -15,6 +15,12 @@ const (
 	NodeTypeAnalyzer
 )
 
+// 공통 상수들
+const (
+	// DefaultChannelBufferSize 기본 채널 버퍼 크기 - 모든 프로토콜에서 공통 사용
+	DefaultChannelBufferSize = 10
+)
+
 // String returns string representation of NodeType for debugging
 func (nt NodeType) String() string {
 	switch nt {

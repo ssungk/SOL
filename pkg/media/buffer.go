@@ -11,7 +11,7 @@ type StreamBuffer struct {
 	frames []MediaFrame
 	
 	// 코덱 설정 데이터 (SPS/PPS, AudioSpecificConfig 등)
-	extraData map[MediaCodec]MediaFrame
+	extraData map[Codec]MediaFrame
 	
 	// 스트림 메타데이터 (width, height, framerate, audiocodecid 등)
 	metadata map[string]string
@@ -34,7 +34,7 @@ func NewStreamBuffer() *StreamBuffer {
 func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames int) *StreamBuffer {
 	return &StreamBuffer{
 		frames:              make([]MediaFrame, 0),
-		extraData:           make(map[MediaCodec]MediaFrame),
+		extraData:           make(map[Codec]MediaFrame),
 		minBufferDurationMs: minDurationMs,
 		maxBufferDurationMs: maxDurationMs,
 		maxFrames:           maxFrames,
@@ -169,14 +169,14 @@ func (sb *StreamBuffer) GetCachedFrames() []MediaFrame {
 
 	// 1. 모든 extra data 먼저 추가 (비디오 → 오디오 순서)
 	// 비디오 설정 프레임 (SPS/PPS) 먼저
-	for codec := MediaH264; codec <= MediaAV1; codec++ {
+	for codec := H264; codec <= AV1; codec++ {
 		if extraFrame, exists := sb.extraData[codec]; exists {
 			allFrames = append(allFrames, extraFrame)
 			slog.Debug("Added video config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
 		}
 	}
 	// 오디오 설정 프레임
-	for codec := MediaAAC; codec <= MediaMP3; codec++ {
+	for codec := AAC; codec <= MP3; codec++ {
 		if extraFrame, exists := sb.extraData[codec]; exists {
 			allFrames = append(allFrames, extraFrame)
 			slog.Debug("Added audio config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
@@ -223,7 +223,7 @@ func (sb *StreamBuffer) GetMetadata() map[string]string {
 // Clear 모든 캐시된 데이터를 정리합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) Clear() {
-	sb.extraData = make(map[MediaCodec]MediaFrame)
+	sb.extraData = make(map[Codec]MediaFrame)
 	sb.frames = make([]MediaFrame, 0)
 	sb.metadata = nil
 
