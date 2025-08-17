@@ -170,7 +170,12 @@ func (s *session) sendChannelEvent(event any, eventType string) error {
 	}
 }
 
-func (s *session) SendMediaFrame(streamId string, frame media.MediaFrame) error {
+func (s *session) SendFrame(streamId string, frame media.Frame) error {
+	// RTMP는 현재 비디오(트랙0), 오디오(트랙1)만 지원
+	if frame.TrackIndex > 1 {
+		return nil // 추가 트랙은 무시
+	}
+	
 	event := sendFrameEvent{streamPath: streamId, frame: frame}
 	return s.sendChannelEvent(event, "frame")
 }
@@ -314,11 +319,17 @@ func (s *session) handleAudio(message *Message) {
 	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
 
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
-	// MediaFrame 생성
-	frame := media.NewMediaFrame(codecType, media.FormatRawStream, frameType, message.messageHeader.timestamp, message.payload)
+	// Frame 생성 (오디오는 트랙 1)
+	trackIndex := 1
+	frame := media.NewFrame(trackIndex, codecType, media.FormatRawStream, frameType, message.messageHeader.timestamp, message.payload)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
+		// 트랙이 없으면 추가
+		if stream.GetTrackCount() <= trackIndex {
+			stream.AddTrack(frame.Codec)
+		}
+		
 		stream.SendFrame(frame)
 	}
 }
@@ -340,11 +351,17 @@ func (s *session) handleVideo(message *Message) {
 	// RTMP는 항상 원본 payload 사용 (AVCC 포맷)
 	frameData := message.payload
 
-	// MediaFrame 생성
-	frame := media.NewMediaFrame(codecType, media.FormatH26xAVCC, frameType, message.messageHeader.timestamp, frameData)
+	// Frame 생성 (비디오는 트랙 0)
+	trackIndex := 0
+	frame := media.NewFrame(trackIndex, codecType, media.FormatH26xAVCC, frameType, message.messageHeader.timestamp, frameData)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
+		// 트랙이 없으면 추가
+		if stream.GetTrackCount() <= trackIndex {
+			stream.AddTrack(frame.Codec)
+		}
+		
 		stream.SendFrame(frame)
 	}
 }

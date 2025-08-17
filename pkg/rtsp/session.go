@@ -230,7 +230,7 @@ func (s *Session) handleInterleavedData() error {
 		slog.Debug("Received interleaved RTP data from client", "sessionId", s.ID(), "dataSize", len(data))
 		
 		// RTP 패킷을 media.Frame으로 변환
-		frame, err := s.convertRTPToMediaFrame(data, s.streamPath)
+		frame, err := s.convertRTPToFrame(data, s.streamPath)
 		if err != nil {
 			slog.Error("Failed to convert RTP to frame", "sessionId", s.ID(), "err", err)
 			return nil
@@ -238,6 +238,11 @@ func (s *Session) handleInterleavedData() error {
 
 		// Stream에 프레임 전송 (RECORD 모드에서)
 		if s.state == StateRecording && s.Stream != nil {
+			// 트랙이 없으면 추가
+			if s.Stream.GetTrackCount() <= frame.TrackIndex {
+				s.Stream.AddTrack(frame.Codec)
+			}
+			
 			s.Stream.SendFrame(frame)
 			slog.Debug("RTP frame sent to stream", 
 				"sessionId", s.ID(), 
@@ -727,15 +732,15 @@ func (s *Session) Address() string {
 
 // MediaSink 인터페이스 구현 (RTSP 플레이어 세션용)
 
-// SendMediaFrame MediaSink 인터페이스 구현 - 미디어 프레임을 세션으로 전송
-func (s *Session) SendMediaFrame(streamId string, frame media.MediaFrame) error {
+// SendFrame MediaSink 인터페이스 구현 - 프레임을 세션으로 전송
+func (s *Session) SendFrame(streamId string, frame media.Frame) error {
 	// RTSP 세션이 플레이 중이고 스트림 ID가 일치하는 경우에만 전송
 	if s.state != StatePlaying || s.streamPath != streamId {
 		return fmt.Errorf("session not ready for frame: state=%v, streamPath=%s", s.state, s.streamPath)
 	}
 
-	// MediaFrame을 RTP 패킷으로 변환
-	rtpData, err := s.convertMediaFrameToRTP(frame)
+	// Frame을 RTP 패킷으로 변환
+	rtpData, err := s.convertFrameToRTP(frame)
 	if err != nil {
 		return fmt.Errorf("failed to convert frame to RTP: %v", err)
 	}
@@ -759,8 +764,8 @@ func (s *Session) SendMetadata(streamId string, metadata map[string]string) erro
 	return nil
 }
 
-// convertMediaFrameToRTP MediaFrame을 RTP 패킷으로 변환
-func (s *Session) convertMediaFrameToRTP(frame media.MediaFrame) ([]byte, error) {
+// convertFrameToRTP Frame을 RTP 패킷으로 변환
+func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
 	// RTP 헤더 (12바이트) + 페이로드
 	
@@ -806,16 +811,16 @@ func (s *Session) GetStreamPath() string {
 // MediaSource 인터페이스 구현 (RECORD 시 사용)
 // RTSP Session은 RECORD 모드에서는 MediaSource로, PLAY 모드에서는 MediaSink로 동작
 
-// convertRTPToMediaFrame RTP 패킷을 MediaFrame으로 변환 (RECORD 시 사용)
-func (s *Session) convertRTPToMediaFrame(rtpData []byte, streamId string) (media.MediaFrame, error) {
+// convertRTPToFrame RTP 패킷을 Frame으로 변환 (RECORD 시 사용)
+func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Frame, error) {
 	if len(rtpData) < 12 {
-		return media.MediaFrame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
+		return media.Frame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
 	}
 
 	// RTP 헤더 파싱
 	version := (rtpData[0] & 0xC0) >> 6
 	if version != 2 {
-		return media.MediaFrame{}, fmt.Errorf("unsupported RTP version: %d", version)
+		return media.Frame{}, fmt.Errorf("unsupported RTP version: %d", version)
 	}
 
 	payloadType := rtpData[1] & 0x7F
@@ -828,23 +833,28 @@ func (s *Session) convertRTPToMediaFrame(rtpData []byte, streamId string) (media
 	var codec media.Codec
 	var format media.BitstreamFormat
 	var frameType media.FrameType
+	var trackIndex int
 
 	switch payloadType {
 	case 96: // H.264
 		codec = media.H264
 		format = media.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
 		frameType = media.TypeData    // 기본값으로 Data
+		trackIndex = 0 // 비디오는 트랙 0
 	case 97: // AAC
 		codec = media.AAC
 		format = media.FormatRawStream // 오디오는 raw 데이터
 		frameType = media.TypeData // 기본값으로 Data
+		trackIndex = 1 // 오디오는 트랙 1
 	default:
 		codec = media.H264
 		format = media.FormatH26xAnnexB
 		frameType = media.TypeData
+		trackIndex = 0 // 기본값은 비디오
 	}
 	
-	frame := media.NewMediaFrame(
+	frame := media.NewFrame(
+		trackIndex,
 		codec,
 		format,
 		frameType,
@@ -852,7 +862,7 @@ func (s *Session) convertRTPToMediaFrame(rtpData []byte, streamId string) (media
 		payload,
 	)
 
-	slog.Debug("Converted RTP to MediaFrame", 
+	slog.Debug("Converted RTP to Frame", 
 		"sessionId", s.ID(), 
 		"streamId", streamId,
 		"payloadType", payloadType,

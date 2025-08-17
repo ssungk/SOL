@@ -5,7 +5,7 @@ import (
 )
 
 // GenerateVideoHeader 비디오 프레임을 위한 RTMP 헤더 생성 (5바이트)
-func GenerateVideoHeader(frame media.MediaFrame, compositionTime uint32) []byte {
+func GenerateVideoHeader(frame media.Frame, compositionTime uint32) []byte {
 	header := make([]byte, 5)
 
 	// Frame Type + Codec ID (1바이트)
@@ -31,7 +31,7 @@ func GenerateVideoHeader(frame media.MediaFrame, compositionTime uint32) []byte 
 }
 
 // GenerateAudioHeader 오디오 프레임을 위한 RTMP 헤더 생성 (2바이트)
-func GenerateAudioHeader(frame media.MediaFrame) []byte {
+func GenerateAudioHeader(frame media.Frame) []byte {
 	header := make([]byte, 2)
 
 	// Audio Info (1바이트): Sound Format(4bit) + Sound Rate(2bit) + Sound Size(1bit) + Sound Type(1bit)

@@ -1,13 +1,21 @@
 package media
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 )
 
-// Stream represents a protocol-independent stream
+// 에러 정의
+var (
+	ErrInvalidTrackIndex = errors.New("invalid track index")
+)
+
+// Stream represents a protocol-independent stream with multiple tracks
 type Stream struct {
 	id           string
-	streamBuffer *StreamBuffer
+	tracks       []*Track        // 트랙 배열 (인덱스 기반)
+	trackBuffers []*TrackBuffer // 트랙별 개별 버퍼
 
 	// Stream routing
 	sinks map[uintptr]MediaSink // Multiple sinks indexed by node ID
@@ -17,7 +25,8 @@ type Stream struct {
 func NewStream(id string) *Stream {
 	s := &Stream{
 		id:           id,
-		streamBuffer: NewStreamBuffer(),
+		tracks:       make([]*Track, 0),
+		trackBuffers: make([]*TrackBuffer, 0),
 		sinks:        make(map[uintptr]MediaSink),
 	}
 
@@ -31,33 +40,68 @@ func (s *Stream) ID() string {
 	return s.id
 }
 
-// SendFrame sends a media frame to the stream (called by external sources)
-func (s *Stream) SendFrame(frame MediaFrame) {
-	// Cache the frame
-	s.streamBuffer.AddFrame(frame)
-
-	// Broadcast to all destinations
-	s.broadcastFrame(frame)
+// AddTrack 새로운 트랙을 추가하고 인덱스를 반환
+func (s *Stream) AddTrack(codec Codec) int {
+	index := len(s.tracks)
+	track := NewTrack(index, codec)
+	
+	s.tracks = append(s.tracks, track)
+	s.trackBuffers = append(s.trackBuffers, NewTrackBuffer())
+	
+	slog.Info("Track added to stream", "streamId", s.id, "trackIndex", index, "codec", codec)
+	
+	return index
 }
 
-// SendMetadata sends metadata to the stream (called by external sources)
-func (s *Stream) SendMetadata(metadata map[string]string) {
-	// Cache the metadata
-	s.streamBuffer.AddMetadata(metadata)
+// SendFrame 미디어 프레임 전송 (프레임에 포함된 trackIndex 사용)
+func (s *Stream) SendFrame(frame Frame) error {
+	trackIndex := frame.TrackIndex
+	if trackIndex < 0 || trackIndex >= len(s.tracks) {
+		return ErrInvalidTrackIndex
+	}
+	
+	// 트랙별 버퍼에 캐시
+	s.trackBuffers[trackIndex].AddFrame(frame)
+	
+	// 모든 sink에 브로드캐스트
+	s.broadcastTrackFrame(frame)
+	
+	return nil
+}
 
-	// Broadcast to all destinations
+// SendMetadata 스트림 메타데이터 전송 (모든 트랙 공통)
+func (s *Stream) SendMetadata(metadata map[string]string) {
+	// 첫 번째 트랙 버퍼에 메타데이터 저장 (임시)
+	if len(s.trackBuffers) > 0 {
+		s.trackBuffers[0].AddMetadata(metadata)
+	}
+	
+	// 모든 sink에 브로드캐스트
 	s.broadcastMetadata(metadata)
 }
 
-// broadcastFrame sends media frame to all sinks
-func (s *Stream) broadcastFrame(frame MediaFrame) {
+// GetTrackCount 트랙 개수 반환
+func (s *Stream) GetTrackCount() int {
+	return len(s.tracks)
+}
+
+// GetTrack 지정된 인덱스의 트랙 반환
+func (s *Stream) GetTrack(index int) *Track {
+	if index < 0 || index >= len(s.tracks) {
+		return nil
+	}
+	return s.tracks[index]
+}
+
+// broadcastTrackFrame 트랙 프레임을 모든 sink에 전송
+func (s *Stream) broadcastTrackFrame(frame Frame) {
 	// Send to all sinks with stream ID
 	for _, sink := range s.sinks {
 		// 각 sink의 선호 포맷에 맞게 변환
 		convertedFrame := s.convertFrameForSink(frame, sink)
 
-		if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
-			slog.Error("Failed to send media frame to sink", "streamId", s.id, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
+		if err := sink.SendFrame(s.id, convertedFrame); err != nil {
+			slog.Error("Failed to send track frame to sink", "streamId", s.id, "trackIndex", frame.TrackIndex, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
 		}
 	}
 }
@@ -78,8 +122,10 @@ func (s *Stream) broadcastMetadata(metadata map[string]string) {
 func (s *Stream) Stop() {
 	slog.Info("Stopping stream", "streamId", s.id)
 
-	// Clear buffer
-	s.streamBuffer.Clear()
+	// Clear all track buffers
+	for _, buffer := range s.trackBuffers {
+		buffer.Clear()
+	}
 
 	slog.Info("Stream stopped", "streamId", s.id)
 }
@@ -112,31 +158,35 @@ func (s *Stream) RemoveSink(sink MediaSink) {
 func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	nodeId := sink.ID()
 
-	// Send cached metadata first
-	if metadata := s.streamBuffer.GetMetadata(); metadata != nil {
-		if err := sink.SendMetadata(s.id, metadata); err != nil {
-			slog.Error("Failed to send cached metadata to sink", "streamId", s.id, "nodeId", nodeId, "err", err)
-		} else {
-			slog.Debug("Sent cached metadata to sink", "streamId", s.id, "nodeId", nodeId)
+	// Send cached metadata first (from first track buffer if exists)
+	if len(s.trackBuffers) > 0 {
+		if metadata := s.trackBuffers[0].GetMetadata(); metadata != nil {
+			if err := sink.SendMetadata(s.id, metadata); err != nil {
+				slog.Error("Failed to send cached metadata to sink", "streamId", s.id, "nodeId", nodeId, "err", err)
+			} else {
+				slog.Debug("Sent cached metadata to sink", "streamId", s.id, "nodeId", nodeId)
+			}
 		}
 	}
 
-	// Send cached media frames
-	cachedFrames := s.streamBuffer.GetCachedFrames()
-	if len(cachedFrames) > 0 {
-		slog.Debug("Sending cached frames to new sink", "streamId", s.id, "nodeId", nodeId, "frameCount", len(cachedFrames))
+	// Send cached frames from all tracks
+	for trackIndex, buffer := range s.trackBuffers {
+		cachedFrames := buffer.GetCachedFrames()
+		if len(cachedFrames) > 0 {
+			slog.Debug("Sending cached frames to new sink", "streamId", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "frameCount", len(cachedFrames))
 
-		for _, frame := range cachedFrames {
-			// 각 sink의 선호 포맷에 맞게 변환
-			convertedFrame := s.convertFrameForSink(frame, sink)
+			for _, frame := range cachedFrames {
+				// 각 sink의 선호 포맷에 맞게 변환
+				convertedFrame := s.convertFrameForSink(frame, sink)
 
-			if err := sink.SendMediaFrame(s.id, convertedFrame); err != nil {
-				slog.Error("Failed to send cached frame to sink", "streamId", s.id, "nodeId", nodeId, "codec", frame.Codec, "err", err)
-				// Continue with next frame even if one fails
+				if err := sink.SendFrame(s.id, convertedFrame); err != nil {
+					slog.Error("Failed to send cached track frame to sink", "streamId", s.id, "trackIndex", frame.TrackIndex, "nodeId", nodeId, "codec", frame.Codec, "err", err)
+					// Continue with next frame even if one fails
+				}
 			}
-		}
 
-		slog.Debug("Finished sending cached frames to sink", "streamId", s.id, "nodeId", nodeId)
+			slog.Debug("Finished sending cached frames to sink", "streamId", s.id, "trackIndex", trackIndex, "nodeId", nodeId)
+		}
 	}
 
 	return nil
@@ -159,20 +209,32 @@ func (s *Stream) GetSinks() []MediaSink {
 
 // HasCachedData returns whether the stream has any cached data
 func (s *Stream) HasCachedData() bool {
-	return s.streamBuffer.HasCachedData()
+	for _, buffer := range s.trackBuffers {
+		if buffer.HasCachedData() {
+			return true
+		}
+	}
+	return false
 }
 
 // GetCacheStats returns cache statistics
 func (s *Stream) GetCacheStats() map[string]any {
-	stats := s.streamBuffer.GetCacheStats()
+	stats := map[string]any{
+		"track_count": len(s.tracks),
+		"sink_count":  len(s.sinks),
+	}
 
-	stats["sink_count"] = len(s.sinks)
+	// 트랙별 통계 추가
+	for i, buffer := range s.trackBuffers {
+		trackStats := buffer.GetCacheStats()
+		stats[fmt.Sprintf("track_%d", i)] = trackStats
+	}
 
 	return stats
 }
 
 // convertFrameForSink 각 sink의 선호 포맷에 맞게 프레임 변환 (현재는 변환 없음)
-func (s *Stream) convertFrameForSink(frame MediaFrame, sink MediaSink) MediaFrame {
+func (s *Stream) convertFrameForSink(frame Frame, sink MediaSink) Frame {
 	// 아직 포맷 변환이 필요한 프로토콜이 없으므로 원본 그대로 반환
 	return frame
 }

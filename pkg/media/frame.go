@@ -57,28 +57,44 @@ const (
 	TypeKey    FrameType = 2 // 키프레임 (비디오 I-프레임만)
 )
 
-// MediaFrame 새로운 단순화된 프레임 구조
-type MediaFrame struct {
-	Codec     Codec           // 통합된 코덱 (비디오/오디오 구분 포함)
-	Format    BitstreamFormat // 코덱별 비트스트림 포맷
-	Type      FrameType       // 프레임 타입
-	Timestamp uint32          // 타임스탬프 (밀리초)
-	Data      []byte          // 프레임 데이터
+// Frame 새로운 단순화된 프레임 구조
+type Frame struct {
+	TrackIndex int             // 트랙 인덱스 (0=비디오, 1=오디오, 2=...)
+	Codec      Codec           // 통합된 코덱 (비디오/오디오 구분 포함)
+	Format     BitstreamFormat // 코덱별 비트스트림 포맷
+	Type       FrameType       // 프레임 타입
+	Timestamp  uint32          // 타임스탬프 (밀리초)
+	Data       []byte          // 프레임 데이터
 }
 
-// MediaFrame 헬퍼 함수들
-func (f *MediaFrame) IsVideo() bool    { return f.Codec.IsVideo() }
-func (f *MediaFrame) IsAudio() bool    { return f.Codec.IsAudio() }
-func (f *MediaFrame) IsData() bool     { return f.Codec.IsData() }
-func (f *MediaFrame) IsKeyFrame() bool { return f.Type == TypeKey }
+// Frame 헬퍼 함수들
+func (f *Frame) IsVideo() bool    { return f.Codec.IsVideo() }
+func (f *Frame) IsAudio() bool    { return f.Codec.IsAudio() }
+func (f *Frame) IsData() bool     { return f.Codec.IsData() }
+func (f *Frame) IsKeyFrame() bool { return f.Type == TypeKey }
 
-// NewMediaFrame 새로운 미디어 프레임 생성
-func NewMediaFrame(codec Codec, format BitstreamFormat, frameType FrameType, timestamp uint32, data []byte) MediaFrame {
-	return MediaFrame{
-		Codec:     codec,
-		Format:    format,
-		Type:      frameType,
-		Timestamp: timestamp,
-		Data:      data,
+// Track 스트림 내의 개별 미디어 트랙
+type Track struct {
+	Index int   // 트랙 인덱스 (0, 1, 2...)
+	Codec Codec // 트랙의 코덱
+}
+
+// NewTrack 새로운 트랙 생성
+func NewTrack(index int, codec Codec) *Track {
+	return &Track{
+		Index: index,
+		Codec: codec,
+	}
+}
+
+// NewFrame 새로운 미디어 프레임 생성
+func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType FrameType, timestamp uint32, data []byte) Frame {
+	return Frame{
+		TrackIndex: trackIndex,
+		Codec:      codec,
+		Format:     format,
+		Type:       frameType,
+		Timestamp:  timestamp,
+		Data:       data,
 	}
 }
