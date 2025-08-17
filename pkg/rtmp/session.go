@@ -174,7 +174,7 @@ func (s *session) SendFrame(streamId string, frame media.Frame) error {
 	if frame.TrackIndex > 1 {
 		return nil // 추가 트랙은 무시
 	}
-	
+
 	event := sendFrameEvent{streamPath: streamId, frame: frame}
 	return s.sendChannelEvent(event, "frame")
 }
@@ -280,22 +280,8 @@ func (s *session) Address() string {
 }
 
 func (s *session) Close() error {
-	slog.Info("RTMP session close initiated", "sessionId", s.ID(), "isPublisher", s.IsPublisher(), "publishedStreamsCount", len(s.publishedStreams), "subscribedStreamsCount", len(s.subscribedStreams))
-
-	// 발행 중인 스트림들 로그
-	for streamId, stream := range s.publishedStreams {
-		if stream != nil {
-			slog.Info("Closing published stream", "sessionId", s.ID(), "streamId", streamId, "streamPath", stream.ID(), "sinkCount", stream.GetSinkCount())
-		}
-	}
-
-	// 구독 중인 스트림들 로그
-	for streamId, streamPath := range s.subscribedStreams {
-		slog.Info("Closing subscribed stream", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
-	}
-
-	s.cancel()
 	slog.Info("RTMP session stopping", "sessionId", s.ID())
+	s.cancel()
 	return nil
 }
 
@@ -328,7 +314,7 @@ func (s *session) handleAudio(message *Message) {
 		if stream.GetTrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec)
 		}
-		
+
 		stream.SendFrame(frame)
 	}
 }
@@ -360,7 +346,7 @@ func (s *session) handleVideo(message *Message) {
 		if stream.GetTrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec)
 		}
-		
+
 		stream.SendFrame(frame)
 	}
 }
@@ -853,10 +839,10 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
 	responseChan := make(chan media.Response, 1)
-	
+
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
 	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, responseChan)
-	
+
 	// 응답 대기
 	select {
 	case response := <-responseChan:
@@ -1160,7 +1146,7 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
 	s.mediaServerChannel <- publishAttempt
-	
+
 	// 응답 대기
 	select {
 	case response := <-responseChan:

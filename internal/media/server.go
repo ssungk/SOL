@@ -128,13 +128,22 @@ func (s *MediaServer) shutdown() {
 	slog.Info("Media Server stopped successfully")
 }
 
-// 노드 제거 (단순히 노드만 제거, 스트림 정리는 이벤트를 통해 처리)
+// AddNode 노드 추가
+func (s *MediaServer) AddNode(nodeId uintptr, node media.MediaNode) {
+	s.nodes[nodeId] = node
+	slog.Info("Node added", "nodeId", nodeId, "nodeType", node.NodeType(), "totalNodes", len(s.nodes))
+}
+
+// RemoveNode 노드 제거 (외부 종료 시 Close 호출 후 제거, 스트림 정리는 이벤트를 통해 처리)
 func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	node, exists := s.nodes[nodeId]
 	if !exists {
 		slog.Debug("Node not found for removal", "nodeId", nodeId)
 		return
 	}
+
+	// 외부에서 의도적으로 노드 종료 시 Close 호출하여 정리 작업 보장
+	utils.CloseWithLog(node)
 
 	// 노드 제거
 	delete(s.nodes, nodeId)
@@ -202,12 +211,6 @@ func (s *MediaServer) UnregisterServer(name string) error {
 	return nil
 }
 
-// GetServer 서버 반환
-func (s *MediaServer) GetServer(name string) (media.ServerInterface, bool) {
-	server, exists := s.servers[name]
-	return server, exists
-}
-
 // GetServerNames 등록된 모든 서버 이름 반환
 func (s *MediaServer) GetServerNames() []string {
 	names := make([]string, 0, len(s.servers))
@@ -220,8 +223,7 @@ func (s *MediaServer) GetServerNames() []string {
 // handleNodeCreated 노드 생성 이벤트 처리
 func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
 	slog.Info("Node created", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
-	s.nodes[event.NodeId()] = event.Node
-	slog.Info("Node registered in nodes map", "nodeId", event.NodeId())
+	s.AddNode(event.NodeId(), event.Node)
 }
 
 // handleNodeTerminated 노드 종료 이벤트 처리
