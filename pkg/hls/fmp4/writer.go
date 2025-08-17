@@ -71,7 +71,7 @@ func (w *FMP4Writer) WriteInitializationSegment(hasVideo, hasAudio bool) ([]byte
 }
 
 // WriteMediaSegment 미디어 세그먼트 작성
-func (w *FMP4Writer) WriteMediaSegment(frames []media.Frame) ([]byte, error) {
+func (w *FMP4Writer) WriteMediaSegment(frames []media.MediaFrame) ([]byte, error) {
 	w.buffer.Reset()
 	w.sequenceNumber++
 	
@@ -95,21 +95,20 @@ func (w *FMP4Writer) WriteMediaSegment(frames []media.Frame) ([]byte, error) {
 }
 
 // createFragment 프레임들로부터 프래그먼트 생성
-func (w *FMP4Writer) createFragment(frames []media.Frame) (*Fragment, error) {
+func (w *FMP4Writer) createFragment(frames []media.MediaFrame) (*Fragment, error) {
 	fragment := &Fragment{
 		SequenceNumber: w.sequenceNumber,
 		TrackFragments: make([]TrackFragment, 0, 2), // video + audio
 	}
 	
 	// 프레임들을 트랙별로 분리
-	videoFrames := make([]media.Frame, 0)
-	audioFrames := make([]media.Frame, 0)
+	videoFrames := make([]media.MediaFrame, 0)
+	audioFrames := make([]media.MediaFrame, 0)
 	
 	for _, frame := range frames {
-		switch frame.Type {
-		case media.TypeVideo:
+		if frame.Codec.IsVideo() {
 			videoFrames = append(videoFrames, frame)
-		case media.TypeAudio:
+		} else if frame.Codec.IsAudio() {
 			audioFrames = append(audioFrames, frame)
 		}
 	}
@@ -130,7 +129,7 @@ func (w *FMP4Writer) createFragment(frames []media.Frame) (*Fragment, error) {
 }
 
 // createTrackFragment 트랙 프래그먼트 생성
-func (w *FMP4Writer) createTrackFragment(trackID uint32, frames []media.Frame) TrackFragment {
+func (w *FMP4Writer) createTrackFragment(trackID uint32, frames []media.MediaFrame) TrackFragment {
 	traf := TrackFragment{
 		TrackID:           trackID,
 		BaseDataOffset:    0, // MOOF 박스 시작 기준
@@ -146,7 +145,7 @@ func (w *FMP4Writer) createTrackFragment(trackID uint32, frames []media.Frame) T
 		sample := w.frameToSample(frame, trackID)
 		
 		// 첫 번째 비디오 프레임이 키프레임인지 확인
-		if trackID == VideoTrackID && i == 0 && media.IsVideoKeyFrame(frame.SubType) {
+		if trackID == VideoTrackID && i == 0 && frame.IsKeyFrame() {
 			sample.Flags = SampleFlagKeyFrame
 		}
 		
@@ -157,9 +156,9 @@ func (w *FMP4Writer) createTrackFragment(trackID uint32, frames []media.Frame) T
 }
 
 // frameToSample 프레임을 샘플로 변환
-func (w *FMP4Writer) frameToSample(frame media.Frame, trackID uint32) SampleInfo {
-	// 프레임 데이터 병합
-	data := w.mergeFrameData(frame.Data)
+func (w *FMP4Writer) frameToSample(frame media.MediaFrame, trackID uint32) SampleInfo {
+	// 프레임 데이터 사용 (이미 []byte)
+	data := frame.Data
 	
 	// 지속시간 계산 (타임스케일 기준)
 	var duration uint32

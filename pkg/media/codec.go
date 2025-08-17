@@ -4,8 +4,8 @@ import (
 	"strings"
 )
 
-// StringToFrameSubType 문자열을 FrameSubType으로 변환
-func StringToFrameSubType(frameType string, isVideo bool) FrameSubType {
+// StringToFrameType 문자열을 FrameType으로 변환
+func StringToFrameType(frameType string, isVideo bool) FrameType {
 	frameTypeLower := strings.ToLower(frameType)
 	
 	if isVideo {
@@ -13,35 +13,27 @@ func StringToFrameSubType(frameType string, isVideo bool) FrameSubType {
 		   strings.Contains(frameTypeLower, "sps") ||
 		   strings.Contains(frameTypeLower, "pps") ||
 		   strings.Contains(frameTypeLower, "vps") {
-			return VideoSequenceHeader
-		}
-		if strings.Contains(frameTypeLower, "disposable inter frame") ||
-		   strings.Contains(frameTypeLower, "b-frame") ||
-		   strings.Contains(frameTypeLower, "bi-directional") {
-			return VideoDisposableInterFrame
+			return TypeConfig
 		}
 		if strings.Contains(frameTypeLower, "key frame") ||
 		   strings.Contains(frameTypeLower, "i-frame") ||
 		   strings.Contains(frameTypeLower, "idr") {
-			return VideoKeyFrame
+			return TypeKey
 		}
-		if strings.Contains(frameTypeLower, "inter frame") {
-			return VideoInterFrame
-		}
-		// 기본값
-		return VideoInterFrame
+		// 나머지는 모두 데이터 프레임 (P-frame, B-frame 등)
+		return TypeData
 	} else {
 		if strings.Contains(frameTypeLower, "sequence header") ||
 		   strings.Contains(frameTypeLower, "audio specific config") {
-			return AudioSequenceHeader
+			return TypeConfig
 		}
 		// 기본값
-		return AudioRawData
+		return TypeData
 	}
 }
 
-// IsVideoSequenceHeader determines if frame type represents video sequence header (기존 호환성 유지)
-func IsVideoSequenceHeader(frameType string) bool {
+// IsVideoConfigFrame determines if frame type represents video config frame
+func IsVideoConfigFrame(frameType string) bool {
 	frameTypeLower := strings.ToLower(frameType)
 	return strings.Contains(frameTypeLower, "sequence header") ||
 		   strings.Contains(frameTypeLower, "sps") ||
@@ -49,8 +41,8 @@ func IsVideoSequenceHeader(frameType string) bool {
 		   strings.Contains(frameTypeLower, "vps")
 }
 
-// IsAudioSequenceHeader determines if frame type represents audio sequence header (기존 호환성 유지)
-func IsAudioSequenceHeader(frameType string) bool {
+// IsAudioConfigFrame determines if frame type represents audio config frame
+func IsAudioConfigFrame(frameType string) bool {
 	frameTypeLower := strings.ToLower(frameType)
 	return strings.Contains(frameTypeLower, "sequence header") ||
 		   strings.Contains(frameTypeLower, "audio specific config")

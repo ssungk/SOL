@@ -64,7 +64,7 @@ func (s *srtMediaSink) Close() error {
 }
 
 // SendMediaFrame MediaSink 인터페이스 구현
-func (s *srtMediaSink) SendMediaFrame(streamId string, frame media.Frame) error {
+func (s *srtMediaSink) SendMediaFrame(streamId string, frame media.MediaFrame) error {
 	if s.session.state != StateConnected {
 		return nil
 	}
@@ -97,24 +97,15 @@ func (s *srtMediaSink) SubscribedStreams() []string {
 	return []string{}
 }
 
-// PreferredFormat MediaSink 인터페이스 구현 - SRT는 StartCode 포맷 선호 (RTSP와 유사)
-func (s *srtMediaSink) PreferredFormat(codecType media.CodecType) media.FormatType {
-	switch codecType {
-	case media.CodecH264, media.CodecH265:
-		return media.FormatAnnexB // SRT는 StartCode 포맷 사용
-	default:
-		return media.FormatRaw
-	}
-}
 
-// frameToSRTData Frame을 SRT 데이터로 변환
-func (s *srtMediaSink) frameToSRTData(frame media.Frame) []byte {
+// frameToSRTData MediaFrame을 SRT 데이터로 변환
+func (s *srtMediaSink) frameToSRTData(frame media.MediaFrame) []byte {
 	// 프레임 타입에 따라 처리
-	if frame.Type == media.TypeVideo {
+	if frame.IsVideo() {
 		if len(frame.Data) > 0 {
 			return frame.Data
 		}
-	} else if frame.Type == media.TypeAudio {
+	} else if frame.IsAudio() {
 		if len(frame.Data) > 0 {
 			return frame.Data
 		}

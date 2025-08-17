@@ -125,7 +125,7 @@ type SegmentBuilder interface {
 	StartSegment(index int, streamID string) error
 	
 	// AddFrame 프레임을 현재 세그먼트에 추가
-	AddFrame(frame media.Frame) error
+	AddFrame(frame media.MediaFrame) error
 	
 	// FinishSegment 현재 세그먼트 완성
 	FinishSegment() (Segment, error)

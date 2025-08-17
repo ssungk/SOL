@@ -641,13 +641,14 @@ func (s *Session) handlePublishData(data []byte) {
 
 	// MediaServer로 프레임 데이터 전송 (다른 프로토콜과의 연동을 위해)
 	if len(data) > 0 {
-		// 간단한 구현: 원시 데이터를 VideoFrame으로 래핑
-		frame := media.Frame{
-			Type:      media.TypeVideo,
-			SubType:   media.VideoKeyFrame,                     // 임시로 키프레임으로 설정
-			Timestamp: uint32(time.Now().UnixNano() / 1000000), // ms
-			Data:      data,
-		}
+		// 간단한 구현: 원시 데이터를 MediaFrame으로 래핑
+		frame := media.NewMediaFrame(
+			media.MediaH264,                                   // 임시로 H264로 설정
+			media.FormatH26xAnnexB,                           // SRT는 Annex-B 포맷 사용
+			media.TypeKey,                                     // 임시로 키프레임으로 설정
+			uint32(time.Now().UnixNano() / 1000000),          // ms
+			data,
+		)
 
 		// MediaSource를 통해 프레임 전송 (향후 구현)
 		_ = frame // 현재는 사용하지 않음

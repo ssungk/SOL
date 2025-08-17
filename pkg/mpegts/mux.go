@@ -96,7 +96,7 @@ func (m *muxer) AddStream(streamType StreamType, codecData *CodecData) (uint16, 
 }
 
 // WriteFrame 프레임 쓰기
-func (m *muxer) WriteFrame(streamPID uint16, frame media.Frame) ([]byte, error) {
+func (m *muxer) WriteFrame(streamPID uint16, frame media.MediaFrame) ([]byte, error) {
 	m.streamsMutex.RLock()
 	stream, exists := m.streams[streamPID]
 	m.streamsMutex.RUnlock()
@@ -110,22 +110,19 @@ func (m *muxer) WriteFrame(streamPID uint16, frame media.Frame) ([]byte, error) 
 	dts := pts // 기본적으로 DTS = PTS
 
 	// 비디오 프레임의 경우 DTS를 약간 앞서게 설정할 수 있음
-	if frame.Type == media.TypeVideo && frame.SubType == media.VideoInterFrame {
+	if frame.IsVideo() && frame.Type == media.TypeData {
 		// B프레임이 있는 경우 DTS를 조정해야 하지만, 여기서는 간단히 처리
 		dts = pts - 3003 // 약 33ms 앞서게 (29.97fps 기준 1프레임)
 	}
 
-	// 프레임 데이터를 바이너리로 변환
-	var frameData []byte
-	for _, chunk := range frame.Data {
-		frameData = append(frameData, chunk...)
-	}
+	// 프레임 데이터 사용 (이미 []byte)
+	frameData := frame.Data
 
 	// PES 패킷 생성
 	var streamID uint8
-	if frame.Type == media.TypeVideo {
+	if frame.Codec.IsVideo() {
 		streamID = 0xE0 // 첫 번째 비디오 스트림
-	} else if frame.Type == media.TypeAudio {
+	} else if frame.Codec.IsAudio() {
 		streamID = 0xC0 // 첫 번째 오디오 스트림
 	} else {
 		streamID = 0xBD // 개인 스트림
@@ -161,7 +158,7 @@ func (m *muxer) WriteFrame(streamPID uint16, frame media.Frame) ([]byte, error) 
 			// PCR 추가
 			adaptationField = &AdaptationField{
 				Length:                1,
-				RandomAccessIndicator: frame.SubType == media.VideoKeyFrame,
+				RandomAccessIndicator: frame.Type == media.TypeKey,
 				PCRFlag:               true,
 				PCR:                   m.getCurrentPCR(),
 			}

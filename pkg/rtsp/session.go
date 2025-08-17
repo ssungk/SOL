@@ -230,7 +230,7 @@ func (s *Session) handleInterleavedData() error {
 		slog.Debug("Received interleaved RTP data from client", "sessionId", s.ID(), "dataSize", len(data))
 		
 		// RTP 패킷을 media.Frame으로 변환
-		frame, err := s.convertRTPToFrame(data, s.streamPath)
+		frame, err := s.convertRTPToMediaFrame(data, s.streamPath)
 		if err != nil {
 			slog.Error("Failed to convert RTP to frame", "sessionId", s.ID(), "err", err)
 			return nil
@@ -242,8 +242,8 @@ func (s *Session) handleInterleavedData() error {
 			slog.Debug("RTP frame sent to stream", 
 				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
-				"subType", frame.SubType,
-				"mediaType", frame.Type)
+				"frameType", frame.Type,
+				"codec", frame.Codec)
 		} else {
 			slog.Debug("RTP frame converted but not sent (no stream or not recording)", 
 				"sessionId", s.ID(), 
@@ -728,14 +728,14 @@ func (s *Session) Address() string {
 // MediaSink 인터페이스 구현 (RTSP 플레이어 세션용)
 
 // SendMediaFrame MediaSink 인터페이스 구현 - 미디어 프레임을 세션으로 전송
-func (s *Session) SendMediaFrame(streamId string, frame media.Frame) error {
+func (s *Session) SendMediaFrame(streamId string, frame media.MediaFrame) error {
 	// RTSP 세션이 플레이 중이고 스트림 ID가 일치하는 경우에만 전송
 	if s.state != StatePlaying || s.streamPath != streamId {
 		return fmt.Errorf("session not ready for frame: state=%v, streamPath=%s", s.state, s.streamPath)
 	}
 
-	// media.Frame을 RTP 패킷으로 변환
-	rtpData, err := s.convertFrameToRTP(frame)
+	// MediaFrame을 RTP 패킷으로 변환
+	rtpData, err := s.convertMediaFrameToRTP(frame)
 	if err != nil {
 		return fmt.Errorf("failed to convert frame to RTP: %v", err)
 	}
@@ -759,8 +759,8 @@ func (s *Session) SendMetadata(streamId string, metadata map[string]string) erro
 	return nil
 }
 
-// convertFrameToRTP media.Frame을 RTP 패킷으로 변환
-func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
+// convertMediaFrameToRTP MediaFrame을 RTP 패킷으로 변환
+func (s *Session) convertMediaFrameToRTP(frame media.MediaFrame) ([]byte, error) {
 	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
 	// RTP 헤더 (12바이트) + 페이로드
 	
@@ -772,9 +772,9 @@ func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 	rtpHeader[0] = 0x80 // V=2, P=0, X=0, CC=0
 	
 	// 프레임 타입에 따라 페이로드 타입 설정
-	if frame.Type == media.TypeVideo {
+	if frame.IsVideo() {
 		rtpHeader[1] = 96 // H.264 페이로드 타입
-	} else if frame.Type == media.TypeAudio {
+	} else if frame.IsAudio() {
 		rtpHeader[1] = 97 // AAC 페이로드 타입
 	}
 	
@@ -806,16 +806,16 @@ func (s *Session) GetStreamPath() string {
 // MediaSource 인터페이스 구현 (RECORD 시 사용)
 // RTSP Session은 RECORD 모드에서는 MediaSource로, PLAY 모드에서는 MediaSink로 동작
 
-// convertRTPToFrame RTP 패킷을 media.Frame으로 변환 (RECORD 시 사용)
-func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Frame, error) {
+// convertRTPToMediaFrame RTP 패킷을 MediaFrame으로 변환 (RECORD 시 사용)
+func (s *Session) convertRTPToMediaFrame(rtpData []byte, streamId string) (media.MediaFrame, error) {
 	if len(rtpData) < 12 {
-		return media.Frame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
+		return media.MediaFrame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
 	}
 
 	// RTP 헤더 파싱
 	version := (rtpData[0] & 0xC0) >> 6
 	if version != 2 {
-		return media.Frame{}, fmt.Errorf("unsupported RTP version: %d", version)
+		return media.MediaFrame{}, fmt.Errorf("unsupported RTP version: %d", version)
 	}
 
 	payloadType := rtpData[1] & 0x7F
@@ -824,44 +824,39 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 	// 페이로드 추출 (헤더 제외)
 	payload := rtpData[12:]
 
-	// 페이로드 타입에 따른 미디어 타입, 코덱 타입, 포맷 타입 결정
-	var mediaType media.Type
-	var codecType media.CodecType
-	var formatType media.FormatType
-	var subType media.FrameSubType
+	// 페이로드 타입에 따른 MediaCodec, BitstreamFormat, FrameType 결정
+	var codec media.MediaCodec
+	var format media.BitstreamFormat
+	var frameType media.FrameType
 
 	switch payloadType {
 	case 96: // H.264
-		mediaType = media.TypeVideo
-		codecType = media.CodecH264
-		formatType = media.FormatAnnexB // RTSP는 StartCode 포맷 사용
-		subType = media.VideoInterFrame    // 기본값으로 Inter Frame
+		codec = media.MediaH264
+		format = media.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
+		frameType = media.TypeData    // 기본값으로 Data
 	case 97: // AAC
-		mediaType = media.TypeAudio
-		codecType = media.CodecAAC
-		formatType = media.FormatRaw // 오디오는 raw 데이터
-		subType = media.AudioRawData // 기본값으로 Raw Data
+		codec = media.MediaAAC
+		format = media.FormatRawStream // 오디오는 raw 데이터
+		frameType = media.TypeData // 기본값으로 Data
 	default:
-		mediaType = media.TypeVideo
-		codecType = media.CodecH264
-		formatType = media.FormatAnnexB
-		subType = media.VideoInterFrame
+		codec = media.MediaH264
+		format = media.FormatH26xAnnexB
+		frameType = media.TypeData
 	}
 	
-	frame := media.Frame{
-		Type:       mediaType,
-		SubType:    subType,
-		CodecType:  codecType,
-		FormatType: formatType,
-		Timestamp:  timestamp,
-		Data:       payload, // 단일 버퍼로 저장
-	}
+	frame := media.NewMediaFrame(
+		codec,
+		format,
+		frameType,
+		timestamp,
+		payload,
+	)
 
-	slog.Debug("Converted RTP to Frame", 
+	slog.Debug("Converted RTP to MediaFrame", 
 		"sessionId", s.ID(), 
 		"streamId", streamId,
 		"payloadType", payloadType,
-		"mediaType", mediaType,
+		"codec", codec,
 		"timestamp", timestamp,
 		"payloadSize", len(payload))
 
@@ -943,12 +938,3 @@ func (s *Session) sendRecordErrorResponse(cseq int, message string) error {
 	return s.writer.WriteResponse(response)
 }
 
-// PreferredFormat MediaSink 인터페이스 구현 - RTSP는 StartCode 포맷 선호
-func (s *Session) PreferredFormat(codecType media.CodecType) media.FormatType {
-	switch codecType {
-	case media.CodecH264, media.CodecH265:
-		return media.FormatAnnexB // RTSP는 StartCode 포맷 사용
-	default:
-		return media.FormatRaw
-	}
-}

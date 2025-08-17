@@ -374,57 +374,57 @@ func getAudioHeaderSize(firstByte byte) (int, error) {
 }
 
 // detectVideoCodec 비디오 첫 바이트에서 코덱 감지
-func detectVideoCodec(firstByte byte) (media.CodecType, error) {
+func detectVideoCodec(firstByte byte) (media.MediaCodec, error) {
 	codecId := firstByte & 0x0F
 
 	switch codecId {
 	case 2: // Sorenson H.263
-		return media.CodecUnknown, fmt.Errorf("sorenson H.263 codec not supported")
+		return media.MediaUnknown, fmt.Errorf("sorenson H.263 codec not supported")
 	case 3: // Screen Video v1
-		return media.CodecUnknown, fmt.Errorf("screen video v1 codec not supported")
+		return media.MediaUnknown, fmt.Errorf("screen video v1 codec not supported")
 	case 4: // VP6
-		return media.CodecUnknown, fmt.Errorf("VP6 codec not supported")
+		return media.MediaUnknown, fmt.Errorf("VP6 codec not supported")
 	case 5: // VP6 with alpha
-		return media.CodecUnknown, fmt.Errorf("VP6 with alpha codec not supported")
+		return media.MediaUnknown, fmt.Errorf("VP6 with alpha codec not supported")
 	case 6: // Screen Video
-		return media.CodecUnknown, fmt.Errorf("screen video codec not supported")
+		return media.MediaUnknown, fmt.Errorf("screen video codec not supported")
 	case 7: // AVC (H.264)
-		return media.CodecH264, nil
+		return media.MediaH264, nil
 	case 12: // HEVC (H.265)
-		return media.CodecH265, nil
+		return media.MediaH265, nil
 	case 13: // AV1
-		return media.CodecUnknown, fmt.Errorf("AV1 codec not supported")
+		return media.MediaUnknown, fmt.Errorf("AV1 codec not supported")
 	default:
-		return media.CodecUnknown, fmt.Errorf("unknown video codec: %d", codecId)
+		return media.MediaUnknown, fmt.Errorf("unknown video codec: %d", codecId)
 	}
 }
 
 // detectAudioCodec 오디오 첫 바이트에서 코덱 감지
-func detectAudioCodec(firstByte byte) (media.CodecType, error) {
+func detectAudioCodec(firstByte byte) (media.MediaCodec, error) {
 	soundFormat := (firstByte & 0xF0) >> 4
 
 	switch soundFormat {
 	case 2: // MP3
-		return media.CodecUnknown, fmt.Errorf("MP3 codec not supported")
+		return media.MediaUnknown, fmt.Errorf("MP3 codec not supported")
 	case 5: // Nellymoser 8kHz mono
-		return media.CodecUnknown, fmt.Errorf("Nellymoser codec not supported")
+		return media.MediaUnknown, fmt.Errorf("Nellymoser codec not supported")
 	case 6: // Nellymoser
-		return media.CodecUnknown, fmt.Errorf("Nellymoser codec not supported")
+		return media.MediaUnknown, fmt.Errorf("Nellymoser codec not supported")
 	case 7: // G.711 A-law
-		return media.CodecUnknown, fmt.Errorf("G.711 A-law codec not supported")
+		return media.MediaUnknown, fmt.Errorf("G.711 A-law codec not supported")
 	case 8: // G.711 μ-law
-		return media.CodecUnknown, fmt.Errorf("G.711 μ-law codec not supported")
+		return media.MediaUnknown, fmt.Errorf("G.711 μ-law codec not supported")
 	case 10: // AAC
-		return media.CodecAAC, nil
+		return media.MediaAAC, nil
 	case 11: // Speex
-		return media.CodecUnknown, fmt.Errorf("Speex codec not supported")
+		return media.MediaUnknown, fmt.Errorf("Speex codec not supported")
 	case 13: // Opus
-		return media.CodecUnknown, fmt.Errorf("Opus codec not supported")
+		return media.MediaUnknown, fmt.Errorf("Opus codec not supported")
 	case 14: // MP3 8kHz
-		return media.CodecUnknown, fmt.Errorf("MP3 8kHz codec not supported")
+		return media.MediaUnknown, fmt.Errorf("MP3 8kHz codec not supported")
 	case 15: // Device-specific
-		return media.CodecUnknown, fmt.Errorf("device-specific codec not supported")
+		return media.MediaUnknown, fmt.Errorf("device-specific codec not supported")
 	default:
-		return media.CodecUnknown, fmt.Errorf("unknown audio format: %d", soundFormat)
+		return media.MediaUnknown, fmt.Errorf("unknown audio format: %d", soundFormat)
 	}
 }

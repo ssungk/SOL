@@ -170,7 +170,7 @@ func (s *session) sendChannelEvent(event any, eventType string) error {
 	}
 }
 
-func (s *session) SendMediaFrame(streamId string, frame media.Frame) error {
+func (s *session) SendMediaFrame(streamId string, frame media.MediaFrame) error {
 	event := sendFrameEvent{streamPath: streamId, frame: frame}
 	return s.sendChannelEvent(event, "frame")
 }
@@ -193,28 +193,27 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 	var msgType uint8
 	var rtmpData []byte
 
-	switch e.frame.Type {
-	case media.TypeVideo:
+	if e.frame.IsVideo() {
 		msgType = MsgTypeVideo
 		// 비디오: RTMP 헤더 재생성 후 데이터와 결합
-		header := GenerateVideoHeader(e.frame.SubType, 0) // composition time = 0으로 설정
+		header := GenerateVideoHeader(e.frame, 0) // composition time = 0으로 설정
 		rtmpData = CombineHeaderAndData(header, e.frame.Data)
 
-	case media.TypeAudio:
+	} else if e.frame.IsAudio() {
 		msgType = MsgTypeAudio
 		// 오디오: RTMP 헤더 재생성 후 데이터와 결합
-		header := GenerateAudioHeader(e.frame.SubType)
+		header := GenerateAudioHeader(e.frame)
 		rtmpData = CombineHeaderAndData(header, e.frame.Data)
 
-	default:
-		slog.Warn("Unsupported frame type", "type", e.frame.Type, "sessionId", s.ID())
+	} else {
+		slog.Warn("Unsupported frame type", "codec", e.frame.Codec, "sessionId", s.ID())
 		return
 	}
 
 	messageHeader := NewMessageHeader(e.frame.Timestamp, uint32(len(rtmpData)), msgType, uint32(streamId))
 	message := NewMessage(messageHeader, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
-		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "subType", e.frame.SubType, "err", err)
+		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "frameType", e.frame.Type, "err", err)
 	}
 }
 
@@ -315,15 +314,8 @@ func (s *session) handleAudio(message *Message) {
 	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
 
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
-	// 일반 Frame 생성
-	frame := media.Frame{
-		Type:       media.TypeAudio,
-		SubType:    frameType,
-		CodecType:  codecType,
-		FormatType: media.FormatRaw,
-		Timestamp:  message.messageHeader.timestamp,
-		Data:       message.payload,
-	}
+	// MediaFrame 생성
+	frame := media.NewMediaFrame(codecType, media.FormatRawStream, frameType, message.messageHeader.timestamp, message.payload)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
@@ -345,16 +337,11 @@ func (s *session) handleVideo(message *Message) {
 
 	frameType := s.parseVideoFrameType(firstByte, message.mediaHeader)
 
-	// payload는 이미 순수 비디오 데이터 (헤더 제외됨)
-	// 일반 Frame 생성
-	frame := media.Frame{
-		Type:       media.TypeVideo,
-		SubType:    frameType,
-		CodecType:  codecType,
-		FormatType: media.FormatAVCC,
-		Timestamp:  message.messageHeader.timestamp,
-		Data:       message.payload,
-	}
+	// RTMP는 항상 원본 payload 사용 (AVCC 포맷)
+	frameData := message.payload
+
+	// MediaFrame 생성
+	frame := media.NewMediaFrame(codecType, media.FormatH26xAVCC, frameType, message.messageHeader.timestamp, frameData)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
@@ -363,23 +350,23 @@ func (s *session) handleVideo(message *Message) {
 }
 
 // parseAudioFrameType 오디오 프레임 타입 파싱
-func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.FrameSubType {
+func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.FrameType {
 	// AAC 특수 처리
 	if ((firstByte>>4)&0x0F) == 10 && len(payload) > 1 {
 		switch payload[1] {
 		case 0:
-			return media.AudioSequenceHeader
+			return media.TypeConfig
 		case 1:
-			return media.AudioRawData
+			return media.TypeData
 		}
 	}
 
 	// 기본적으로는 raw 오디오로 처리
-	return media.AudioRawData
+	return media.TypeData
 }
 
 // parseVideoFrameType 비디오 프레임 타입 파싱
-func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.FrameSubType {
+func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.FrameType {
 	// 프레임 타입 (4비트)
 	frameTypeFlag := (firstByte >> 4) & 0x0F
 	codecId := firstByte & 0x0F
@@ -389,33 +376,33 @@ func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.Fram
 		avcPacketType := payload[1]
 		switch avcPacketType {
 		case 0:
-			return media.VideoSequenceHeader
+			return media.TypeConfig
 		case 1:
 			if frameTypeFlag == 1 {
-				return media.VideoKeyFrame
+				return media.TypeKey
 			}
-			return media.VideoInterFrame
+			return media.TypeData
 		case 2:
 			// RTMP 전용 EndOfSequence는 키프레임으로 처리
-			return media.VideoKeyFrame
+			return media.TypeKey
 		}
 	}
 
 	// 일반적인 프레임 타입
 	switch frameTypeFlag {
 	case 1:
-		return media.VideoKeyFrame
+		return media.TypeKey
 	case 2:
-		return media.VideoInterFrame
+		return media.TypeData
 	case 3:
-		return media.VideoDisposableInterFrame
+		return media.TypeData
 	case 4:
-		return media.VideoKeyFrame
+		return media.TypeKey
 	case 5:
 		// RTMP 전용 InfoFrame은 인터프레임으로 처리
-		return media.VideoInterFrame
+		return media.TypeData
 	default:
-		return media.VideoInterFrame
+		return media.TypeData
 	}
 }
 
@@ -1289,12 +1276,4 @@ func (s *session) handleGetStreamLength(values []any) {
 	slog.Debug("getStreamLength response sent", "sessionId", s.ID(), "streamName", streamName, "length", streamLength, "transactionID", transactionID)
 }
 
-// PreferredFormat MediaSink 인터페이스 구현 - RTMP는 AVCC 포맷 선호
-func (s *session) PreferredFormat(codecType media.CodecType) media.FormatType {
-	switch codecType {
-	case media.CodecH264, media.CodecH265:
-		return media.FormatAVCC // RTMP는 AVCC 포맷 사용
-	default:
-		return media.FormatRaw
-	}
-}
+

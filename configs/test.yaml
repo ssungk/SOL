@@ -1,0 +1,16 @@
+# Test configuration
+rtmp:
+  port: 1936
+
+rtsp:
+  port: 8554
+
+api:
+  port: 8081
+
+logging:
+  level: debug
+
+stream:
+  gop_cache_size: 10
+  max_players_per_stream: 100

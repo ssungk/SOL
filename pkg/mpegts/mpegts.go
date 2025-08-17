@@ -45,7 +45,7 @@ type StreamInfo struct {
 }
 
 // FrameCallback 프레임 처리 콜백
-type FrameCallback func(streamPID uint16, frame media.Frame) error
+type FrameCallback func(streamPID uint16, frame media.MediaFrame) error
 
 // MetadataCallback 메타데이터 처리 콜백
 type MetadataCallback func(streamPID uint16, metadata map[string]string) error
@@ -74,7 +74,7 @@ type Muxer interface {
 	AddStream(streamType StreamType, codecData *CodecData) (uint16, error) // PID 반환
 	
 	// WriteFrame 프레임 쓰기
-	WriteFrame(streamPID uint16, frame media.Frame) ([]byte, error) // TS 패킷들 반환
+	WriteFrame(streamPID uint16, frame media.MediaFrame) ([]byte, error) // TS 패킷들 반환
 	
 	// WriteMetadata 메타데이터 쓰기
 	WriteMetadata(streamPID uint16, metadata map[string]string) ([]byte, error)
@@ -172,19 +172,17 @@ func CreatePESPacket(streamID uint8, pts, dts uint64, data []byte) ([]byte, erro
 	return createPESPacket(streamID, pts, dts, data)
 }
 
-// ConvertToMediaFrame MPEGTS에서 추출한 데이터를 media.Frame으로 변환
-func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) media.Frame {
-	var frameType media.Type
-	var frameSubType media.FrameSubType
-	var codecType media.CodecType
-	var formatType media.FormatType
-	var data [][]byte
+// ConvertToMediaFrame MPEGTS에서 추출한 데이터를 MediaFrame으로 변환
+func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) media.MediaFrame {
+	var codec media.MediaCodec
+	var format media.BitstreamFormat
+	var frameType media.FrameType
+	var data []byte
 	
 	switch streamType {
 	case StreamTypeH264:
-		frameType = media.TypeVideo
-		codecType = media.CodecH264
-		formatType = media.FormatStartCode // MPEGTS는 StartCode 포맷 사용
+		codec = media.MediaH264
+		format = media.FormatH26xAnnexB // MPEGTS는 Annex-B 포맷 사용
 		
 		// 키프레임 또는 설정 프레임 판별
 		isKeyFrame := false
@@ -198,22 +196,21 @@ func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) 
 				isConfigFrame = true
 			}
 			
-			// NALU 데이터를 [][]byte로 변환 (제로카피)
-			data = append(data, nalu.Data)
+			// NALU 데이터를 단일 버퍼로 결합
+			data = append(data, nalu.Data...)
 		}
 		
 		if isConfigFrame {
-			frameSubType = media.VideoSequenceHeader
+			frameType = media.TypeConfig
 		} else if isKeyFrame {
-			frameSubType = media.VideoKeyFrame
+			frameType = media.TypeKey
 		} else {
-			frameSubType = media.VideoInterFrame
+			frameType = media.TypeData
 		}
 		
 	case StreamTypeH265:
-		frameType = media.TypeVideo
-		codecType = media.CodecH265
-		formatType = media.FormatStartCode // MPEGTS는 StartCode 포맷 사용
+		codec = media.MediaH265
+		format = media.FormatH26xAnnexB // MPEGTS는 Annex-B 포맷 사용
 		
 		// 키프레임 또는 설정 프레임 판별
 		isKeyFrame := false
@@ -227,55 +224,52 @@ func ConvertToMediaFrame(streamType StreamType, nalus []NALU, timestamp uint32) 
 				isConfigFrame = true
 			}
 			
-			// NALU 데이터를 [][]byte로 변환 (제로카피)
-			data = append(data, nalu.Data)
+			// NALU 데이터를 단일 버퍼로 결합
+			data = append(data, nalu.Data...)
 		}
 		
 		if isConfigFrame {
-			frameSubType = media.VideoSequenceHeader
+			frameType = media.TypeConfig
 		} else if isKeyFrame {
-			frameSubType = media.VideoKeyFrame
+			frameType = media.TypeKey
 		} else {
-			frameSubType = media.VideoInterFrame
+			frameType = media.TypeData
 		}
 		
 	case StreamTypeADTS, StreamTypeAAC:
-		frameType = media.TypeAudio
-		codecType = media.CodecAAC
-		formatType = media.FormatADTS // AAC는 ADTS 포맷 사용
+		codec = media.MediaAAC
+		format = media.FormatAACADTS // AAC는 ADTS 포맷 사용
 		
 		// AAC 프레임의 경우 설정 정보가 포함되어 있는지 확인
 		if len(nalus) > 0 && nalus[0].IsConfig {
-			frameSubType = media.AudioSequenceHeader
+			frameType = media.TypeConfig
 		} else {
-			frameSubType = media.AudioRawData
+			frameType = media.TypeData
 		}
 		
-		// 오디오 데이터를 [][]byte로 변환
+		// 오디오 데이터를 단일 버퍼로 결합
 		for _, nalu := range nalus {
-			data = append(data, nalu.Data)
+			data = append(data, nalu.Data...)
 		}
 		
 	default:
-		// 알 수 없는 스트림 타입의 경우 메타데이터로 처리
-		frameType = media.TypeMetadata
-		frameSubType = media.FrameSubType(0)
-		codecType = media.CodecUnknown
-		formatType = media.FormatRaw
+		// 알 수 없는 스트림 타입의 경우 데이터로 처리
+		codec = media.MediaUnknown
+		format = media.FormatRawStream
+		frameType = media.TypeData
 		
 		for _, nalu := range nalus {
-			data = append(data, nalu.Data)
+			data = append(data, nalu.Data...)
 		}
 	}
 	
-	return media.Frame{
-		Type:       frameType,
-		SubType:    frameSubType,
-		CodecType:  codecType,
-		FormatType: formatType,
-		Timestamp:  timestamp,
-		Data:       data,
-	}
+	return media.NewMediaFrame(
+		codec,
+		format,
+		frameType,
+		timestamp,
+		data,
+	)
 }
 
 // ExtractTimestamp PTS/DTS에서 밀리초 단위 타임스탬프 추출

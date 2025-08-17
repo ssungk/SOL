@@ -49,7 +49,7 @@ func NewTSWriter() *TSWriter {
 }
 
 // WriteSegment 세그먼트를 TS 형식으로 작성
-func (w *TSWriter) WriteSegment(frames []media.Frame) ([]byte, error) {
+func (w *TSWriter) WriteSegment(frames []media.MediaFrame) ([]byte, error) {
 	w.output.Reset()
 
 	// 프레임 분석
@@ -78,17 +78,16 @@ func (w *TSWriter) WriteSegment(frames []media.Frame) ([]byte, error) {
 }
 
 // analyzeFrames 프레임들을 분석하여 스트림 정보 설정
-func (w *TSWriter) analyzeFrames(frames []media.Frame) {
+func (w *TSWriter) analyzeFrames(frames []media.MediaFrame) {
 	w.hasVideo = false
 	w.hasAudio = false
 
 	for _, frame := range frames {
-		switch frame.Type {
-		case media.TypeVideo:
+		if frame.Codec.IsVideo() {
 			w.hasVideo = true
 			// H.264 가정
 			w.videoCodec = "h264"
-		case media.TypeAudio:
+		} else if frame.Codec.IsAudio() {
 			w.hasAudio = true
 			// AAC 가정
 			w.audioCodec = "aac"
@@ -116,19 +115,18 @@ func (w *TSWriter) writePMT() error {
 }
 
 // writeFrame 프레임을 PES 패킷으로 작성
-func (w *TSWriter) writeFrame(frame media.Frame, isFirst bool) error {
+func (w *TSWriter) writeFrame(frame media.MediaFrame, isFirst bool) error {
 	var pid uint16
 	var streamID uint8
 
 	// PID와 스트림 ID 결정
-	switch frame.Type {
-	case media.TypeVideo:
+	if frame.Codec.IsVideo() {
 		pid = w.videoPID
 		streamID = PESVideoStreamID
-	case media.TypeAudio:
+	} else if frame.Codec.IsAudio() {
 		pid = w.audioPID
 		streamID = PESAudioStreamID
-	default:
+	} else {
 		return nil // 지원하지 않는 타입 무시
 	}
 
@@ -139,7 +137,7 @@ func (w *TSWriter) writeFrame(frame media.Frame, isFirst bool) error {
 	pesData := w.generatePES(streamID, frameData, frame.Timestamp)
 
 	// PCR 추가 (필요시)
-	needPCR := isFirst || (frame.Type == media.TypeVideo && media.IsVideoKeyFrame(frame.SubType))
+	needPCR := isFirst || (frame.Codec.IsVideo() && frame.IsKeyFrame())
 
 	// PES 데이터를 TS 패킷들로 분할
 	return w.writePESPackets(pid, pesData, needPCR, frame.Timestamp)

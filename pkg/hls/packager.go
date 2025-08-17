@@ -22,7 +22,7 @@ type Packager struct {
 	segmentIndex   int            // 세그먼트 인덱스
 	
 	// 프레임 버퍼링
-	frameBuffer    []media.Frame  // 프레임 버퍼
+	frameBuffer    []media.MediaFrame  // 프레임 버퍼
 	lastKeyFrame   time.Time      // 마지막 키프레임 시간
 	segmentStart   time.Time      // 현재 세그먼트 시작 시간
 	
@@ -44,7 +44,7 @@ func NewPackager(streamID string, config HLSConfig, store SegmentStore, playlist
 		segmentStore: store,
 		playlist:     playlist,
 		segmentIndex: 0,
-		frameBuffer:  make([]media.Frame, 0),
+		frameBuffer:  make([]media.MediaFrame, 0),
 		isActive:     true,
 	}
 	
@@ -90,7 +90,7 @@ func (p *Packager) Close() error {
 }
 
 // SendMediaFrame implements MediaSink interface
-func (p *Packager) SendMediaFrame(streamId string, frame media.Frame) error {
+func (p *Packager) SendMediaFrame(streamId string, frame media.MediaFrame) error {
 	if !p.isActive {
 		return fmt.Errorf("packager not active")
 	}
@@ -102,8 +102,8 @@ func (p *Packager) SendMediaFrame(streamId string, frame media.Frame) error {
 	p.lastFrameTime = time.Now()
 	
 	// 키프레임 감지
-	isKeyFrame := media.IsVideoKeyFrame(frame.SubType)
-	if isKeyFrame && frame.Type == media.TypeVideo {
+	isKeyFrame := frame.IsKeyFrame()
+	if isKeyFrame && frame.IsVideo() {
 		p.lastKeyFrame = time.Now()
 	}
 	
@@ -129,7 +129,7 @@ func (p *Packager) SendMediaFrame(streamId string, frame media.Frame) error {
 	
 	slog.Debug("Frame added to HLS packager", 
 		"streamID", p.streamID,
-		"subType", frame.SubType,
+		"codec", frame.Codec,
 		"timestamp", frame.Timestamp,
 		"isKeyFrame", isKeyFrame)
 	
@@ -242,7 +242,7 @@ func (p *Packager) GetStats() map[string]any {
 // TSSegmentBuilder TS 세그먼트 빌더
 type TSSegmentBuilder struct {
 	segment       *BaseSegment  // 현재 세그먼트
-	frames        []media.Frame // 프레임 버퍼
+	frames        []media.MediaFrame // 프레임 버퍼
 	startTime     time.Time     // 시작 시간
 	hasKeyFrame   bool          // 키프레임 보유 여부
 }
@@ -250,7 +250,7 @@ type TSSegmentBuilder struct {
 // NewTSSegmentBuilder TS 세그먼트 빌더 생성
 func NewTSSegmentBuilder() *TSSegmentBuilder {
 	return &TSSegmentBuilder{
-		frames: make([]media.Frame, 0),
+		frames: make([]media.MediaFrame, 0),
 	}
 }
 
@@ -265,13 +265,13 @@ func (b *TSSegmentBuilder) StartSegment(index int, streamID string) error {
 }
 
 // AddFrame implements SegmentBuilder interface
-func (b *TSSegmentBuilder) AddFrame(frame media.Frame) error {
+func (b *TSSegmentBuilder) AddFrame(frame media.MediaFrame) error {
 	if b.segment == nil {
 		return fmt.Errorf("segment not started")
 	}
 	
 	// 키프레임 감지
-	if media.IsVideoKeyFrame(frame.SubType) && frame.Type == media.TypeVideo {
+	if frame.IsKeyFrame() && frame.IsVideo() {
 		if !b.hasKeyFrame {
 			b.segment.SetKeyFrameStart(true)
 			b.hasKeyFrame = true
@@ -348,14 +348,3 @@ func (p *Packager) SubscribedStreams() []string {
 	return nil
 }
 
-// PreferredFormat MediaSink 인터페이스 구현 - HLS는 MPEG-TS용 StartCode 포맷 선호
-func (p *Packager) PreferredFormat(codecType media.CodecType) media.FormatType {
-	switch codecType {
-	case media.CodecH264, media.CodecH265:
-		return media.FormatAnnexB // MPEG-TS는 StartCode 포맷 사용
-	case media.CodecAAC:
-		return media.FormatADTS // AAC는 ADTS 포맷 선호
-	default:
-		return media.FormatRaw
-	}
-}

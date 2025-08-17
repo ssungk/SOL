@@ -7,12 +7,11 @@ import (
 // 모든 유형의 미디어 캐싱을 관리합니다
 // 이벤트 드리븐 모델: 경쟁 상태를 피하기 위해 모든 접근은 이벤트 루프를 통해야 합니다
 type StreamBuffer struct {
-	// 시간순으로 정렬된 모든 프레임 (비디오/오디오 통합)
-	frames []Frame
+	// 시간순으로 정렬된 모든 프레임 (MediaFrame)
+	frames []MediaFrame
 	
 	// 코덱 설정 데이터 (SPS/PPS, AudioSpecificConfig 등)
-	videoExtraData *VideoFrame
-	audioExtraData *AudioFrame
+	extraData map[MediaCodec]MediaFrame
 	
 	// 스트림 메타데이터 (width, height, framerate, audiocodecid 등)
 	metadata map[string]string
@@ -34,7 +33,8 @@ func NewStreamBuffer() *StreamBuffer {
 // 설정 가능한 스트림 버퍼를 생성합니다
 func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames int) *StreamBuffer {
 	return &StreamBuffer{
-		frames:              make([]Frame, 0),
+		frames:              make([]MediaFrame, 0),
+		extraData:           make(map[MediaCodec]MediaFrame),
 		minBufferDurationMs: minDurationMs,
 		maxBufferDurationMs: maxDurationMs,
 		maxFrames:           maxFrames,
@@ -42,33 +42,18 @@ func NewStreamBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames in
 	}
 }
 
-// 프레임을 캐시에 추가합니다 (비디오/오디오 통합 처리)
+// 프레임을 캐시에 추가합니다 (MediaFrame 사용)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (sb *StreamBuffer) AddFrame(frame Frame) {
+func (sb *StreamBuffer) AddFrame(frame MediaFrame) {
 	// Handle extra data (config frames) separately
-	if frame.Type == TypeVideo && IsVideoConfigFrame(frame.SubType) {
-		videoFrame := VideoFrame{
-			Frame:         frame,
-			IsKeyFrame:    IsVideoKeyFrame(frame.SubType),
-			IsConfigFrame: true,
-		}
-		sb.videoExtraData = &videoFrame
-		slog.Debug("Video extra data cached", "subType", frame.SubType, "timestamp", frame.Timestamp)
-		return
-	}
-	
-	if frame.Type == TypeAudio && IsAudioConfigFrame(frame.SubType) {
-		audioFrame := AudioFrame{
-			Frame:         frame,
-			IsConfigFrame: true,
-		}
-		sb.audioExtraData = &audioFrame
-		slog.Debug("Audio extra data cached", "subType", frame.SubType, "timestamp", frame.Timestamp)
+	if frame.Type == TypeConfig {
+		sb.extraData[frame.Codec] = frame
+		slog.Debug("Extra data cached", "codec", frame.Codec, "timestamp", frame.Timestamp)
 		return
 	}
 
 	// 키프레임 추적 및 위치 기록
-	if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
+	if frame.IsKeyFrame() {
 		sb.lastKeyFrameIndex = len(sb.frames)
 		slog.Debug("New key frame detected", "timestamp", frame.Timestamp, "index", sb.lastKeyFrameIndex)
 	}
@@ -98,7 +83,7 @@ func (sb *StreamBuffer) cleanupOldFrames() {
 		}
 		
 		// 키프레임이면서 최소 시간 내에 다른 키프레임이 있으면 제거 가능
-		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
+		if frame.IsKeyFrame() {
 			if sb.hasKeyFrameAfter(i, minTime) {
 				cleanupIndex = i + 1
 			}
@@ -147,7 +132,7 @@ func (sb *StreamBuffer) getCurrentTimestamp() uint32 {
 func (sb *StreamBuffer) hasKeyFrameAfter(index int, minTime uint32) bool {
 	for i := index + 1; i < len(sb.frames); i++ {
 		frame := sb.frames[i]
-		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) && frame.Timestamp >= minTime {
+		if frame.IsKeyFrame() && frame.Timestamp >= minTime {
 			return true
 		}
 	}
@@ -179,20 +164,26 @@ func (sb *StreamBuffer) AddMetadata(metadata map[string]string) {
 // 새로운 플레이어를 위해 적절한 순서로 모든 캐시된 프레임을 반환합니다
 // H.264 디코딩을 위해 키프레임부터 시작하는 GOP를 보장합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (sb *StreamBuffer) GetCachedFrames() []Frame {
-	allFrames := make([]Frame, 0)
+func (sb *StreamBuffer) GetCachedFrames() []MediaFrame {
+	allFrames := make([]MediaFrame, 0)
 
-	// 1. Video extra data first (SPS/PPS)
-	if sb.videoExtraData != nil {
-		allFrames = append(allFrames, sb.videoExtraData.Frame)
+	// 1. 모든 extra data 먼저 추가 (비디오 → 오디오 순서)
+	// 비디오 설정 프레임 (SPS/PPS) 먼저
+	for codec := MediaH264; codec <= MediaAV1; codec++ {
+		if extraFrame, exists := sb.extraData[codec]; exists {
+			allFrames = append(allFrames, extraFrame)
+			slog.Debug("Added video config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
+		}
+	}
+	// 오디오 설정 프레임
+	for codec := MediaAAC; codec <= MediaMP3; codec++ {
+		if extraFrame, exists := sb.extraData[codec]; exists {
+			allFrames = append(allFrames, extraFrame)
+			slog.Debug("Added audio config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
+		}
 	}
 
-	// 2. Audio extra data
-	if sb.audioExtraData != nil {
-		allFrames = append(allFrames, sb.audioExtraData.Frame)
-	}
-
-	// 3. 키프레임부터 시작하는 프레임들만 포함 (H.264 디코딩 보장)
+	// 2. 키프레임부터 시작하는 프레임들만 포함 (디코딩 보장)
 	if sb.lastKeyFrameIndex >= 0 && sb.lastKeyFrameIndex < len(sb.frames) {
 		// 마지막 키프레임부터 끝까지의 프레임들
 		keyFrameBasedFrames := sb.frames[sb.lastKeyFrameIndex:]
@@ -201,8 +192,7 @@ func (sb *StreamBuffer) GetCachedFrames() []Frame {
 		slog.Debug("Cached frames prepared with key frame GOP", 
 			"totalFrames", len(keyFrameBasedFrames), 
 			"keyFrameIndex", sb.lastKeyFrameIndex,
-			"hasVideoSeq", sb.videoExtraData != nil,
-			"hasAudioSeq", sb.audioExtraData != nil)
+			"extraDataCount", len(sb.extraData))
 	} else if len(sb.frames) > 0 {
 		// 키프레임이 없는 경우 경고하고 모든 프레임 포함 (fallback)
 		slog.Warn("No key frame available for new player, this may cause decoding issues", 
@@ -233,9 +223,8 @@ func (sb *StreamBuffer) GetMetadata() map[string]string {
 // Clear 모든 캐시된 데이터를 정리합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) Clear() {
-	sb.videoExtraData = nil
-	sb.audioExtraData = nil
-	sb.frames = make([]Frame, 0)
+	sb.extraData = make(map[MediaCodec]MediaFrame)
+	sb.frames = make([]MediaFrame, 0)
 	sb.metadata = nil
 
 	slog.Debug("Stream buffer cleared")
@@ -244,11 +233,11 @@ func (sb *StreamBuffer) Clear() {
 // 캐시된 데이터가 있으면 true를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
 func (sb *StreamBuffer) HasCachedData() bool {
-	hasVideo := sb.videoExtraData != nil || len(sb.frames) > 0
-	hasAudio := sb.audioExtraData != nil || len(sb.frames) > 0
+	hasFrames := len(sb.frames) > 0
+	hasExtraData := len(sb.extraData) > 0
 	hasMetadata := sb.metadata != nil
 
-	return hasVideo || hasAudio || hasMetadata
+	return hasFrames || hasExtraData || hasMetadata
 }
 
 // 캐시 통계를 반환합니다 (개선된 버전)
@@ -260,8 +249,7 @@ func (sb *StreamBuffer) GetCacheStats() map[string]any {
 	stats := map[string]any{
 		// 기본 정보
 		"total_frame_count": len(sb.frames),
-		"video_extra_data":  sb.videoExtraData != nil,
-		"audio_extra_data":  sb.audioExtraData != nil,
+		"extra_data_count":  len(sb.extraData),
 		"has_metadata":      sb.metadata != nil,
 		
 		// 시간 기반 통계
@@ -292,7 +280,7 @@ func (sb *StreamBuffer) GetCacheStats() map[string]any {
 func (sb *StreamBuffer) getKeyFrameCount() int {
 	count := 0
 	for _, frame := range sb.frames {
-		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
+		if frame.IsKeyFrame() {
 			count++
 		}
 	}
@@ -304,7 +292,7 @@ func (sb *StreamBuffer) getAverageKeyFrameInterval() uint32 {
 	keyFrameTimes := make([]uint32, 0)
 	
 	for _, frame := range sb.frames {
-		if frame.Type == TypeVideo && IsVideoKeyFrame(frame.SubType) {
+		if frame.IsKeyFrame() {
 			keyFrameTimes = append(keyFrameTimes, frame.Timestamp)
 		}
 	}

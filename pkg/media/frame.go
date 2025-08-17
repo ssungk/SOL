@@ -1,321 +1,86 @@
 package media
 
-// === 새로운 통합 타입 시스템 ===
-
 // MediaCodec 비디오/오디오/데이터를 포함하는 통합 코덱 타입
 type MediaCodec uint8
 
 const (
-	// Video codecs: 0-127
-	MediaVideoUnknown MediaCodec = 0
-	MediaH264         MediaCodec = 1
-	MediaH265         MediaCodec = 2
-	MediaVP8          MediaCodec = 3
-	MediaVP9          MediaCodec = 4
-	MediaAV1          MediaCodec = 5
+    // Unknown/Error detection
+    MediaUnknown MediaCodec = 0
 
-	// Audio codecs: 128-191
-	MediaAudioUnknown MediaCodec = 128
-	MediaAAC          MediaCodec = 129
-	MediaOpus         MediaCodec = 130
-	MediaMP3          MediaCodec = 131
+    // Video codecs: 1-127
+    MediaH264 MediaCodec = 1
+    MediaH265 MediaCodec = 2
+    MediaVP8  MediaCodec = 3
+    MediaVP9  MediaCodec = 4
+    MediaAV1  MediaCodec = 5
 
-	// Data/Metadata: 192-255
-	MediaMetadata     MediaCodec = 192
-	MediaSubtitle     MediaCodec = 193
+    // Audio codecs: 128-191
+    MediaAAC  MediaCodec = 128
+    MediaOpus MediaCodec = 129
+    MediaMP3  MediaCodec = 130
+
+    // Data types: 192-255
+    MediaWebVTT MediaCodec = 192 // WebVTT 자막 (HLS/웹 표준)
+    MediaSRT    MediaCodec = 193 // SRT 자막 파일
+    MediaSCTE35 MediaCodec = 194 // SCTE-35 광고 삽입 신호
 )
 
 // MediaCodec 헬퍼 함수들
-func (c MediaCodec) IsVideo() bool { return c < 128 }
-func (c MediaCodec) IsAudio() bool { return c >= 128 && c < 192 }
-func (c MediaCodec) IsData() bool  { return c >= 192 }
+func (c MediaCodec) IsVideo() bool   { return c > 0 && c < 128 }
+func (c MediaCodec) IsAudio() bool   { return c >= 128 && c < 192 }
+func (c MediaCodec) IsData() bool    { return c >= 192 }
+func (c MediaCodec) IsUnknown() bool { return c == 0 }
 
-// BitstreamFormat 코덱별 비트스트림 포맷 (코덱마다 0부터 시작)
+// BitstreamFormat 비트스트림 포맷 (범용 + 코덱별 명시)
 type BitstreamFormat uint8
 
 const (
-	// 모든 코덱 공통
-	FormatUnknownBitstream BitstreamFormat = 0
-	FormatRawBitstream     BitstreamFormat = 1
+    // 범용 포맷 (모든 코덱)
+    FormatRawStream BitstreamFormat = 0 // 원시 비트스트림
+    FormatPackaged BitstreamFormat = 1 // 패키징된 포맷 (헤더/컨테이너 추가)
 
-	// H264/H265 전용 (같은 번호 재사용)
-	FormatAVCCBitstream   BitstreamFormat = 2
-	FormatAnnexBBitstream BitstreamFormat = 3
+    // H26x (H264/H265) 명시적 포맷
+    FormatH26xAnnexB BitstreamFormat = 0 // H264/H265 Annex-B (= FormatRawStream)
+    FormatH26xAVCC   BitstreamFormat = 1 // H264/H265 AVCC (= FormatPackaged)
 
-	// AAC 전용 (같은 번호 재사용)
-	FormatADTSBitstream BitstreamFormat = 2
+    // AAC 명시적 포맷
+    FormatAACRaw  BitstreamFormat = 0 // AAC Raw (= FormatRawStream)
+    FormatAACADTS BitstreamFormat = 1 // AAC ADTS (= FormatPackaged)
 )
 
-// FrameKind 프레임 종류 (비디오/오디오 통합)
-type FrameKind uint8
+// FrameType 프레임 타입 (개념적 분류 기반)
+type FrameType uint8
 
 const (
-	KindUnknown    FrameKind = 0
-	KindKeyFrame   FrameKind = 1 // 비디오: I-frame, 오디오: 설정 프레임
-	KindInterFrame FrameKind = 2 // 비디오: P-frame
-	KindBFrame     FrameKind = 3 // 비디오: B-frame
-	KindRawData    FrameKind = 4 // 일반 데이터
+    TypeData   FrameType = 0 // 일반 데이터 (비디오 P/B프레임, 오디오 데이터)
+    TypeConfig FrameType = 1 // 설정 데이터 (비디오 SPS/PPS, 오디오 AudioSpecificConfig)
+    TypeKey    FrameType = 2 // 키프레임 (비디오 I-프레임만)
 )
 
 // MediaFrame 새로운 단순화된 프레임 구조
 type MediaFrame struct {
-	Codec     MediaCodec      // 통합된 코덱 (비디오/오디오 구분 포함)
-	Format    BitstreamFormat // 코덱별 비트스트림 포맷
-	Kind      FrameKind       // 프레임 종류
-	Timestamp uint32          // 타임스탬프 (밀리초)
-	Data      []byte          // 프레임 데이터
+    Codec     MediaCodec      // 통합된 코덱 (비디오/오디오 구분 포함)
+    Format    BitstreamFormat // 코덱별 비트스트림 포맷
+    Type      FrameType       // 프레임 타입
+    Timestamp uint32          // 타임스탬프 (밀리초)
+    Data      []byte          // 프레임 데이터
 }
 
 // MediaFrame 헬퍼 함수들
-func (f *MediaFrame) IsVideo() bool { return f.Codec.IsVideo() }
-func (f *MediaFrame) IsAudio() bool { return f.Codec.IsAudio() }
-func (f *MediaFrame) IsData() bool  { return f.Codec.IsData() }
-func (f *MediaFrame) IsKeyFrame() bool { return f.Kind == KindKeyFrame }
+func (f *MediaFrame) IsVideo() bool    { return f.Codec.IsVideo() }
+func (f *MediaFrame) IsAudio() bool    { return f.Codec.IsAudio() }
+func (f *MediaFrame) IsData() bool     { return f.Codec.IsData() }
+func (f *MediaFrame) IsKeyFrame() bool { return f.Type == TypeKey }
 
 // NewMediaFrame 새로운 미디어 프레임 생성
-func NewMediaFrame(codec MediaCodec, format BitstreamFormat, kind FrameKind, timestamp uint32, data []byte) MediaFrame {
-	return MediaFrame{
-		Codec:     codec,
-		Format:    format,
-		Kind:      kind,
-		Timestamp: timestamp,
-		Data:      data,
-	}
+func NewMediaFrame(codec MediaCodec, format BitstreamFormat, frameType FrameType, timestamp uint32, data []byte) MediaFrame {
+    return MediaFrame{
+        Codec:     codec,
+        Format:    format,
+        Type:      frameType,
+        Timestamp: timestamp,
+        Data:      data,
+    }
 }
 
-// === 기존 호환성 타입들 ===
 
-// Type represents the type of media
-type Type uint8
-
-const (
-	TypeAudio Type = iota + 1
-	TypeVideo
-	TypeMetadata
-)
-
-// CodecType 코덱 타입
-type CodecType uint8
-
-const (
-	CodecUnknown CodecType = iota
-	CodecH264
-	CodecH265
-	CodecAAC
-	CodecOpus
-	CodecVP8
-	CodecVP9
-	CodecAV1
-)
-
-// FormatType 데이터 포맷 타입
-type FormatType uint8
-
-const (
-	FormatUnknown FormatType = iota
-	FormatRaw                // 원본 데이터
-	FormatAVCC               // H264/H265 AVCC 포맷 (length-prefix)
-	FormatAnnexB             // H264/H265 Annex-B 포맷 (0x00 0x00 0x01)
-	FormatADTS               // AAC ADTS 포맷
-)
-
-// FrameSubType 미디어 프레임의 세부 타입
-type FrameSubType uint8
-
-const (
-	// Video subtypes
-	VideoKeyFrame FrameSubType = iota + 1
-	VideoInterFrame
-	VideoDisposableInterFrame // B-frame
-	VideoSequenceHeader       // SPS/PPS/VPS 등
-
-	// Audio subtypes
-	AudioRawData
-	AudioSequenceHeader // Audio Specific Config 등
-)
-
-// Frame represents a generic media frame
-type Frame struct {
-	Type       Type         // Media type (audio/video/metadata)
-	SubType    FrameSubType // Frame sub type (VideoKeyFrame, AudioRawData 등)
-	CodecType  CodecType    // 코덱 타입 (H264, H265, AAC 등)
-	FormatType FormatType   // 데이터 포맷 (AVCC, StartCode 등)
-	Timestamp  uint32       // Frame timestamp in milliseconds
-	Data       []byte       // Zero-copy payload
-}
-
-// VideoFrame represents a video frame with video-specific information
-type VideoFrame struct {
-	Frame
-	IsKeyFrame    bool // Whether this is a key frame
-	IsConfigFrame bool // Whether this is a config frame (e.g., SPS/PPS/VPS)
-}
-
-// AudioFrame represents an audio frame with audio-specific information
-type AudioFrame struct {
-	Frame
-	IsConfigFrame bool // Whether this is a config frame (e.g., Audio Specific Config)
-}
-
-// NewVideoFrame creates a new video frame
-func NewVideoFrame(subType FrameSubType, codecType CodecType, formatType FormatType, timestamp uint32, data []byte) VideoFrame {
-	return VideoFrame{
-		Frame: Frame{
-			Type:       TypeVideo,
-			SubType:    subType,
-			CodecType:  codecType,
-			FormatType: formatType,
-			Timestamp:  timestamp,
-			Data:       data,
-		},
-		IsKeyFrame:    IsVideoKeyFrame(subType),
-		IsConfigFrame: IsVideoConfigFrame(subType),
-	}
-}
-
-// NewAudioFrame creates a new audio frame
-func NewAudioFrame(subType FrameSubType, codecType CodecType, formatType FormatType, timestamp uint32, data []byte) AudioFrame {
-	return AudioFrame{
-		Frame: Frame{
-			Type:       TypeAudio,
-			SubType:    subType,
-			CodecType:  codecType,
-			FormatType: formatType,
-			Timestamp:  timestamp,
-			Data:       data,
-		},
-		IsConfigFrame: IsAudioConfigFrame(subType),
-	}
-}
-
-// IsVideoKeyFrame 비디오 키프레임 여부 확인
-func IsVideoKeyFrame(subType FrameSubType) bool {
-	return subType == VideoKeyFrame
-}
-
-// IsVideoConfigFrame 비디오 설정 프레임 여부 확인
-func IsVideoConfigFrame(subType FrameSubType) bool {
-	return subType == VideoSequenceHeader
-}
-
-// IsAudioConfigFrame 오디오 설정 프레임 여부 확인
-func IsAudioConfigFrame(subType FrameSubType) bool {
-	return subType == AudioSequenceHeader
-}
-
-// ConvertH264Format H264 프레임 포맷 변환
-func ConvertH264Format(data []byte, fromFormat, toFormat FormatType) ([]byte, error) {
-	if fromFormat == toFormat {
-		return data, nil
-	}
-
-	switch {
-	case fromFormat == FormatAVCC && toFormat == FormatAnnexB:
-		return convertAVCCToAnnexB(data), nil
-	case fromFormat == FormatAnnexB && toFormat == FormatAVCC:
-		return convertAnnexBToAVCC(data), nil
-	default:
-		return data, nil // 지원하지 않는 변환은 원본 반환
-	}
-}
-
-// convertAVCCToAnnexB AVCC 포맷을 Annex-B 포맷으로 변환
-func convertAVCCToAnnexB(data []byte) []byte {
-	var result []byte
-	startCode := []byte{0x00, 0x00, 0x00, 0x01}
-
-	pos := 0
-	for pos < len(data) {
-		if pos+4 > len(data) {
-			break
-		}
-
-		// AVCC 길이 읽기 (4바이트 big-endian)
-		naluLength := int(data[pos])<<24 | int(data[pos+1])<<16 | int(data[pos+2])<<8 | int(data[pos+3])
-		pos += 4
-
-		if pos+naluLength > len(data) {
-			break
-		}
-
-		// StartCode + NALU 데이터 추가
-		result = append(result, startCode...)
-		result = append(result, data[pos:pos+naluLength]...)
-
-		pos += naluLength
-	}
-
-	return result
-}
-
-// convertAnnexBToAVCC Annex-B 포맷을 AVCC 포맷으로 변환
-func convertAnnexBToAVCC(data []byte) []byte {
-	var result []byte
-
-	pos := 0
-	for pos < len(data) {
-		// StartCode 찾기
-		startCodePos := findStartCode(data[pos:])
-		if startCodePos == -1 {
-			break
-		}
-		startCodePos += pos
-
-		// StartCode 길이 확인
-		var startCodeLen int
-		if startCodePos+4 <= len(data) &&
-			data[startCodePos] == 0x00 && data[startCodePos+1] == 0x00 &&
-			data[startCodePos+2] == 0x00 && data[startCodePos+3] == 0x01 {
-			startCodeLen = 4
-		} else if startCodePos+3 <= len(data) &&
-			data[startCodePos] == 0x00 && data[startCodePos+1] == 0x00 && data[startCodePos+2] == 0x01 {
-			startCodeLen = 3
-		} else {
-			break
-		}
-
-		naluStart := startCodePos + startCodeLen
-		if naluStart >= len(data) {
-			break
-		}
-
-		// 다음 StartCode 찾기
-		nextStartCodePos := findStartCode(data[naluStart:])
-		var naluEnd int
-		if nextStartCodePos != -1 {
-			naluEnd = naluStart + nextStartCodePos
-		} else {
-			naluEnd = len(data)
-		}
-
-		naluLength := naluEnd - naluStart
-		if naluLength > 0 {
-			// AVCC 헤더 (4바이트 길이) + NALU 데이터 추가
-			lengthBytes := []byte{
-				byte(naluLength >> 24),
-				byte(naluLength >> 16),
-				byte(naluLength >> 8),
-				byte(naluLength),
-			}
-			result = append(result, lengthBytes...)
-			result = append(result, data[naluStart:naluEnd]...)
-		}
-
-		pos = naluEnd
-	}
-
-	return result
-}
-
-// findStartCode StartCode 위치 찾기
-func findStartCode(data []byte) int {
-	for i := 0; i < len(data)-2; i++ {
-		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
-			return i
-		}
-		if i < len(data)-3 && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01 {
-			return i
-		}
-	}
-	return -1
-}
