@@ -128,26 +128,12 @@ func (s *MediaServer) shutdown() {
 	slog.Info("Media Server stopped successfully")
 }
 
-// 노드 제거
+// 노드 제거 (단순히 노드만 제거, 스트림 정리는 이벤트를 통해 처리)
 func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	node, exists := s.nodes[nodeId]
 	if !exists {
 		slog.Debug("Node not found for removal", "nodeId", nodeId)
 		return
-	}
-
-	// Sink 노드인 경우 모든 스트림에서 제거
-	if _, ok := node.(media.MediaSink); ok {
-		slog.Debug("Processing MediaSink node removal", "nodeId", nodeId)
-		for streamId, stream := range s.streams {
-			for _, existingSink := range stream.GetSinks() {
-				if existingSink.ID() == nodeId {
-					stream.RemoveSink(existingSink)
-					slog.Info("Sink node removed from stream", "nodeId", nodeId, "streamId", streamId)
-					break
-				}
-			}
-		}
 	}
 
 	// 노드 제거
@@ -351,14 +337,25 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 
 // handleSubscribeStopped 재생 중지 이벤트 처리
 func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
-	slog.Info("Play stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
+	slog.Info("Subscribe stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 
-	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리
-	if _, exists := s.nodes[event.NodeId()]; exists {
-		// Sink 노드 제거 및 스트림 정리
-		s.RemoveNode(event.NodeId())
-		slog.Info("Sink node removed due to play stop", "streamId", event.StreamId, "sinkId", event.NodeId())
-	} else {
-		slog.Debug("Play stopped event for already removed node", "nodeId", event.NodeId())
+	// 노드 찾기
+	node, exists := s.nodes[event.NodeId()]
+	if !exists {
+		slog.Debug("Subscribe stopped event for already removed node", "nodeId", event.NodeId())
+		return
 	}
+
+	// sink인지 확인하고 스트림에서 제거
+	if sink, ok := node.(media.MediaSink); ok {
+		if stream, streamExists := s.streams[event.StreamId]; streamExists {
+			stream.RemoveSink(sink)
+			slog.Info("Sink removed from stream due to subscribe stop", "nodeId", event.NodeId(), "streamId", event.StreamId)
+		} else {
+			slog.Warn("Stream not found for subscribe stop", "streamId", event.StreamId, "nodeId", event.NodeId())
+		}
+	}
+
+	// 노드 제거
+	s.RemoveNode(event.NodeId())
 }
