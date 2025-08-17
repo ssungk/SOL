@@ -29,10 +29,8 @@ func NewSol() *SOL {
 	// 설정을 기반으로 로거 초기화
 	InitLogger(config)
 
-	// media 서버 생성 (RTMP, RTSP, SRT, HLS)
-	hlsConfig := config.ToHLSConfig()
-	srtConfig := config.ToSRTConfig()
-	mediaServer := media.NewMediaServer(config.RTMP.Port, config.RTSP.Port, config.RTSP.Timeout, srtConfig, hlsConfig, media.StreamConfig{
+	// media 서버 생성 (RTMP, RTSP)
+	mediaServer := media.NewMediaServer(config.RTMP.Port, config.RTSP.Port, config.RTSP.Timeout, media.StreamConfig{
 		GopCacheSize:        config.Stream.GopCacheSize,
 		MaxPlayersPerStream: config.Stream.MaxPlayersPerStream,
 	})
@@ -51,7 +49,7 @@ func NewSol() *SOL {
 func (app *SOL) Start() {
 	slog.Info("Application starting...")
 
-	// Media 서버 시작 (RTMP, RTSP, SRT)
+	// Media 서버 시작 (RTMP, RTSP)
 	if err := app.mediaServer.Start(); err != nil {
 		slog.Error("Failed to start media server", "err", err)
 		os.Exit(1)

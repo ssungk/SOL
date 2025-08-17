@@ -57,7 +57,7 @@ ffplay rtsp://localhost:554/live/test_stream
 
 ## 아키텍처 개요
 
-SOL은 Go로 구축된 멀티 프로토콜 스트리밍 서버로, RTMP와 RTSP 프로토콜을 지원합니다. 관심사의 명확한 분리를 통한 계층화된 접근 방식으로 설계되었습니다.
+SOL은 Go로 구축된 스트리밍 서버로, RTMP와 RTSP 프로토콜을 지원합니다. 관심사의 명확한 분리를 통한 계층화된 접근 방식으로 설계되었습니다.
 
 ### 핵심 아키텍처 계층
 
@@ -94,7 +94,7 @@ SOL은 Go로 구축된 멀티 프로토콜 스트리밍 서버로, RTMP와 RTSP 
 - **Stream** (`pkg/media/stream.go`): 미디어 데이터 흐름을 관리하는 프로토콜 독립적 스트림 객체
 - **MediaSource 인터페이스**: 스트림 생산자(RTMP/RTSP 세션)를 위한 추상 인터페이스
 - **MediaSink 인터페이스**: 스트림 소비자(RTMP/RTSP 세션)를 위한 추상 인터페이스
-- **Frame**: 통합 미디어 데이터 구조 (VideoFrame, AudioFrame 포함)
+- **MediaFrame**: 통합 미디어 데이터 구조 (비디오/오디오 프레임 통합)
 - **StreamBuffer**: 키프레임 기반 + 시간 기반 스마트 버퍼링, extraData 캐싱
 
 ### 이벤트 드리븐 설계
@@ -137,12 +137,6 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 
 ## 일반적인 개발 패턴
 
-### 새 프로토콜 지원 추가
-1. `pkg/`에 새 패키지 생성 (예: `pkg/hls/`)
-2. 서버, 세션, 메시지 처리 구현
-3. 프로토콜별 이벤트 및 세션 타입 생성
-4. 스트림 통합을 위한 `MediaSource/MediaSink` 인터페이스 구현
-5. `MediaServer` 조정에 추가
 
 ### 스트림 처리
 - 데이터 주입에는 항상 `Stream.SendMediaFrame()` 및 `Stream.SendMetadata()` 사용
@@ -177,6 +171,7 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
 - [x] **프로토콜 간 스트림 공유**: RTMP ↔ RTSP 간 실시간 스트림 공유 가능
 - [x] **이벤트 시스템 통합**: 모든 프로토콜이 동일한 이벤트 시스템 사용
 - [x] **중앙집중식 스트림 관리**: MediaServer에서 모든 프로토콜의 스트림 통합 관리
+- [x] **MediaFrame 통합 구조체**: 기존 Frame 시스템을 MediaFrame으로 리팩토링 완료
 
 ## TODO 리스트
 
@@ -192,5 +187,8 @@ MediaSource.SendFrame() → Stream.SendFrame() → StreamBuffer → MediaSink.Se
    - [ ] HLS 출력 지원
    - [ ] WebRTC 지원 검토
    - [ ] SRT 지원 검토
+   - [ ] MPEGTS 지원 검토
    - [ ] Transcoder 지원 검토
 
+
+- to memorize

@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sol/pkg/hls"
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
-	"sol/pkg/srt"
 	"sol/pkg/utils"
 	"sync"
 )
@@ -20,7 +18,7 @@ type StreamConfig struct {
 }
 
 type MediaServer struct {
-	servers  map[string]ProtocolServer   // serverName -> ProtocolServer (rtmp, rtsp, hls)
+	servers  map[string]ProtocolServer   // serverName -> ProtocolServer (rtmp, rtsp)
 	mediaServerChannel  chan any
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -32,7 +30,7 @@ type MediaServer struct {
 	streamSources map[string]uintptr     // streamId -> sourceNodeId (소스 추적용)
 }
 
-func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, srtConfig srt.SRTConfig, hlsConfig hls.HLSConfig, streamConfig StreamConfig) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig) *MediaServer {
 	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -52,12 +50,6 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, srtConfig srt.SRTConfig
 
 	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.mediaServerChannel, &mediaServer.wg)
 	mediaServer.servers["rtsp"] = rtspServer
-	
-	srtServer := srt.NewServer(srtConfig, mediaServer.mediaServerChannel, &mediaServer.wg)
-	mediaServer.servers["srt"] = srtServer
-	
-	hlsServer := hls.NewServer(hlsConfig, mediaServer.mediaServerChannel, &mediaServer.wg)
-	mediaServer.servers["hls"] = hlsServer
 	
 	return mediaServer
 }
@@ -361,15 +353,6 @@ func (s *MediaServer) GetStreamStats() map[string]any {
 
 // 공통 이벤트 핸들러들
 
-// getHLSServer HLS 서버 반환
-func (s *MediaServer) getHLSServer() (*hls.Server, bool) {
-	server, exists := s.servers["hls"]
-	if !exists {
-		return nil, false
-	}
-	hlsServer, ok := server.(*hls.Server)
-	return hlsServer, ok
-}
 
 // RegisterServer 새 서버를 동적으로 등록
 func (s *MediaServer) RegisterServer(name string, server ProtocolServer) error {
@@ -414,38 +397,6 @@ func (s *MediaServer) GetServerNames() []string {
 }
 
 
-// CreateHLSStream HLS 스트림 생성
-func (s *MediaServer) CreateHLSStream(streamID string) error {
-	hlsServer, ok := s.getHLSServer()
-	if !ok {
-		return fmt.Errorf("HLS server not found")
-	}
-	
-	if err := hlsServer.CreateStream(streamID); err != nil {
-		return fmt.Errorf("failed to create HLS stream: %w", err)
-	}
-	
-	// HLS 패키저를 MediaSink으로 등록
-	packager, exists := hlsServer.GetPackager(streamID)
-	if exists {
-		s.RegisterNode(streamID, packager)
-		slog.Info("HLS packager registered as MediaSink", "streamID", streamID)
-	}
-	
-	return nil
-}
-
-// RemoveHLSStream HLS 스트림 제거
-func (s *MediaServer) RemoveHLSStream(streamID string) {
-	hlsServer, ok := s.getHLSServer()
-	if !ok {
-		slog.Warn("HLS server not found for stream removal", "streamID", streamID)
-		return
-	}
-	
-	hlsServer.RemoveStream(streamID)
-	slog.Info("HLS stream removed", "streamID", streamID)
-}
 
 // handleNodeCreated 노드 생성 이벤트 처리
 func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
@@ -542,12 +493,6 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 	// 소스 맵핑 등록
 	s.streamSources[streamId] = event.NodeId()
 	
-	// HLS 스트림 자동 생성 비활성화됨 (수동으로 API를 통해 생성 필요)
-	// if err := s.CreateHLSStream(streamId); err != nil {
-	// 	slog.Warn("Failed to create HLS stream", "streamId", streamId, "err", err)
-	// } else {
-	// 	slog.Info("HLS stream created for publish", "streamId", streamId)
-	// }
 	
 	slog.Info("Source registered for publish", "streamId", streamId, "sourceId", event.NodeId(), "nodeType", event.NodeType.String())
 }
@@ -558,8 +503,6 @@ func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 	
 	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리
 	if _, exists := s.nodes[event.NodeId()]; exists {
-		// HLS 스트림 자동 제거 비활성화됨 (수동으로 API를 통해 관리 필요)
-		// s.RemoveHLSStream(event.StreamId)
 		
 		// Source 노드 제거 및 스트림 정리
 		s.RemoveNode(event.NodeId())
