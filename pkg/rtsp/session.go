@@ -461,7 +461,7 @@ func (s *Session) handlePlay(req *Request) error {
 	// Send play started event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.PlayStarted{
+		case s.externalChannel <- media.SubscribeStarted{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
 				NodeType: s.NodeType(),
@@ -491,7 +491,7 @@ func (s *Session) handlePause(req *Request) error {
 	// Send play stopped event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.PlayStopped{
+		case s.externalChannel <- media.SubscribeStopped{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
 				NodeType: s.NodeType(),
@@ -516,7 +516,7 @@ func (s *Session) handleTeardown(req *Request) error {
 	// Send play stopped event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.PlayStopped{
+		case s.externalChannel <- media.SubscribeStopped{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
 				NodeType: s.NodeType(),

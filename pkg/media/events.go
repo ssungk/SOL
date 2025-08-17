@@ -40,13 +40,13 @@ type PublishStopped struct {
 }
 
 // 재생 시작 이벤트
-type PlayStarted struct {
+type SubscribeStarted struct {
 	BaseNodeEvent
 	StreamId string
 }
 
 // 재생 중지 이벤트
-type PlayStopped struct {
+type SubscribeStopped struct {
 	BaseNodeEvent
 	StreamId string
 }
@@ -91,17 +91,17 @@ func NewPublishStopped(id uintptr, nodeType NodeType, streamId string) PublishSt
 	}
 }
 
-// NewPlayStarted 재생 시작 이벤트 생성자
-func NewPlayStarted(id uintptr, nodeType NodeType, streamId string) PlayStarted {
-	return PlayStarted{
+// NewSubscribeStarted 재생 시작 이벤트 생성자
+func NewSubscribeStarted(id uintptr, nodeType NodeType, streamId string) SubscribeStarted {
+	return SubscribeStarted{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
 	}
 }
 
-// NewPlayStopped 재생 중지 이벤트 생성자
-func NewPlayStopped(id uintptr, nodeType NodeType, streamId string) PlayStopped {
-	return PlayStopped{
+// NewSubscribeStopped 재생 중지 이벤트 생성자
+func NewSubscribeStopped(id uintptr, nodeType NodeType, streamId string) SubscribeStopped {
+	return SubscribeStopped{
 		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
 		StreamId:      streamId,
 	}

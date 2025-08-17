@@ -104,10 +104,10 @@ func (s *MediaServer) handleChannel(data any) {
 	case media.PublishStopped:
 		s.handlePublishStopped(v)
 	// 스트림 재생 이벤트
-	case media.PlayStarted:
-		s.handlePlayStarted(v)
-	case media.PlayStopped:
-		s.handlePlayStopped(v)
+	case media.SubscribeStarted:
+		s.handleSubscribeStarted(v)
+	case media.SubscribeStopped:
+		s.handleSubscribeStopped(v)
 	default:
 		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
 	}
@@ -140,36 +140,6 @@ func (s *MediaServer) GetOrCreateStream(streamId string) *media.Stream {
 	}
 	
 	return stream
-}
-
-// 노드(Source 또는 Sink) 등록
-func (s *MediaServer) RegisterNode(streamId string, node media.MediaNode) {
-	nodeId := node.ID()
-	
-	// 이미 nodes 맵에 있다면 스킵 (NodeCreated에서 이미 등록됨)
-	if _, exists := s.nodes[nodeId]; !exists {
-		s.nodes[nodeId] = node
-	}
-	
-	// 스트림 가져오거나 생성
-	stream := s.GetOrCreateStream(streamId)
-	
-	// 노드 타입에 따라 처리
-	if source, ok := node.(media.MediaSource); ok {
-		// Source 등록 - 스트림에 연결은 프로토콜별로 처리
-		slog.Info("Registered source", "streamId", streamId, "nodeId", nodeId, "nodeType", node.NodeType())
-		_ = source // 사용 표시
-	}
-	
-	if sink, ok := node.(media.MediaSink); ok {
-		// Sink 등록 - 스트림에 추가 (캐시된 데이터 자동 전송 포함)
-		if err := stream.AddSink(sink); err != nil {
-			slog.Error("Failed to add sink to stream", "streamId", streamId, "nodeId", nodeId, "err", err)
-			return
-		}
-		
-		slog.Info("Registered sink", "streamId", streamId, "nodeId", nodeId, "nodeType", node.NodeType())
-	}
 }
 
 // 노드 제거
@@ -507,8 +477,8 @@ func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 	}
 }
 
-// handlePlayStarted 재생 시작 이벤트 처리
-func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
+// handleSubscribeStarted 재생 시작 이벤트 처리
+func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 	slog.Info("Play started", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
 	// 노드 ID를 통해 노드 찾기
@@ -545,8 +515,8 @@ func (s *MediaServer) handlePlayStarted(event media.PlayStarted) {
 	slog.Info("Sink registered for play", "streamId", event.StreamId, "sinkId", event.NodeId())
 }
 
-// handlePlayStopped 재생 중지 이벤트 처리
-func (s *MediaServer) handlePlayStopped(event media.PlayStopped) {
+// handleSubscribeStopped 재생 중지 이벤트 처리
+func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
 	slog.Info("Play stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 	
 	// 중복 처리 방지: 노드가 아직 존재하는 경우만 처리

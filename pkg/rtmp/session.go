@@ -855,7 +855,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// MediaServer에 play 시작 알림 (블로킹 - 중요한 이벤트)
 	select {
-	case s.mediaServerChannel <- media.NewPlayStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
+	case s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath):
 		slog.Info("PlayStarted event sent successfully", "sessionId", s.ID(), "streamPath", fullStreamPath)
 	case <-s.ctx.Done():
 		slog.Error("Failed to send PlayStarted event - context cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
@@ -922,7 +922,7 @@ func (s *session) stopPublishing() {
 func (s *session) stopSubscribing() {
 	// 구독 중인 스트림에 대해 재생 중단 이벤트 전송
 	for _, streamPath := range s.subscribedStreams {
-		s.mediaServerChannel <- media.NewPlayStopped(s.ID(), media.NodeTypeRTMP, streamPath)
+		s.mediaServerChannel <- media.NewSubscribeStopped(s.ID(), media.NodeTypeRTMP, streamPath)
 	}
 
 	// 구독 스트림 정리

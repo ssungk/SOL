@@ -73,20 +73,6 @@ func (f *Frame) IsAudio() bool    { return f.Codec.IsAudio() }
 func (f *Frame) IsData() bool     { return f.Codec.IsData() }
 func (f *Frame) IsKeyFrame() bool { return f.Type == TypeKey }
 
-// Track 스트림 내의 개별 미디어 트랙
-type Track struct {
-	Index int   // 트랙 인덱스 (0, 1, 2...)
-	Codec Codec // 트랙의 코덱
-}
-
-// NewTrack 새로운 트랙 생성
-func NewTrack(index int, codec Codec) *Track {
-	return &Track{
-		Index: index,
-		Codec: codec,
-	}
-}
-
 // NewFrame 새로운 미디어 프레임 생성
 func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType FrameType, timestamp uint32, data []byte) Frame {
 	return Frame{
