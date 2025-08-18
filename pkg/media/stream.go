@@ -93,6 +93,15 @@ func (s *Stream) GetTrack(index int) *Track {
 	return s.tracks[index]
 }
 
+// GetTrackCodecs 모든 트랙의 코덱 목록 반환
+func (s *Stream) GetTrackCodecs() []Codec {
+	codecs := make([]Codec, len(s.tracks))
+	for i, track := range s.tracks {
+		codecs[i] = track.Codec
+	}
+	return codecs
+}
+
 // broadcastTrackFrame 트랙 프레임을 모든 sink에 전송
 func (s *Stream) broadcastTrackFrame(frame Frame) {
 	// Send to all sinks with stream ID

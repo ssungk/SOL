@@ -42,8 +42,9 @@ type PublishStopped struct {
 // 재생 시작 이벤트
 type SubscribeStarted struct {
 	BaseNodeEvent
-	StreamId     string
-	ResponseChan chan<- Response
+	StreamId        string
+	SupportedCodecs []Codec // Sink가 지원하는 코덱 목록
+	ResponseChan    chan<- Response
 }
 
 // 재생 중지 이벤트
@@ -117,11 +118,12 @@ func NewPublishStopped(id uintptr, nodeType NodeType, streamId string) PublishSt
 }
 
 // NewSubscribeStarted 재생 시작 이벤트 생성자
-func NewSubscribeStarted(id uintptr, nodeType NodeType, streamId string, responseChan chan<- Response) SubscribeStarted {
+func NewSubscribeStarted(id uintptr, nodeType NodeType, streamId string, supportedCodecs []Codec, responseChan chan<- Response) SubscribeStarted {
 	return SubscribeStarted{
-		BaseNodeEvent: BaseNodeEvent{ID: id, NodeType: nodeType},
-		StreamId:      streamId,
-		ResponseChan:  responseChan,
+		BaseNodeEvent:   BaseNodeEvent{ID: id, NodeType: nodeType},
+		StreamId:        streamId,
+		SupportedCodecs: supportedCodecs,
+		ResponseChan:    responseChan,
 	}
 }
 

@@ -84,3 +84,13 @@ func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType Fra
 		Data:       data,
 	}
 }
+
+// ContainsCodec 코덱 목록에서 특정 코덱 포함 여부 확인
+func ContainsCodec(codecs []Codec, target Codec) bool {
+	for _, codec := range codecs {
+		if codec == target {
+			return true
+		}
+	}
+	return false
+}

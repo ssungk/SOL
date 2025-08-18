@@ -839,9 +839,12 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
 	responseChan := make(chan media.Response, 1)
+	
+	// RTMP가 지원하는 코덱 목록
+	supportedCodecs := []media.Codec{media.H264, media.AAC}
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
-	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, responseChan)
+	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, supportedCodecs, responseChan)
 
 	// 응답 대기
 	select {

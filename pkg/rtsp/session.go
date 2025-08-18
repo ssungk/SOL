@@ -461,15 +461,12 @@ func (s *Session) handlePlay(req *Request) error {
 	// Send play started event to MediaServer
 	if s.externalChannel != nil {
 		responseChan := make(chan media.Response, 1)
+		
+		// RTSP가 지원하는 코덱 목록 (더 다양한 코덱 지원)
+		supportedCodecs := []media.Codec{media.H264, media.H265, media.AAC, media.Opus}
+		
 		select {
-		case s.externalChannel <- media.SubscribeStarted{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.NodeType(),
-			},
-			StreamId:     s.streamPath,
-			ResponseChan: responseChan,
-		}:
+		case s.externalChannel <- media.NewSubscribeStarted(s.ID(), s.NodeType(), s.streamPath, supportedCodecs, responseChan):
 			// 응답 대기
 			select {
 			case response := <-responseChan:

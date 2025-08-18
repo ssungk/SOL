@@ -202,7 +202,13 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 		return
 	}
 
-	// TODO: sink 코덱 등 검사해서 addSink문제 없게 해야됨!!
+	// 코덱 호환성 검증: 스트림의 모든 트랙 코덱이 Sink에서 지원되는지 확인
+	for _, trackCodec := range stream.GetTrackCodecs() {
+		if !media.ContainsCodec(event.SupportedCodecs, trackCodec) {
+			event.ResponseChan <- media.NewErrorResponse(fmt.Sprintf("Unsupported codec: %d", trackCodec))
+			return
+		}
+	}
 
 	// 성공 응답 먼저 전송 (AddSink에서 캐시 데이터 전송 시 데드락 방지)
 	event.ResponseChan <- media.NewSuccessResponse()
