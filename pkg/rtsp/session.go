@@ -460,15 +460,31 @@ func (s *Session) handlePlay(req *Request) error {
 
 	// Send play started event to MediaServer
 	if s.externalChannel != nil {
+		responseChan := make(chan media.Response, 1)
 		select {
 		case s.externalChannel <- media.SubscribeStarted{
 			BaseNodeEvent: media.BaseNodeEvent{
 				ID:       s.ID(),
 				NodeType: s.NodeType(),
 			},
-			StreamId: s.streamPath,
+			StreamId:     s.streamPath,
+			ResponseChan: responseChan,
 		}:
+			// 응답 대기
+			select {
+			case response := <-responseChan:
+				if !response.Success {
+					slog.Error("Subscribe failed", "sessionId", s.ID(), "streamPath", s.streamPath, "error", response.Error)
+					return fmt.Errorf("subscribe failed: %s", response.Error)
+				}
+				slog.Info("Subscribe successful", "sessionId", s.ID(), "streamPath", s.streamPath)
+			case <-s.ctx.Done():
+				slog.Error("Subscribe cancelled", "sessionId", s.ID(), "streamPath", s.streamPath)
+				return fmt.Errorf("subscribe cancelled")
+			}
 		default:
+			slog.Error("Failed to send SubscribeStarted event", "sessionId", s.ID())
+			return fmt.Errorf("failed to send SubscribeStarted event")
 		}
 	}
 
@@ -887,8 +903,8 @@ func (s *Session) PublishingStreams() []*media.Stream {
 
 // SubscribedStreams MediaSink 인터페이스 구현 - 구독 중인 스트림 ID 목록 반환 (PLAY 모드)
 func (s *Session) SubscribedStreams() []string {
-	if s.state == StatePlaying && s.Stream != nil {
-		return []string{s.Stream.ID()}
+	if s.state == StatePlaying && s.streamPath != "" {
+		return []string{s.streamPath}
 	}
 	return nil
 }

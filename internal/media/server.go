@@ -210,15 +210,6 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
 	stream.AddSink(sink)
 
-	// TODO: rtsp 특별처리 부분 제거 필요
-	// RTSP 세션인 경우 스트림 참조 설정
-	if event.NodeType == media.NodeTypeRTSP {
-		if rtspSession, ok := sink.(*rtsp.Session); ok {
-			rtspSession.Stream = stream
-			slog.Info("Stream reference set for RTSP session", "streamId", event.StreamId, "sessionId", rtspSession.GetStreamPath())
-		}
-	}
-
 	slog.Info("Sink registered for subscribe", "streamId", event.StreamId, "sinkId", event.NodeId(), "nodeType", event.NodeType.String())
 }
 
