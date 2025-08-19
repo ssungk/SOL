@@ -175,7 +175,6 @@ func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 	slog.Info("Publish stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
 
 	if stream, exists := s.streams[event.StreamId]; exists {
-		// TODO: stream관련해서 고루틴 동시접근 문제가 있을것같다 내부에 고루틴과 이벤트루프 추가해서 동시접근 안되도록 개선이 필요할듯
 		stream.Stop()
 		delete(s.streams, event.StreamId)
 		slog.Info("Stream removed due to publish stop", "streamId", event.StreamId)
