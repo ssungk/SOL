@@ -30,10 +30,7 @@ func NewSol() *SOL {
 	InitLogger(config)
 
 	// media 서버 생성 (RTMP, RTSP)
-	mediaServer := media.NewMediaServer(config.RTMP.Port, config.RTSP.Port, config.RTSP.Timeout, media.StreamConfig{
-		GopCacheSize:        config.Stream.GopCacheSize,
-		MaxPlayersPerStream: config.Stream.MaxPlayersPerStream,
-	})
+	mediaServer := media.NewMediaServer(config.RTMP.Port, config.RTSP.Port, config.RTSP.Timeout)
 
 	// API 서버 생성 (media 서버를 DI)
 	apiServer := api.NewServer(strconv.Itoa(config.API.Port), mediaServer)

@@ -11,12 +11,6 @@ import (
 	"sync"
 )
 
-// represents stream configuration
-type StreamConfig struct {
-	GopCacheSize        int
-	MaxPlayersPerStream int
-}
-
 type MediaServer struct {
 	servers            map[string]media.ServerInterface // serverName -> ServerInterface (rtmp, rtsp)
 	mediaServerChannel chan any
@@ -29,7 +23,7 @@ type MediaServer struct {
 	nodes   map[uintptr]media.MediaNode // nodeId -> MediaNode (Source|Sink)
 }
 
-func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int, streamConfig StreamConfig) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
 	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
