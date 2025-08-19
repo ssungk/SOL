@@ -199,8 +199,8 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 
 	if e.frame.IsVideo() {
 		msgType = MsgTypeVideo
-		// 비디오: RTMP 헤더 재생성 후 데이터와 결합
-		header := GenerateVideoHeader(e.frame, 0) // composition time = 0으로 설정
+		// 비디오: RTMP 헤더 재생성 후 데이터와 결합 (Frame의 CTS 사용)
+		header := GenerateVideoHeader(e.frame, e.frame.CTS)
 		rtmpData = CombineHeaderAndData(header, e.frame.Data)
 
 	} else if e.frame.IsAudio() {
@@ -214,7 +214,7 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 		return
 	}
 
-	messageHeader := NewMessageHeader(e.frame.Timestamp, uint32(len(rtmpData)), msgType, uint32(streamId))
+	messageHeader := NewMessageHeader(e.frame.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamId))
 	message := NewMessage(messageHeader, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
 		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "frameType", e.frame.Type, "err", err)
@@ -306,7 +306,7 @@ func (s *session) handleAudio(message *Message) {
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
 	// Frame 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	frame := media.NewFrame(trackIndex, codecType, media.FormatRawStream, frameType, message.messageHeader.timestamp, message.payload)
+	frame := media.NewFrame(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, message.payload)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
@@ -333,12 +333,15 @@ func (s *session) handleVideo(message *Message) {
 
 	frameType := s.parseVideoFrameType(firstByte, message.mediaHeader)
 
+	// 비디오 헤더에서 CompositionTime 추출
+	_, _, _, compositionTime := ParseVideoHeader(message.mediaHeader)
+
 	// RTMP는 항상 원본 payload 사용 (AVCC 포맷)
 	frameData := message.payload
 
 	// Frame 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	frame := media.NewFrame(trackIndex, codecType, media.FormatH26xAVCC, frameType, message.messageHeader.timestamp, frameData)
+	frame := media.NewFrame(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
 
 	// message의 streamId에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {

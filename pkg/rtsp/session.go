@@ -796,8 +796,8 @@ func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
 		rtpHeader[1] = 97 // AAC 페이로드 타입
 	}
 	
-	// 타임스탬프 설정 (간단히 frame.Timestamp 사용)
-	timestamp := frame.Timestamp
+	// 타임스탬프 설정 (DTS32 사용)
+	timestamp := frame.DTS32()
 	rtpHeader[4] = byte(timestamp >> 24)
 	rtpHeader[5] = byte(timestamp >> 16)
 	rtpHeader[6] = byte(timestamp >> 8)
@@ -871,7 +871,8 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 		codec,
 		format,
 		frameType,
-		timestamp,
+		uint64(timestamp),
+		0, // CTS = 0 (RTSP는 일반적으로 CTS 사용 안함)
 		payload,
 	)
 

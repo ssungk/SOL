@@ -15,8 +15,8 @@ type TrackBuffer struct {
 	metadata map[string]string
 
 	// 시간 기반 버퍼링 설정
-	minBufferDurationMs uint32 // 최소 버퍼 시간 (ms) - 기본 2초
-	maxBufferDurationMs uint32 // 최대 버퍼 시간 (ms) - 기본 10초
+	minBufferDurationMs uint64 // 최소 버퍼 시간 (ms) - 기본 2초
+	maxBufferDurationMs uint64 // 최대 버퍼 시간 (ms) - 기본 10초
 	maxFrames           int    // 안전장치로 최대 프레임 수
 
 	// 키프레임 추적
@@ -29,7 +29,7 @@ func NewTrackBuffer() *TrackBuffer {
 }
 
 // 설정 가능한 스트림 버퍼를 생성합니다
-func NewTrackBufferWithConfig(minDurationMs, maxDurationMs uint32, maxFrames int) *TrackBuffer {
+func NewTrackBufferWithConfig(minDurationMs, maxDurationMs uint64, maxFrames int) *TrackBuffer {
 	return &TrackBuffer{
 		frames:              make([]Frame, 0),
 		extraData:           make(map[Codec]Frame),
@@ -46,14 +46,14 @@ func (tb *TrackBuffer) AddFrame(frame Frame) {
 	// Handle extra data (config frames) separately
 	if frame.Type == TypeConfig {
 		tb.extraData[frame.Codec] = frame
-		slog.Debug("Extra data cached", "codec", frame.Codec, "timestamp", frame.Timestamp)
+		slog.Debug("Extra data cached", "codec", frame.Codec, "dts", frame.DTS)
 		return
 	}
 
 	// 키프레임 추적 및 위치 기록
 	if frame.IsKeyFrame() {
 		tb.lastKeyFrameIndex = len(tb.frames)
-		slog.Debug("New key frame detected", "timestamp", frame.Timestamp, "index", tb.lastKeyFrameIndex)
+		slog.Debug("New key frame detected", "dts", frame.DTS, "index", tb.lastKeyFrameIndex)
 	}
 
 	// Add frame to cache
@@ -76,7 +76,7 @@ func (tb *TrackBuffer) cleanupOldFrames() {
 	// 단, 키프레임은 보존하여 재생 연속성 확보
 	cleanupIndex := 0
 	for i, frame := range tb.frames {
-		if frame.Timestamp >= minTime {
+		if frame.DTS >= minTime {
 			break // 최소 시간 이후 프레임들은 모두 유지
 		}
 
@@ -118,19 +118,19 @@ func (tb *TrackBuffer) cleanupOldFrames() {
 	}
 }
 
-// getCurrentTimestamp 현재(최신) 프레임의 타임스탬프 반환
-func (tb *TrackBuffer) getCurrentTimestamp() uint32 {
+// getCurrentTimestamp 현재(최신) 프레임의 DTS 반환
+func (tb *TrackBuffer) getCurrentTimestamp() uint64 {
 	if len(tb.frames) == 0 {
 		return 0
 	}
-	return tb.frames[len(tb.frames)-1].Timestamp
+	return tb.frames[len(tb.frames)-1].DTS
 }
 
 // hasKeyFrameAfter 지정된 인덱스 이후에 최소 시간 내 키프레임이 있는지 확인
-func (tb *TrackBuffer) hasKeyFrameAfter(index int, minTime uint32) bool {
+func (tb *TrackBuffer) hasKeyFrameAfter(index int, minTime uint64) bool {
 	for i := index + 1; i < len(tb.frames); i++ {
 		frame := tb.frames[i]
-		if frame.IsKeyFrame() && frame.Timestamp >= minTime {
+		if frame.IsKeyFrame() && frame.DTS >= minTime {
 			return true
 		}
 	}
@@ -138,11 +138,11 @@ func (tb *TrackBuffer) hasKeyFrameAfter(index int, minTime uint32) bool {
 }
 
 // getBufferDuration 현재 버퍼의 총 지속 시간 반환 (ms)
-func (tb *TrackBuffer) getBufferDuration() uint32 {
+func (tb *TrackBuffer) getBufferDuration() uint64 {
 	if len(tb.frames) < 2 {
 		return 0
 	}
-	return tb.frames[len(tb.frames)-1].Timestamp - tb.frames[0].Timestamp
+	return tb.frames[len(tb.frames)-1].DTS - tb.frames[0].DTS
 }
 
 // 메타데이터를 캐시에 추가합니다
@@ -169,14 +169,14 @@ func (tb *TrackBuffer) GetCachedFrames() []Frame {
 	for codec := H264; codec <= AV1; codec++ {
 		if extraFrame, exists := tb.extraData[codec]; exists {
 			allFrames = append(allFrames, extraFrame)
-			slog.Debug("Added video config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
+			slog.Debug("Added video config frame", "codec", codec, "timestamp", extraFrame.DTS)
 		}
 	}
 	// 오디오 설정 프레임
 	for codec := AAC; codec <= MP3; codec++ {
 		if extraFrame, exists := tb.extraData[codec]; exists {
 			allFrames = append(allFrames, extraFrame)
-			slog.Debug("Added audio config frame", "codec", codec, "timestamp", extraFrame.Timestamp)
+			slog.Debug("Added audio config frame", "codec", codec, "timestamp", extraFrame.DTS)
 		}
 	}
 
@@ -284,12 +284,12 @@ func (tb *TrackBuffer) getKeyFrameCount() int {
 }
 
 // getAverageKeyFrameInterval 평균 키프레임 간격 반환 (ms)
-func (tb *TrackBuffer) getAverageKeyFrameInterval() uint32 {
-	keyFrameTimes := make([]uint32, 0)
+func (tb *TrackBuffer) getAverageKeyFrameInterval() uint64 {
+	keyFrameTimes := make([]uint64, 0)
 
 	for _, frame := range tb.frames {
 		if frame.IsKeyFrame() {
-			keyFrameTimes = append(keyFrameTimes, frame.Timestamp)
+			keyFrameTimes = append(keyFrameTimes, frame.DTS)
 		}
 	}
 
@@ -297,12 +297,12 @@ func (tb *TrackBuffer) getAverageKeyFrameInterval() uint32 {
 		return 0
 	}
 
-	totalInterval := uint32(0)
+	totalInterval := uint64(0)
 	for i := 1; i < len(keyFrameTimes); i++ {
 		totalInterval += keyFrameTimes[i] - keyFrameTimes[i-1]
 	}
 
-	return totalInterval / uint32(len(keyFrameTimes)-1)
+	return totalInterval / uint64(len(keyFrameTimes)-1)
 }
 
 // getBufferUtilization 버퍼 사용률 반환 (0.0 ~ 1.0)

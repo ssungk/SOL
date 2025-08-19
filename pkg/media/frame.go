@@ -63,7 +63,8 @@ type Frame struct {
 	Codec      Codec           // 통합된 코덱 (비디오/오디오 구분 포함)
 	Format     BitstreamFormat // 코덱별 비트스트림 포맷
 	Type       FrameType       // 프레임 타입
-	Timestamp  uint32          // 타임스탬프 (밀리초)
+	DTS        uint64          // Decode Time Stamp (마이크로초)
+	CTS        int             // Composition Time Stamp (PTS-DTS)
 	Data       []byte          // 프레임 데이터
 }
 
@@ -73,14 +74,25 @@ func (f *Frame) IsAudio() bool    { return f.Codec.IsAudio() }
 func (f *Frame) IsData() bool     { return f.Codec.IsData() }
 func (f *Frame) IsKeyFrame() bool { return f.Type == TypeKey }
 
-// NewFrame 새로운 미디어 프레임 생성
-func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType FrameType, timestamp uint32, data []byte) Frame {
+// PTS Presentation Time Stamp 계산 (DTS + CTS)
+func (f *Frame) PTS() uint64 {
+	return uint64(int64(f.DTS) + int64(f.CTS))
+}
+
+// DTS32 프로토콜용 32비트 DTS 변환
+func (f *Frame) DTS32() uint32 {
+	return uint32(f.DTS & 0xFFFFFFFF)
+}
+
+// NewFrame 미디어 프레임 생성 (CTS 포함)
+func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType FrameType, dts uint64, cts int, data []byte) Frame {
 	return Frame{
 		TrackIndex: trackIndex,
 		Codec:      codec,
 		Format:     format,
 		Type:       frameType,
-		Timestamp:  timestamp,
+		DTS:        dts,
+		CTS:        cts,
 		Data:       data,
 	}
 }
