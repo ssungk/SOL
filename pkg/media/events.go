@@ -55,18 +55,12 @@ func NewResponse(success bool, error string) Response {
 
 // NewSuccessResponse 성공 응답 생성자
 func NewSuccessResponse() Response {
-	return Response{
-		Success: true,
-		Error:   "",
-	}
+	return NewResponse(true, "")
 }
 
 // NewErrorResponse 실패 응답 생성자
 func NewErrorResponse(error string) Response {
-	return Response{
-		Success: false,
-		Error:   error,
-	}
+	return NewResponse(false, error)
 }
 
 // 이벤트 생성자 함수들

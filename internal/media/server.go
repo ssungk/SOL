@@ -12,11 +12,11 @@ import (
 )
 
 type MediaServer struct {
-	servers            map[string]media.Server
-	mediaServerChannel chan any
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
+	servers map[string]media.Server
+	channel chan any
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
 
 	// 통합 스트림 및 노드 관리
 	streams map[string]*media.Stream    // streamID -> Stream
@@ -24,23 +24,22 @@ type MediaServer struct {
 }
 
 func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
-	// 자체적으로 컨텍스트 생성
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mediaServer := &MediaServer{
-		servers:            make(map[string]media.Server),
-		mediaServerChannel: make(chan any, media.DefaultChannelBufferSize),
-		ctx:                ctx,
-		cancel:             cancel,
-		streams:            make(map[string]*media.Stream),
-		nodes:              make(map[uintptr]media.MediaNode),
+		servers: make(map[string]media.Server),
+		channel: make(chan any, media.DefaultChannelBufferSize),
+		ctx:     ctx,
+		cancel:  cancel,
+		streams: make(map[string]*media.Stream),
+		nodes:   make(map[uintptr]media.MediaNode),
 	}
 
 	// 각 서버를 생성하고 맵에 등록
-	rtmpServer := rtmp.NewServer(rtmpPort, mediaServer.mediaServerChannel, &mediaServer.wg)
+	rtmpServer := rtmp.NewServer(rtmpPort, mediaServer.channel, &mediaServer.wg)
 	mediaServer.servers[rtmpServer.ID()] = rtmpServer
 
-	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.mediaServerChannel, &mediaServer.wg)
+	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.channel, &mediaServer.wg)
 	mediaServer.servers[rtspServer.ID()] = rtspServer
 
 	return mediaServer
@@ -50,12 +49,12 @@ func (s *MediaServer) Start() error {
 	slog.Info("Media servers starting...")
 
 	// 모든 서버들을 순차적으로 시작
-	for name, server := range s.servers {
+	for id, server := range s.servers {
 		if err := server.Start(); err != nil {
-			slog.Error("Failed to start server", "serverName", name, "err", err)
-			return fmt.Errorf("failed to start %s server: %w", name, err)
+			slog.Error("Failed to start server", "serverID", id, "err", err)
+			return fmt.Errorf("failed to start %s server: %w", id, err)
 		}
-		slog.Info("Server started", "serverName", name, "protocol", server.ID())
+		slog.Info("Server started", "serverID", id, "protocol", server.ID())
 	}
 
 	// 이벤트 루프 시작
@@ -74,7 +73,7 @@ func (s *MediaServer) eventLoop() {
 	defer s.shutdown()
 	for {
 		select {
-		case data := <-s.mediaServerChannel:
+		case data := <-s.channel:
 			s.handleChannel(data)
 		case <-s.ctx.Done():
 			return
@@ -145,15 +144,8 @@ func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
 
 // handleNodeTerminated 노드 종료 이벤트 처리
 func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
-	nodeID := event.ID
-	var nodeType string
-	if node, exists := s.nodes[nodeID]; exists {
-		nodeType = node.NodeType().String()
-	} else {
-		nodeType = "unknown"
-	}
-	slog.Info("Node terminated", "nodeID", nodeID, "nodeType", nodeType)
-	s.RemoveNode(nodeID)
+	slog.Info("Node terminated", "nodeID", event.ID)
+	s.RemoveNode(event.ID)
 }
 
 // handlePublishStarted 실제 publish 시도 처리
