@@ -8,21 +8,15 @@ import (
 	"sol/pkg/utils"
 )
 
-// 에러 정의
-var (
-	ErrInvalidTrackIndex = errors.New("invalid track index")
-)
-
 // Stream represents a protocol-independent stream with multiple tracks
 type Stream struct {
-	id           string
-	tracks       []*Track        // 트랙 배열 (인덱스 기반)
-	trackBuffers []*TrackBuffer // 트랙별 개별 버퍼
+	id     string
+	tracks []*Track // 트랙 배열 (인덱스 기반, 버퍼 포함)
 
 	// Stream routing
 	sinks map[uintptr]MediaSink // Multiple sinks indexed by node ID
 
-	// 이벤트 루프 (MediaServer/RTMP Session 패턴과 동일)
+	// 이벤트 루프
 	channel chan any
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -31,13 +25,12 @@ type Stream struct {
 // NewStream creates a new stream
 func NewStream(id string) *Stream {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	s := &Stream{
-		id:           id,
-		tracks:       make([]*Track, 0),
-		trackBuffers: make([]*TrackBuffer, 0),
-		sinks:        make(map[uintptr]MediaSink),
-		
+		id:     id,
+		tracks: make([]*Track, 0),
+		sinks:  make(map[uintptr]MediaSink),
+
 		// 이벤트 루프 초기화 (MediaServer/RTMP Session 패턴과 동일)
 		channel: make(chan any, DefaultChannelBufferSize),
 		ctx:     ctx,
@@ -61,12 +54,11 @@ func (s *Stream) ID() string {
 func (s *Stream) AddTrack(codec Codec) int {
 	index := len(s.tracks)
 	track := NewTrack(index, codec)
-	
+
 	s.tracks = append(s.tracks, track)
-	s.trackBuffers = append(s.trackBuffers, NewTrackBuffer())
-	
+
 	slog.Info("Track added to stream", "streamId", s.id, "trackIndex", index, "codec", codec)
-	
+
 	return index
 }
 
@@ -113,7 +105,6 @@ func (s *Stream) GetTrackCodecs() []Codec {
 	}
 	return codecs
 }
-
 
 // Stop stops the stream and cleans up resources
 func (s *Stream) Stop() {
@@ -162,8 +153,8 @@ func (s *Stream) shutdown() {
 	slog.Info("Stream shutdown starting", "streamId", s.id)
 
 	// Clear all track buffers
-	for _, buffer := range s.trackBuffers {
-		buffer.Clear()
+	for _, track := range s.tracks {
+		track.Buffer.Clear()
 	}
 
 	slog.Info("Stream shutdown completed", "streamId", s.id)
@@ -194,8 +185,8 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	nodeId := sink.ID()
 
 	// Send cached metadata first (from first track buffer if exists)
-	if len(s.trackBuffers) > 0 {
-		if metadata := s.trackBuffers[0].GetMetadata(); metadata != nil {
+	if len(s.tracks) > 0 {
+		if metadata := s.tracks[0].Buffer.GetMetadata(); metadata != nil {
 			if err := sink.SendMetadata(s.id, metadata); err != nil {
 				slog.Error("Failed to send cached metadata to sink", "streamId", s.id, "nodeId", nodeId, "err", err)
 			} else {
@@ -205,8 +196,8 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	}
 
 	// Send cached frames from all tracks
-	for trackIndex, buffer := range s.trackBuffers {
-		cachedFrames := buffer.GetCachedFrames()
+	for trackIndex, track := range s.tracks {
+		cachedFrames := track.Buffer.GetCachedFrames()
 		if len(cachedFrames) > 0 {
 			slog.Debug("Sending cached frames to new sink", "streamId", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "frameCount", len(cachedFrames))
 
@@ -244,8 +235,8 @@ func (s *Stream) GetSinks() []MediaSink {
 
 // HasCachedData returns whether the stream has any cached data
 func (s *Stream) HasCachedData() bool {
-	for _, buffer := range s.trackBuffers {
-		if buffer.HasCachedData() {
+	for _, track := range s.tracks {
+		if track.Buffer.HasCachedData() {
 			return true
 		}
 	}
@@ -260,8 +251,8 @@ func (s *Stream) GetCacheStats() map[string]any {
 	}
 
 	// 트랙별 통계 추가
-	for i, buffer := range s.trackBuffers {
-		trackStats := buffer.GetCacheStats()
+	for i, track := range s.tracks {
+		trackStats := track.Buffer.GetCacheStats()
 		stats[fmt.Sprintf("track_%d", i)] = trackStats
 	}
 
@@ -280,15 +271,15 @@ func (s *Stream) convertFrameForSink(frame Frame, sink MediaSink) Frame {
 func (s *Stream) handleSendFrame(event sendFrameEvent) {
 	frame := event.frame
 	trackIndex := frame.TrackIndex
-	
+
 	if trackIndex < 0 || trackIndex >= len(s.tracks) {
 		slog.Error("Invalid track index", "streamId", s.id, "trackIndex", trackIndex, "maxTrackIndex", len(s.tracks)-1)
 		return
 	}
-	
+
 	// 트랙별 버퍼에 캐시
-	s.trackBuffers[trackIndex].AddFrame(frame)
-	
+	s.tracks[trackIndex].Buffer.AddFrame(frame)
+
 	// 모든 sink에 브로드캐스트
 	for _, sink := range s.sinks {
 		// 각 sink의 선호 포맷에 맞게 변환
@@ -303,12 +294,12 @@ func (s *Stream) handleSendFrame(event sendFrameEvent) {
 // handleSendMetadata 메타데이터 전송 이벤트 처리
 func (s *Stream) handleSendMetadata(event sendMetadataEvent) {
 	metadata := event.metadata
-	
+
 	// 첫 번째 트랙 버퍼에 메타데이터 저장 (임시)
-	if len(s.trackBuffers) > 0 {
-		s.trackBuffers[0].AddMetadata(metadata)
+	if len(s.tracks) > 0 {
+		s.tracks[0].Buffer.AddMetadata(metadata)
 	}
-	
+
 	// 모든 sink에 브로드캐스트
 	for _, sink := range s.sinks {
 		if err := sink.SendMetadata(s.id, metadata); err != nil {
@@ -340,7 +331,6 @@ func (s *Stream) handleRemoveSink(event removeSinkEvent) {
 
 	slog.Info("Sink removed from stream", "streamId", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
 }
-
 
 // handleStop 스트림 정지 이벤트 처리
 func (s *Stream) handleStop() {
