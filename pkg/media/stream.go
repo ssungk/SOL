@@ -37,7 +37,7 @@ func NewStream(id string) *Stream {
 		cancel:  cancel,
 	}
 
-	slog.Info("Stream created", "streamId", id)
+	slog.Info("Stream created", "streamID", id)
 
 	// 이벤트 루프 시작 (백그라운드에서)
 	go s.eventLoop()
@@ -57,7 +57,7 @@ func (s *Stream) AddTrack(codec Codec) int {
 
 	s.tracks = append(s.tracks, track)
 
-	slog.Info("Track added to stream", "streamId", s.id, "trackIndex", index, "codec", codec)
+	slog.Info("Track added to stream", "streamID", s.id, "trackIndex", index, "codec", codec)
 
 	return index
 }
@@ -69,7 +69,7 @@ func (s *Stream) SendFrame(frame Frame) error {
 		return nil
 	default:
 		// 채널이 가득 차면 드랍 (실시간 스트리밍 특성)
-		slog.Warn("Stream channel full, dropping frame", "streamId", s.id, "trackIndex", frame.TrackIndex)
+		slog.Warn("Stream channel full, dropping frame", "streamID", s.id, "trackIndex", frame.TrackIndex)
 		return errors.New("stream channel full")
 	}
 }
@@ -80,7 +80,7 @@ func (s *Stream) SendMetadata(metadata map[string]string) {
 	case s.channel <- sendMetadataEvent{metadata: metadata}:
 		// 이벤트 전송 성공
 	default:
-		slog.Warn("Stream channel full, dropping metadata", "streamId", s.id)
+		slog.Warn("Stream channel full, dropping metadata", "streamID", s.id)
 	}
 }
 
@@ -112,7 +112,7 @@ func (s *Stream) Stop() {
 	case s.channel <- stopStreamEvent{}:
 		// 이벤트 전송 성공
 	default:
-		slog.Warn("Failed to send stop event, stopping directly", "streamId", s.id)
+		slog.Warn("Failed to send stop event, stopping directly", "streamID", s.id)
 		s.cancel() // 직접 종료
 	}
 }
@@ -144,20 +144,20 @@ func (s *Stream) handleChannel(data any) {
 	case stopStreamEvent:
 		s.handleStop()
 	default:
-		slog.Warn("Unknown stream event type", "eventType", utils.TypeName(v), "streamId", s.id)
+		slog.Warn("Unknown stream event type", "eventType", utils.TypeName(v), "streamID", s.id)
 	}
 }
 
 // shutdown 정리 작업 수행
 func (s *Stream) shutdown() {
-	slog.Info("Stream shutdown starting", "streamId", s.id)
+	slog.Info("Stream shutdown starting", "streamID", s.id)
 
 	// Clear all track buffers
 	for _, track := range s.tracks {
 		track.Buffer.Clear()
 	}
 
-	slog.Info("Stream shutdown completed", "streamId", s.id)
+	slog.Info("Stream shutdown completed", "streamID", s.id)
 }
 
 // AddSink adds a stream sink and automatically sends cached data - 이벤트 기반으로 변경
@@ -166,7 +166,7 @@ func (s *Stream) AddSink(sink MediaSink) {
 	case s.channel <- addSinkEvent{sink: sink}:
 		// 이벤트 전송 성공
 	default:
-		slog.Warn("Stream channel full, cannot add sink", "streamId", s.id, "nodeId", sink.ID())
+		slog.Warn("Stream channel full, cannot add sink", "streamID", s.id, "nodeId", sink.ID())
 	}
 }
 
@@ -176,7 +176,7 @@ func (s *Stream) RemoveSink(sink MediaSink) {
 	case s.channel <- removeSinkEvent{sink: sink}:
 		// 이벤트 전송 성공
 	default:
-		slog.Warn("Stream channel full, cannot remove sink", "streamId", s.id, "nodeId", sink.ID())
+		slog.Warn("Stream channel full, cannot remove sink", "streamID", s.id, "nodeId", sink.ID())
 	}
 }
 
@@ -188,9 +188,9 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	if len(s.tracks) > 0 {
 		if metadata := s.tracks[0].Buffer.GetMetadata(); metadata != nil {
 			if err := sink.SendMetadata(s.id, metadata); err != nil {
-				slog.Error("Failed to send cached metadata to sink", "streamId", s.id, "nodeId", nodeId, "err", err)
+				slog.Error("Failed to send cached metadata to sink", "streamID", s.id, "nodeId", nodeId, "err", err)
 			} else {
-				slog.Debug("Sent cached metadata to sink", "streamId", s.id, "nodeId", nodeId)
+				slog.Debug("Sent cached metadata to sink", "streamID", s.id, "nodeId", nodeId)
 			}
 		}
 	}
@@ -199,19 +199,19 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	for trackIndex, track := range s.tracks {
 		cachedFrames := track.Buffer.GetCachedFrames()
 		if len(cachedFrames) > 0 {
-			slog.Debug("Sending cached frames to new sink", "streamId", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "frameCount", len(cachedFrames))
+			slog.Debug("Sending cached frames to new sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "frameCount", len(cachedFrames))
 
 			for _, frame := range cachedFrames {
 				// 각 sink의 선호 포맷에 맞게 변환
 				convertedFrame := s.convertFrameForSink(frame, sink)
 
 				if err := sink.SendFrame(s.id, convertedFrame); err != nil {
-					slog.Error("Failed to send cached track frame to sink", "streamId", s.id, "trackIndex", frame.TrackIndex, "nodeId", nodeId, "codec", frame.Codec, "err", err)
+					slog.Error("Failed to send cached track frame to sink", "streamID", s.id, "trackIndex", frame.TrackIndex, "nodeId", nodeId, "codec", frame.Codec, "err", err)
 					// Continue with next frame even if one fails
 				}
 			}
 
-			slog.Debug("Finished sending cached frames to sink", "streamId", s.id, "trackIndex", trackIndex, "nodeId", nodeId)
+			slog.Debug("Finished sending cached frames to sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId)
 		}
 	}
 
@@ -273,7 +273,7 @@ func (s *Stream) handleSendFrame(event sendFrameEvent) {
 	trackIndex := frame.TrackIndex
 
 	if trackIndex < 0 || trackIndex >= len(s.tracks) {
-		slog.Error("Invalid track index", "streamId", s.id, "trackIndex", trackIndex, "maxTrackIndex", len(s.tracks)-1)
+		slog.Error("Invalid track index", "streamID", s.id, "trackIndex", trackIndex, "maxTrackIndex", len(s.tracks)-1)
 		return
 	}
 
@@ -286,7 +286,7 @@ func (s *Stream) handleSendFrame(event sendFrameEvent) {
 		convertedFrame := s.convertFrameForSink(frame, sink)
 
 		if err := sink.SendFrame(s.id, convertedFrame); err != nil {
-			slog.Error("Failed to send track frame to sink", "streamId", s.id, "trackIndex", frame.TrackIndex, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
+			slog.Error("Failed to send track frame to sink", "streamID", s.id, "trackIndex", frame.TrackIndex, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
 		}
 	}
 }
@@ -303,7 +303,7 @@ func (s *Stream) handleSendMetadata(event sendMetadataEvent) {
 	// 모든 sink에 브로드캐스트
 	for _, sink := range s.sinks {
 		if err := sink.SendMetadata(s.id, metadata); err != nil {
-			slog.Error("Failed to send metadata to sink", "streamId", s.id, "nodeId", sink.ID(), "err", err)
+			slog.Error("Failed to send metadata to sink", "streamID", s.id, "nodeId", sink.ID(), "err", err)
 		}
 	}
 }
@@ -314,11 +314,11 @@ func (s *Stream) handleAddSink(event addSinkEvent) {
 	nodeId := sink.ID()
 	s.sinks[nodeId] = sink
 
-	slog.Info("Sink added to stream", "streamId", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
+	slog.Info("Sink added to stream", "streamID", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
 
 	// 자동으로 캐시된 데이터 전송
 	if err := s.sendCachedDataToSink(sink); err != nil {
-		slog.Error("Failed to send cached data to newly added sink", "streamId", s.id, "nodeId", nodeId, "err", err)
+		slog.Error("Failed to send cached data to newly added sink", "streamID", s.id, "nodeId", nodeId, "err", err)
 		// 에러가 있어도 sink는 이미 추가되었으므로 계속 진행
 	}
 }
@@ -329,11 +329,11 @@ func (s *Stream) handleRemoveSink(event removeSinkEvent) {
 	nodeId := sink.ID()
 	delete(s.sinks, nodeId)
 
-	slog.Info("Sink removed from stream", "streamId", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
+	slog.Info("Sink removed from stream", "streamID", s.id, "nodeId", nodeId, "sinkCount", len(s.sinks))
 }
 
 // handleStop 스트림 정지 이벤트 처리
 func (s *Stream) handleStop() {
-	slog.Info("Stopping stream via event", "streamId", s.id)
+	slog.Info("Stopping stream via event", "streamID", s.id)
 	s.cancel() // 컨텍스트 종료
 }

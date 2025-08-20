@@ -132,10 +132,7 @@ func (s *Session) Close() error {
 	if s.externalChannel != nil {
 		select {
 		case s.externalChannel <- media.NodeTerminated{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.NodeType(),
-			},
+			ID: s.ID(),
 		}:
 		default:
 		}
@@ -466,7 +463,7 @@ func (s *Session) handlePlay(req *Request) error {
 		supportedCodecs := []media.Codec{media.H264, media.H265, media.AAC, media.Opus}
 		
 		select {
-		case s.externalChannel <- media.NewSubscribeStarted(s.ID(), s.NodeType(), s.streamPath, supportedCodecs, responseChan):
+		case s.externalChannel <- media.NewSubscribeStarted(s.ID(), s.streamPath, supportedCodecs, responseChan):
 			// 응답 대기
 			select {
 			case response := <-responseChan:
@@ -505,11 +502,8 @@ func (s *Session) handlePause(req *Request) error {
 	if s.externalChannel != nil {
 		select {
 		case s.externalChannel <- media.SubscribeStopped{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.NodeType(),
-			},
-			StreamId: s.streamPath,
+			ID:       s.ID(),
+			StreamID: s.streamPath,
 		}:
 		default:
 		}
@@ -530,11 +524,8 @@ func (s *Session) handleTeardown(req *Request) error {
 	if s.externalChannel != nil {
 		select {
 		case s.externalChannel <- media.SubscribeStopped{
-			BaseNodeEvent: media.BaseNodeEvent{
-				ID:       s.ID(),
-				NodeType: s.NodeType(),
-			},
-			StreamId: s.streamPath,
+			ID:       s.ID(),
+			StreamID: s.streamPath,
 		}:
 		default:
 		}
@@ -746,9 +737,9 @@ func (s *Session) Address() string {
 // MediaSink 인터페이스 구현 (RTSP 플레이어 세션용)
 
 // SendFrame MediaSink 인터페이스 구현 - 프레임을 세션으로 전송
-func (s *Session) SendFrame(streamId string, frame media.Frame) error {
+func (s *Session) SendFrame(streamID string, frame media.Frame) error {
 	// RTSP 세션이 플레이 중이고 스트림 ID가 일치하는 경우에만 전송
-	if s.state != StatePlaying || s.streamPath != streamId {
+	if s.state != StatePlaying || s.streamPath != streamID {
 		return fmt.Errorf("session not ready for frame: state=%v, streamPath=%s", s.state, s.streamPath)
 	}
 
@@ -771,9 +762,9 @@ func (s *Session) SendFrame(streamId string, frame media.Frame) error {
 }
 
 // SendMetadata MediaSink 인터페이스 구현 - 메타데이터를 세션으로 전송
-func (s *Session) SendMetadata(streamId string, metadata map[string]string) error {
+func (s *Session) SendMetadata(streamID string, metadata map[string]string) error {
 	// RTSP에서는 SDP를 통해 메타데이터가 전송되므로 현재는 처리하지 않음
-	slog.Debug("Metadata received for RTSP session", "sessionId", s.ID(), "streamId", streamId)
+	slog.Debug("Metadata received for RTSP session", "sessionId", s.ID(), "streamID", streamID)
 	return nil
 }
 
@@ -825,7 +816,7 @@ func (s *Session) GetStreamPath() string {
 // RTSP Session은 RECORD 모드에서는 MediaSource로, PLAY 모드에서는 MediaSink로 동작
 
 // convertRTPToFrame RTP 패킷을 Frame으로 변환 (RECORD 시 사용)
-func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Frame, error) {
+func (s *Session) convertRTPToFrame(rtpData []byte, streamID string) (media.Frame, error) {
 	if len(rtpData) < 12 {
 		return media.Frame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
 	}
@@ -878,7 +869,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamId string) (media.Fram
 
 	slog.Debug("Converted RTP to Frame", 
 		"sessionId", s.ID(), 
-		"streamId", streamId,
+		"streamID", streamID,
 		"payloadType", payloadType,
 		"codec", codec,
 		"timestamp", timestamp,
@@ -919,7 +910,6 @@ func (s *Session) attemptStreamPublish(streamPath string, stream *media.Stream) 
 	
 	request := media.NewPublishStarted(
 		s.ID(),
-		s.NodeType(),
 		stream,
 		responseChan,
 	)

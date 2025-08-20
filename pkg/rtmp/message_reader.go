@@ -223,7 +223,7 @@ func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (*messageHeader, error
 	timestamp := readUint24BE(buf[0:3])
 	length := readUint24BE(buf[3:6])
 	typeId := buf[6]
-	streamId := binary.LittleEndian.Uint32(buf[7:11])
+	streamID := binary.LittleEndian.Uint32(buf[7:11])
 
 	if timestamp == ExtendedTimestampThreshold {
 		var err error
@@ -233,7 +233,7 @@ func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (*messageHeader, error
 		}
 	}
 
-	return NewMessageHeader(timestamp, length, typeId, streamId), nil
+	return NewMessageHeader(timestamp, length, typeId, streamID), nil
 }
 
 func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -257,7 +257,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	// 타임스탬프 계산 (32비트 산술로 오버플로우 자동 처리)
 	newTimestamp := header.timestamp + timestampDelta
 
-	return NewMessageHeader(newTimestamp, length, typeId, header.streamId), nil
+	return NewMessageHeader(newTimestamp, length, typeId, header.streamID), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -278,12 +278,12 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	// 타임스탬프 계산
 	newTimestamp := header.timestamp + timestampDelta
 
-	return NewMessageHeader(newTimestamp, header.length, header.typeId, header.streamId), nil
+	return NewMessageHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
 }
 
 func readFmt3MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
 	// FMT3은 이전 메시지의 헤더와 동일. 여기선 아무것도 읽지 않음
-	return NewMessageHeader(header.timestamp, header.length, header.typeId, header.streamId), nil
+	return NewMessageHeader(header.timestamp, header.length, header.typeId, header.streamID), nil
 }
 
 func readExtendedTimestamp(r io.Reader) (uint32, error) {

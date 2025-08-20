@@ -116,7 +116,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 		headerTimestamp,
 		uint32(totalPayloadLength),
 		msg.messageHeader.typeId,
-		msg.messageHeader.streamId,
+		msg.messageHeader.streamID,
 	)
 
 	// payload 슬라이스 (복사 없이 참조)
@@ -222,7 +222,7 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) erro
 	PutUint24(header[0:], mh.timestamp)                    // 3 bytes timestamp
 	PutUint24(header[3:], mh.length)                       // 3 bytes message length
 	header[6] = mh.typeId                                  // 1 byte type ID
-	binary.LittleEndian.PutUint32(header[7:], mh.streamId) // 4 bytes stream ID
+	binary.LittleEndian.PutUint32(header[7:], mh.streamID) // 4 bytes stream ID
 	_, err := w.Write(header)
 	return err
 }

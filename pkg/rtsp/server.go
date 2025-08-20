@@ -132,10 +132,7 @@ func (s *Server) acceptConnections() {
 		if s.mediaServerChannel != nil {
 			select {
 			case s.mediaServerChannel <- media.NodeCreated{
-				BaseNodeEvent: media.BaseNodeEvent{
-					ID:       session.ID(),
-					NodeType: session.NodeType(),
-				},
+				ID:   session.ID(),
 				Node: session,
 			}:
 			default:

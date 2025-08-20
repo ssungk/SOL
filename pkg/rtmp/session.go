@@ -24,16 +24,16 @@ type session struct {
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
 	appName string
 
-	// 발행용 (MediaSource) - RTMP streamId 기반
-	publishedStreams map[uint32]*media.Stream // streamId(uint32) -> Stream
+	// 발행용 (MediaSource) - RTMP streamID 기반
+	publishedStreams map[uint32]*media.Stream // streamID(uint32) -> Stream
 
 	// 상호 참조 테이블
-	streamIdToPath map[uint32]string // streamId -> streamPath
-	streamPathToId map[string]uint32 // streamPath -> streamId
-	nextStreamId   int               // 다음 할당할 streamId (1부터 시작)
+	streamIDToPath map[uint32]string // streamID -> streamPath
+	streamPathToId map[string]uint32 // streamPath -> streamID
+	nextStreamId   int               // 다음 할당할 streamID (1부터 시작)
 
 	// 재생용 (MediaSink)
-	subscribedStreams map[uint32]string // streamId -> streamPath 구독 스트림 매핑
+	subscribedStreams map[uint32]string // streamID -> streamPath 구독 스트림 매핑
 
 	// MediaServer와의 통신 관리
 	mediaServerChannel chan<- any
@@ -58,14 +58,14 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		cancel:             cancel,
 		wg:                 wg,
 		publishedStreams:   make(map[uint32]*media.Stream), // 발행용 스트림 맵 초기화
-		streamIdToPath:     make(map[uint32]string),        // streamId -> streamPath 매핑
-		streamPathToId:     make(map[string]uint32),        // streamPath -> streamId 매핑
+		streamIDToPath:     make(map[uint32]string),        // streamID -> streamPath 매핑
+		streamPathToId:     make(map[string]uint32),        // streamPath -> streamID 매핑
 		nextStreamId:       1,                              // 1부터 시작
 		subscribedStreams:  make(map[uint32]string),        // 재생용 스트림 매핑 초기화
 	}
 
 	// NodeCreated 이벤트를 MediaServer로 전송
-	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), media.NodeTypeRTMP, s)
+	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), s)
 
 	// 세션의 두 주요 고루틴 시작
 	go s.eventLoop()
@@ -152,7 +152,7 @@ func (s *session) cleanup() {
 	s.stopSubscribing()
 
 	// MediaServer에 최종 종료 알림
-	s.mediaServerChannel <- media.NewNodeTerminated(s.ID(), media.NodeTypeRTMP)
+	s.mediaServerChannel <- media.NewNodeTerminated(s.ID())
 
 	slog.Info("session cleanup completed", "sessionId", s.ID())
 }
@@ -169,18 +169,18 @@ func (s *session) sendChannelEvent(event any, eventType string) error {
 	}
 }
 
-func (s *session) SendFrame(streamId string, frame media.Frame) error {
+func (s *session) SendFrame(streamID string, frame media.Frame) error {
 	// RTMP는 현재 비디오(트랙0), 오디오(트랙1)만 지원
 	if frame.TrackIndex > 1 {
 		return nil // 추가 트랙은 무시
 	}
 
-	event := sendFrameEvent{streamPath: streamId, frame: frame}
+	event := sendFrameEvent{streamPath: streamID, frame: frame}
 	return s.sendChannelEvent(event, "frame")
 }
 
-func (s *session) SendMetadata(streamId string, metadata map[string]string) error {
-	event := sendMetadataEvent{streamPath: streamId, metadata: metadata}
+func (s *session) SendMetadata(streamID string, metadata map[string]string) error {
+	event := sendMetadataEvent{streamPath: streamID, metadata: metadata}
 	return s.sendChannelEvent(event, "metadata")
 }
 
@@ -188,7 +188,7 @@ func (s *session) SendMetadata(streamId string, metadata map[string]string) erro
 
 // handleSendFrame MediaSink로부터 받은 프레임을 클라이언트로 전송
 func (s *session) handleSendFrame(e sendFrameEvent) {
-	streamId, exists := s.streamPathToId[e.streamPath]
+	streamID, exists := s.streamPathToId[e.streamPath]
 	if !exists {
 		slog.Warn("Stream mapping not found, skipping frame", "sessionId", s.ID(), "streamPath", e.streamPath)
 		return
@@ -214,7 +214,7 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 		return
 	}
 
-	messageHeader := NewMessageHeader(e.frame.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamId))
+	messageHeader := NewMessageHeader(e.frame.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamID))
 	message := NewMessage(messageHeader, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
 		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "frameType", e.frame.Type, "err", err)
@@ -223,13 +223,13 @@ func (s *session) handleSendFrame(e sendFrameEvent) {
 
 // handleSendMetadata MediaSink로부터 받은 메타데이터를 클라이언트로 전송
 func (s *session) handleSendMetadata(e sendMetadataEvent) {
-	streamId, exists := s.streamPathToId[e.streamPath]
+	streamID, exists := s.streamPathToId[e.streamPath]
 	if !exists {
 		slog.Warn("Stream mapping not found, skipping metadata", "sessionId", s.ID(), "streamPath", e.streamPath)
 		return
 	}
 
-	if err := s.sendMetadataToClient(e.metadata, uint32(streamId)); err != nil {
+	if err := s.sendMetadataToClient(e.metadata, uint32(streamID)); err != nil {
 		slog.Error("Failed to send metadata to RTMP session", "sessionId", s.ID(), "err", err)
 	}
 }
@@ -308,8 +308,8 @@ func (s *session) handleAudio(message *Message) {
 	trackIndex := 1
 	frame := media.NewFrame(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, message.payload)
 
-	// message의 streamId에 해당하는 스트림에 전송
-	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
+	// message의 streamID에 해당하는 스트림에 전송
+	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.GetTrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec)
@@ -343,8 +343,8 @@ func (s *session) handleVideo(message *Message) {
 	trackIndex := 0
 	frame := media.NewFrame(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
 
-	// message의 streamId에 해당하는 스트림에 전송
-	if stream, exists := s.publishedStreams[message.messageHeader.streamId]; exists {
+	// message의 streamID에 해당하는 스트림에 전송
+	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.GetTrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec)
@@ -494,7 +494,7 @@ func (s *session) GetStreamInfo() (streamCount int, isPublishing bool, isPlaying
 // 구현을 위한 헬퍼 메서드들
 
 // sendMetadataToClient 메타데이터를 RTMP onMetaData 메시지로 전송
-func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint32) error {
+func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint32) error {
 	// string을 any map으로 변환 (AMF 인코딩을 위해)
 	interfaceMetadata := make(map[string]any)
 	for k, v := range metadata {
@@ -516,7 +516,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamId uint
 			timestamp: 0,
 			length:    uint32(len(encodedData)),
 			typeId:    MsgTypeAMF0Data,
-			streamId:  streamId,
+			streamID:  streamID,
 		},
 		payload: encodedData,
 	}
@@ -712,8 +712,8 @@ func (s *session) handleCreateStream(values []any) {
 		return
 	}
 
-	// 새로운 스트림 ID 생성 (실제 사용할 streamId)
-	newStreamID := s.generateStreamId()
+	// 새로운 스트림 ID 생성 (실제 사용할 streamID)
+	newStreamID := s.generateStreamID()
 
 	// _result 응답 전송
 	sequence, err := amf.EncodeAMF0Sequence("_result", transactionID, nil, float64(newStreamID))
@@ -768,15 +768,15 @@ func (s *session) handlePublish(message *Message, values []any) {
 
 	slog.Info("publish request", "fullStreamPath", fullStreamPath, "publishType", publishType, "transactionID", transactionID)
 
-	// 1단계: message의 streamId 사용 및 스트림 준비
-	streamId := message.messageHeader.streamId
+	// 1단계: message의 streamID 사용 및 스트림 준비
+	streamID := message.messageHeader.streamID
 	stream := media.NewStream(fullStreamPath)
-	s.addPublishedStream(streamId, fullStreamPath, stream)
+	s.addPublishedStream(streamID, fullStreamPath, stream)
 
 	// 2단계: MediaServer에 실제 publish 시도 (collision detection + 원자적 점유)
 	if !s.attemptStreamPublish(fullStreamPath, stream) {
 		// 실패 시 정리
-		s.removePublishedStream(streamId)
+		s.removePublishedStream(streamID)
 		s.sendPublishErrorResponse(transactionID, "NetStream.Publish.BadName", "Stream key was taken by another client")
 		return
 	}
@@ -799,9 +799,9 @@ func (s *session) handleReleaseStream(_ []any) {
 
 // handlePlay play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(message *Message, values []any) {
-	streamId := message.messageHeader.streamId
+	streamID := message.messageHeader.streamID
 
-	slog.Info("Play request initiated", "sessionId", s.ID(), "streamId", streamId, "currentSubscriptions", len(s.subscribedStreams), "isPublisher", s.IsPublisher())
+	slog.Info("Play request initiated", "sessionId", s.ID(), "streamID", streamID, "currentSubscriptions", len(s.subscribedStreams), "isPublisher", s.IsPublisher())
 
 	if len(values) < 3 {
 		slog.Error("play: not enough parameters", "length", len(values))
@@ -827,17 +827,17 @@ func (s *session) handlePlay(message *Message, values []any) {
 		return
 	}
 
-	slog.Info("Play request details", "sessionId", s.ID(), "streamId", streamId, "fullStreamPath", fullStreamPath, "transactionID", transactionID, "currentSubscribedStreams", s.subscribedStreams)
+	slog.Info("Play request details", "sessionId", s.ID(), "streamID", streamID, "fullStreamPath", fullStreamPath, "transactionID", transactionID, "currentSubscribedStreams", s.subscribedStreams)
 
 	// 이미 구독 중인지 체크
 	for existingStreamId, existingPath := range s.subscribedStreams {
 		if existingPath == fullStreamPath {
-			slog.Warn("Already subscribed to stream", "sessionId", s.ID(), "streamId", existingStreamId, "streamPath", fullStreamPath)
+			slog.Warn("Already subscribed to stream", "sessionId", s.ID(), "streamID", existingStreamId, "streamPath", fullStreamPath)
 		}
 	}
 
 	// 먼저 구독 스트림 매핑을 설정 (MediaServer 신호 보내기 전에)
-	s.addSubscribedStream(streamId, fullStreamPath)
+	s.addSubscribedStream(streamID, fullStreamPath)
 	slog.Info("Stream mapping added, now sending SubscribeStarted event to MediaServer", "sessionId", s.ID(), "streamPath", fullStreamPath)
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
@@ -847,7 +847,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 	supportedCodecs := []media.Codec{media.H264, media.AAC}
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
-	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), media.NodeTypeRTMP, fullStreamPath, supportedCodecs, responseChan)
+	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), fullStreamPath, supportedCodecs, responseChan)
 
 	// 응답 대기
 	select {
@@ -855,7 +855,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 		if !response.Success {
 			slog.Error("Subscribe attempt failed", "sessionId", s.ID(), "streamPath", fullStreamPath, "error", response.Error)
 			// 실패 시 미리 추가한 매핑 제거
-			s.removeSubscribedStream(streamId)
+			s.removeSubscribedStream(streamID)
 			// NetStream.Play.Failed 전송
 			failedStatusObj := map[string]any{
 				"level":       "error",
@@ -871,7 +871,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 	case <-s.ctx.Done():
 		slog.Error("Subscribe attempt cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
 		// 취소 시 미리 추가한 매핑 제거
-		s.removeSubscribedStream(streamId)
+		s.removeSubscribedStream(streamID)
 		return
 	}
 
@@ -922,12 +922,12 @@ func (s *session) handlePlay(message *Message, values []any) {
 func (s *session) stopPublishing() {
 	// 스트림 발행 중단 처리
 	for _, stream := range s.publishedStreams {
-		s.mediaServerChannel <- media.NewPublishStopped(s.ID(), media.NodeTypeRTMP, stream.ID())
+		s.mediaServerChannel <- media.NewPublishStopped(s.ID(), stream.ID())
 	}
 
 	// 스트림 정리
 	s.publishedStreams = make(map[uint32]*media.Stream)
-	s.streamIdToPath = make(map[uint32]string)
+	s.streamIDToPath = make(map[uint32]string)
 	s.streamPathToId = make(map[string]uint32)
 }
 
@@ -935,7 +935,7 @@ func (s *session) stopPublishing() {
 func (s *session) stopSubscribing() {
 	// 구독 중인 스트림에 대해 재생 중단 이벤트 전송
 	for _, streamPath := range s.subscribedStreams {
-		s.mediaServerChannel <- media.NewSubscribeStopped(s.ID(), media.NodeTypeRTMP, streamPath)
+		s.mediaServerChannel <- media.NewSubscribeStopped(s.ID(), streamPath)
 	}
 
 	// 구독 스트림 정리
@@ -1039,27 +1039,27 @@ func (s *session) handleAMF3Command(message *Message) {
 
 // --- 다중 스트림 관리 메서드들 ---
 
-// addPublishedStream 발행 스트림 추가 (streamId 기반)
-func (s *session) addPublishedStream(streamId uint32, streamPath string, stream *media.Stream) {
-	s.publishedStreams[streamId] = stream
-	s.addStreamMapping(streamId, streamPath)
-	slog.Debug("Published stream added", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath, "mediaStreamId", stream.ID())
+// addPublishedStream 발행 스트림 추가 (streamID 기반)
+func (s *session) addPublishedStream(streamID uint32, streamPath string, stream *media.Stream) {
+	s.publishedStreams[streamID] = stream
+	s.addStreamMapping(streamID, streamPath)
+	slog.Debug("Published stream added", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath, "mediaStreamId", stream.ID())
 }
 
-// removePublishedStream 발행 스트림 제거 (streamId 기반)
-func (s *session) removePublishedStream(streamId uint32) *media.Stream {
-	stream, exists := s.publishedStreams[streamId]
+// removePublishedStream 발행 스트림 제거 (streamID 기반)
+func (s *session) removePublishedStream(streamID uint32) *media.Stream {
+	stream, exists := s.publishedStreams[streamID]
 	if exists {
-		delete(s.publishedStreams, streamId)
-		s.removeStreamMapping(streamId)
-		slog.Debug("Published stream removed", "sessionId", s.ID(), "streamId", streamId)
+		delete(s.publishedStreams, streamID)
+		s.removeStreamMapping(streamID)
+		slog.Debug("Published stream removed", "sessionId", s.ID(), "streamID", streamID)
 	}
 	return stream
 }
 
-// getPublishedStream 발행 스트림 가져오기 (streamId 기반)
-func (s *session) getPublishedStream(streamId uint32) (*media.Stream, bool) {
-	stream, exists := s.publishedStreams[streamId]
+// getPublishedStream 발행 스트림 가져오기 (streamID 기반)
+func (s *session) getPublishedStream(streamID uint32) (*media.Stream, bool) {
+	stream, exists := s.publishedStreams[streamID]
 	return stream, exists
 }
 
@@ -1073,18 +1073,18 @@ func (s *session) getAllPublishedStreams() []*media.Stream {
 }
 
 // addSubscribedStream 구독 스트림 추가
-func (s *session) addSubscribedStream(streamId uint32, streamPath string) {
-	s.subscribedStreams[streamId] = streamPath
-	s.streamPathToId[streamPath] = streamId // 역방향 매핑도 추가
-	slog.Debug("Subscribed stream added", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
+func (s *session) addSubscribedStream(streamID uint32, streamPath string) {
+	s.subscribedStreams[streamID] = streamPath
+	s.streamPathToId[streamPath] = streamID // 역방향 매핑도 추가
+	slog.Debug("Subscribed stream added", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath)
 }
 
 // removeSubscribedStream 구독 스트림 제거
-func (s *session) removeSubscribedStream(streamId uint32) {
-	if streamPath, exists := s.subscribedStreams[streamId]; exists {
-		delete(s.subscribedStreams, streamId)
+func (s *session) removeSubscribedStream(streamID uint32) {
+	if streamPath, exists := s.subscribedStreams[streamID]; exists {
+		delete(s.subscribedStreams, streamID)
 		delete(s.streamPathToId, streamPath) // 역방향 매핑도 제거
-		slog.Debug("Subscribed stream removed", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
+		slog.Debug("Subscribed stream removed", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath)
 	}
 }
 
@@ -1121,23 +1121,23 @@ func (s *session) SubscribedStreams() []string {
 
 // --- 스트림 ID 관리 헬퍼 메서드들 ---
 
-// generateStreamId 새로운 streamId 생성
-func (s *session) generateStreamId() int {
-	streamId := s.nextStreamId
+// generateStreamID 새로운 streamID 생성
+func (s *session) generateStreamID() int {
+	streamID := s.nextStreamId
 	s.nextStreamId++
-	return streamId
+	return streamID
 }
 
-// addStreamMapping streamId와 streamPath 매핑 추가
-func (s *session) addStreamMapping(streamId uint32, streamPath string) {
-	s.streamIdToPath[streamId] = streamPath
-	s.streamPathToId[streamPath] = streamId
+// addStreamMapping streamID와 streamPath 매핑 추가
+func (s *session) addStreamMapping(streamID uint32, streamPath string) {
+	s.streamIDToPath[streamID] = streamPath
+	s.streamPathToId[streamPath] = streamID
 }
 
-// removeStreamMapping streamId 매핑 제거
-func (s *session) removeStreamMapping(streamId uint32) {
-	if streamPath, exists := s.streamIdToPath[streamId]; exists {
-		delete(s.streamIdToPath, streamId)
+// removeStreamMapping streamID 매핑 제거
+func (s *session) removeStreamMapping(streamID uint32) {
+	if streamPath, exists := s.streamIDToPath[streamID]; exists {
+		delete(s.streamIDToPath, streamID)
 		delete(s.streamPathToId, streamPath)
 	}
 }
@@ -1148,7 +1148,7 @@ func (s *session) removeStreamMapping(streamId uint32) {
 func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) bool {
 	// MediaServer에 publish 시도 요청
 	responseChan := make(chan media.Response, 1)
-	publishAttempt := media.NewPublishStarted(s.ID(), media.NodeTypeRTMP, stream, responseChan)
+	publishAttempt := media.NewPublishStarted(s.ID(), stream, responseChan)
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
 	s.mediaServerChannel <- publishAttempt
@@ -1212,53 +1212,53 @@ func (s *session) sendPublishSuccessResponse(_ float64, streamPath string) {
 
 // handleFCUnpublish FCUnpublish 명령어 처리
 func (s *session) handleFCUnpublish(message *Message, _ []any) {
-	streamId := message.messageHeader.streamId
+	streamID := message.messageHeader.streamID
 
-	// 특정 streamId의 발행 스트림만 정리
-	if _, exists := s.publishedStreams[streamId]; exists {
-		s.removePublishedStream(streamId)
-		slog.Info("FCUnpublish: stopped specific stream", "sessionId", s.ID(), "streamId", streamId)
+	// 특정 streamID의 발행 스트림만 정리
+	if _, exists := s.publishedStreams[streamID]; exists {
+		s.removePublishedStream(streamID)
+		slog.Info("FCUnpublish: stopped specific stream", "sessionId", s.ID(), "streamID", streamID)
 	} else {
-		slog.Debug("FCUnpublish: no stream found for streamId", "sessionId", s.ID(), "streamId", streamId)
+		slog.Debug("FCUnpublish: no stream found for streamID", "sessionId", s.ID(), "streamID", streamID)
 	}
 }
 
 // handleCloseStream closeStream 명령어 처리
 func (s *session) handleCloseStream(message *Message, _ []any) {
-	streamId := message.messageHeader.streamId
+	streamID := message.messageHeader.streamID
 
-	// 특정 streamId의 발행 스트림 정리
-	if _, exists := s.publishedStreams[streamId]; exists {
-		s.removePublishedStream(streamId)
-		slog.Info("closeStream: stopped publishing stream", "sessionId", s.ID(), "streamId", streamId)
+	// 특정 streamID의 발행 스트림 정리
+	if _, exists := s.publishedStreams[streamID]; exists {
+		s.removePublishedStream(streamID)
+		slog.Info("closeStream: stopped publishing stream", "sessionId", s.ID(), "streamID", streamID)
 	}
 
-	// 특정 streamId의 재생 스트림 정리
-	if streamPath, exists := s.subscribedStreams[streamId]; exists {
-		s.removeSubscribedStream(streamId)
-		slog.Info("closeStream: stopped subscribing stream", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
+	// 특정 streamID의 재생 스트림 정리
+	if streamPath, exists := s.subscribedStreams[streamID]; exists {
+		s.removeSubscribedStream(streamID)
+		slog.Info("closeStream: stopped subscribing stream", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath)
 	}
 
-	slog.Info("closeStream: processed stream close", "sessionId", s.ID(), "streamId", streamId)
+	slog.Info("closeStream: processed stream close", "sessionId", s.ID(), "streamID", streamID)
 }
 
 // handleDeleteStream deleteStream 명령어 처리
 func (s *session) handleDeleteStream(message *Message, _ []any) {
-	streamId := message.messageHeader.streamId
+	streamID := message.messageHeader.streamID
 
-	// 특정 streamId의 발행 스트림 정리
-	if _, exists := s.publishedStreams[streamId]; exists {
-		s.removePublishedStream(streamId)
-		slog.Info("deleteStream: stopped publishing stream", "sessionId", s.ID(), "streamId", streamId)
+	// 특정 streamID의 발행 스트림 정리
+	if _, exists := s.publishedStreams[streamID]; exists {
+		s.removePublishedStream(streamID)
+		slog.Info("deleteStream: stopped publishing stream", "sessionId", s.ID(), "streamID", streamID)
 	}
 
-	// 특정 streamId의 재생 스트림 정리
-	if streamPath, exists := s.subscribedStreams[streamId]; exists {
-		s.removeSubscribedStream(streamId)
-		slog.Info("deleteStream: stopped subscribing stream", "sessionId", s.ID(), "streamId", streamId, "streamPath", streamPath)
+	// 특정 streamID의 재생 스트림 정리
+	if streamPath, exists := s.subscribedStreams[streamID]; exists {
+		s.removeSubscribedStream(streamID)
+		slog.Info("deleteStream: stopped subscribing stream", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath)
 	}
 
-	slog.Info("deleteStream: processed stream deletion", "sessionId", s.ID(), "streamId", streamId)
+	slog.Info("deleteStream: processed stream deletion", "sessionId", s.ID(), "streamID", streamID)
 }
 
 // handleGetStreamLength getStreamLength 명령어 처리 (Flash Media Server 호환)

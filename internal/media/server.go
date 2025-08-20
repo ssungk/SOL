@@ -12,15 +12,15 @@ import (
 )
 
 type MediaServer struct {
-	servers            map[string]media.ServerInterface // serverName -> ServerInterface (rtmp, rtsp)
+	servers            map[string]media.ServerInterface
 	mediaServerChannel chan any
 	ctx                context.Context
 	cancel             context.CancelFunc
 	wg                 sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
 
 	// 통합 스트림 및 노드 관리
-	streams map[string]*media.Stream    // streamId -> Stream
-	nodes   map[uintptr]media.MediaNode // nodeId -> MediaNode (Source|Sink)
+	streams map[string]*media.Stream    // streamID -> Stream
+	nodes   map[uintptr]media.MediaNode // nodeID -> MediaNode (Source|Sink)
 }
 
 func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
@@ -116,16 +116,16 @@ func (s *MediaServer) shutdown() {
 }
 
 // AddNode 노드 추가
-func (s *MediaServer) AddNode(nodeId uintptr, node media.MediaNode) {
-	s.nodes[nodeId] = node
-	slog.Info("Node added", "nodeId", nodeId, "nodeType", node.NodeType(), "totalNodes", len(s.nodes))
+func (s *MediaServer) AddNode(nodeID uintptr, node media.MediaNode) {
+	s.nodes[nodeID] = node
+	slog.Info("Node added", "nodeID", nodeID, "nodeType", node.NodeType(), "totalNodes", len(s.nodes))
 }
 
 // RemoveNode 노드 제거
-func (s *MediaServer) RemoveNode(nodeId uintptr) {
-	node, exists := s.nodes[nodeId]
+func (s *MediaServer) RemoveNode(nodeID uintptr) {
+	node, exists := s.nodes[nodeID]
 	if !exists {
-		slog.Debug("Node not found for removal", "nodeId", nodeId)
+		slog.Debug("Node not found for removal", "nodeID", nodeID)
 		return
 	}
 
@@ -133,54 +133,68 @@ func (s *MediaServer) RemoveNode(nodeId uintptr) {
 	utils.CloseWithLog(node)
 
 	// 노드 제거
-	delete(s.nodes, nodeId)
-	slog.Info("Node removed", "nodeId", nodeId, "nodeType", node.NodeType(), "remainingNodes", len(s.nodes))
+	delete(s.nodes, nodeID)
+	slog.Info("Node removed", "nodeID", nodeID, "nodeType", node.NodeType(), "remainingNodes", len(s.nodes))
 }
 
 // handleNodeCreated 노드 생성 이벤트 처리
 func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
-	slog.Info("Node created", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
-	s.AddNode(event.NodeId(), event.Node)
+	slog.Info("Node created", "nodeID", event.ID, "nodeType", event.Node.NodeType().String())
+	s.AddNode(event.ID, event.Node)
 }
 
 // handleNodeTerminated 노드 종료 이벤트 처리
 func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
-	slog.Info("Node terminated", "nodeId", event.NodeId(), "nodeType", event.NodeType.String())
-	s.RemoveNode(event.NodeId())
+	nodeID := event.ID
+	var nodeType string
+	if node, exists := s.nodes[nodeID]; exists {
+		nodeType = node.NodeType().String()
+	} else {
+		nodeType = "unknown"
+	}
+	slog.Info("Node terminated", "nodeID", nodeID, "nodeType", nodeType)
+	s.RemoveNode(nodeID)
 }
 
 // handlePublishStarted 실제 publish 시도 처리
 func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
-	streamId := event.Stream.ID()
-	slog.Debug("Stream publish attempt requested", "streamId", streamId, "nodeId", event.NodeId())
+	streamID := event.Stream.ID()
+	slog.Debug("Stream publish attempt requested", "streamID", streamID, "nodeID", event.ID)
 
-	if _, exists := s.streams[streamId]; exists {
+	if _, exists := s.streams[streamID]; exists {
 		event.ResponseChan <- media.NewErrorResponse("Stream ID was taken by another node")
 		return
 	}
 
-	s.streams[streamId] = event.Stream
+	s.streams[streamID] = event.Stream
 	event.ResponseChan <- media.NewSuccessResponse()
-	slog.Info("Stream publish successful", "streamId", streamId, "nodeId", event.NodeId())
+	slog.Info("Stream publish successful", "streamID", streamID, "nodeID", event.ID)
 }
 
 // handlePublishStopped 발행 중지 이벤트 처리
 func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
-	slog.Info("Publish stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
+	nodeID := event.ID
+	var nodeType string
+	if node, exists := s.nodes[nodeID]; exists {
+		nodeType = node.NodeType().String()
+	} else {
+		nodeType = "unknown"
+	}
+	slog.Info("Publish stopped", "nodeID", nodeID, "streamID", event.StreamID, "nodeType", nodeType)
 
-	if stream, exists := s.streams[event.StreamId]; exists {
+	if stream, exists := s.streams[event.StreamID]; exists {
 		stream.Stop()
-		delete(s.streams, event.StreamId)
-		slog.Info("Stream removed due to publish stop", "streamId", event.StreamId)
+		delete(s.streams, event.StreamID)
+		slog.Info("Stream removed due to publish stop", "streamID", event.StreamID)
 	}
 }
 
 // handleSubscribeStarted 재생 시작 이벤트 처리
 func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
-	slog.Debug("Subscribe attempt requested", "streamId", event.StreamId, "nodeId", event.NodeId())
+	slog.Debug("Subscribe attempt requested", "streamID", event.StreamID, "nodeID", event.ID)
 
 	// 노드 ID를 통해 노드 찾기
-	node, exists := s.nodes[event.NodeId()]
+	node, exists := s.nodes[event.ID]
 	if !exists {
 		event.ResponseChan <- media.NewErrorResponse("Node not found")
 		return
@@ -189,7 +203,7 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 	sink := node.(media.MediaSink)
 
 	// 스트림 존재 확인 (Subscribe는 기존 스트림에만 가능)
-	stream, exists := s.streams[event.StreamId]
+	stream, exists := s.streams[event.StreamID]
 	if !exists {
 		event.ResponseChan <- media.NewErrorResponse("Stream not found")
 		return
@@ -209,28 +223,36 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
 	stream.AddSink(sink)
 
-	slog.Info("Sink registered for subscribe", "streamId", event.StreamId, "sinkId", event.NodeId(), "nodeType", event.NodeType.String())
+	nodeType := sink.NodeType().String()
+	slog.Info("Sink registered for subscribe", "streamID", event.StreamID, "sinkId", event.ID, "nodeType", nodeType)
 }
 
 // handleSubscribeStopped 재생 중지 이벤트 처리
 func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
-	slog.Info("Subscribe stopped", "nodeId", event.NodeId(), "streamId", event.StreamId, "nodeType", event.NodeType.String())
+	nodeID := event.ID
+	var nodeType string
+	if node, exists := s.nodes[nodeID]; exists {
+		nodeType = node.NodeType().String()
+	} else {
+		nodeType = "unknown"
+	}
+	slog.Info("Subscribe stopped", "nodeID", nodeID, "streamID", event.StreamID, "nodeType", nodeType)
 
 	// 노드 찾기
-	node, exists := s.nodes[event.NodeId()]
+	node, exists := s.nodes[event.ID]
 	if !exists {
-		slog.Debug("Subscribe stopped event for already removed node", "nodeId", event.NodeId())
+		slog.Debug("Subscribe stopped event for already removed node", "nodeID", event.ID)
 		return
 	}
 
 	sink := node.(media.MediaSink)
-	if stream, streamExists := s.streams[event.StreamId]; streamExists {
+	if stream, streamExists := s.streams[event.StreamID]; streamExists {
 		stream.RemoveSink(sink)
-		slog.Info("Sink removed from stream due to subscribe stop", "nodeId", event.NodeId(), "streamId", event.StreamId)
+		slog.Info("Sink removed from stream due to subscribe stop", "nodeID", event.ID, "streamID", event.StreamID)
 	} else {
-		slog.Warn("Stream not found for subscribe stop", "streamId", event.StreamId, "nodeId", event.NodeId())
+		slog.Warn("Stream not found for subscribe stop", "streamID", event.StreamID, "nodeID", event.ID)
 	}
 
 	// 노드 제거
-	s.RemoveNode(event.NodeId())
+	s.RemoveNode(event.ID)
 }

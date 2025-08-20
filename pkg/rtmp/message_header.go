@@ -4,15 +4,15 @@ type messageHeader struct {
 	timestamp uint32
 	length    uint32
 	typeId    uint8
-	streamId  uint32
+	streamID  uint32
 }
 
 // NewMessageHeader creates a new message header
-func NewMessageHeader(timestamp uint32, length uint32, typeId uint8, streamId uint32) *messageHeader {
+func NewMessageHeader(timestamp uint32, length uint32, typeId uint8, streamID uint32) *messageHeader {
 	return &messageHeader{
 		timestamp: timestamp,
 		length:    length,
 		typeId:    typeId,
-		streamId:  streamId,
+		streamID:  streamID,
 	}
 }

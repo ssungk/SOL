@@ -24,9 +24,9 @@ type MediaSink interface {
 	MediaNode
 
 	// SendFrame sends a frame to the sink
-	SendFrame(streamId string, frame Frame) error
+	SendFrame(streamID string, frame Frame) error
 	// SendMetadata sends metadata to the sink
-	SendMetadata(streamId string, metadata map[string]string) error
+	SendMetadata(streamID string, metadata map[string]string) error
 	
 	// 이 싱크가 구독 중인 스트림 ID 목록 반환
 	SubscribedStreams() []string
