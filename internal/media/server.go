@@ -12,7 +12,7 @@ import (
 )
 
 type MediaServer struct {
-	servers            map[string]media.ServerInterface
+	servers            map[string]media.Server
 	mediaServerChannel chan any
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -28,7 +28,7 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mediaServer := &MediaServer{
-		servers:            make(map[string]media.ServerInterface),
+		servers:            make(map[string]media.Server),
 		mediaServerChannel: make(chan any, media.DefaultChannelBufferSize),
 		ctx:                ctx,
 		cancel:             cancel,

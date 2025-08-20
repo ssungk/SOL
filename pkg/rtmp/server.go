@@ -77,7 +77,7 @@ func (s *Server) Stop() {
 	s.cancel()
 }
 
-// ID 서버 ID 반환 (ServerInterface 인터페이스 구현)
+// ID 서버 ID 반환 (Server 인터페이스 구현)
 func (s *Server) ID() string {
 	return "rtmp"
 }

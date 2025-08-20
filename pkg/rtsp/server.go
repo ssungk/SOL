@@ -95,7 +95,7 @@ func (s *Server) shutdown() {
 	slog.Info("RTSP server shutdown completed")
 }
 
-// ID 서버 ID 반환 (ServerInterface 인터페이스 구현)
+// ID 서버 ID 반환 (Server 인터페이스 구현)
 func (s *Server) ID() string {
 	return "rtsp"
 }
