@@ -105,9 +105,9 @@ func (s *MediaServer) shutdown() {
 	slog.Info("Media event loop stopping...")
 
 	// 모든 서버들을 순차적으로 중지
-	for name, server := range s.servers {
+	for id, server := range s.servers {
 		server.Stop()
-		slog.Info("Server stopped", "serverName", name)
+		slog.Info("Server stopped", "serverID", id)
 	}
 
 	s.wg.Wait()
@@ -165,14 +165,7 @@ func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
 
 // handlePublishStopped 발행 중지 이벤트 처리
 func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
-	nodeID := event.ID
-	var nodeType string
-	if node, exists := s.nodes[nodeID]; exists {
-		nodeType = node.NodeType().String()
-	} else {
-		nodeType = "unknown"
-	}
-	slog.Info("Publish stopped", "nodeID", nodeID, "streamID", event.StreamID, "nodeType", nodeType)
+	slog.Info("Publish stopped", "nodeID", event.ID, "streamID", event.StreamID)
 
 	if stream, exists := s.streams[event.StreamID]; exists {
 		stream.Stop()
@@ -221,14 +214,7 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 
 // handleSubscribeStopped 재생 중지 이벤트 처리
 func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
-	nodeID := event.ID
-	var nodeType string
-	if node, exists := s.nodes[nodeID]; exists {
-		nodeType = node.NodeType().String()
-	} else {
-		nodeType = "unknown"
-	}
-	slog.Info("Subscribe stopped", "nodeID", nodeID, "streamID", event.StreamID, "nodeType", nodeType)
+	slog.Info("Subscribe stopped", "nodeID", event.ID, "streamID", event.StreamID)
 
 	// 노드 찾기
 	node, exists := s.nodes[event.ID]
@@ -244,7 +230,4 @@ func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
 	} else {
 		slog.Warn("Stream not found for subscribe stop", "streamID", event.StreamID, "nodeID", event.ID)
 	}
-
-	// 노드 제거
-	s.RemoveNode(event.ID)
 }
