@@ -311,7 +311,7 @@ func (s *session) handleAudio(message *Message) {
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
-		if stream.GetTrackCount() <= trackIndex {
+		if stream.TrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec, media.TimeScaleRTMP)
 		}
 
@@ -346,7 +346,7 @@ func (s *session) handleVideo(message *Message) {
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
-		if stream.GetTrackCount() <= trackIndex {
+		if stream.TrackCount() <= trackIndex {
 			stream.AddTrack(frame.Codec, media.TimeScaleRTMP)
 		}
 

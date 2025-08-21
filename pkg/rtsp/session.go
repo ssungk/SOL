@@ -236,7 +236,7 @@ func (s *Session) handleInterleavedData() error {
 		// Stream에 프레임 전송 (RECORD 모드에서)
 		if s.state == StateRecording && s.Stream != nil {
 			// 트랙이 없으면 추가
-			if s.Stream.GetTrackCount() <= frame.TrackIndex {
+			if s.Stream.TrackCount() <= frame.TrackIndex {
 				s.Stream.AddTrack(frame.Codec, media.TimeScaleRTP_Video)
 			}
 			

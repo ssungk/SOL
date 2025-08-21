@@ -84,21 +84,21 @@ func (s *Stream) SendMetadata(metadata map[string]string) {
 	}
 }
 
-// GetTrackCount 트랙 개수 반환
-func (s *Stream) GetTrackCount() int {
+// TrackCount 트랙 개수 반환
+func (s *Stream) TrackCount() int {
 	return len(s.tracks)
 }
 
-// GetTrack 지정된 인덱스의 트랙 반환
-func (s *Stream) GetTrack(index int) *Track {
+// Track 지정된 인덱스의 트랙 반환
+func (s *Stream) Track(index int) *Track {
 	if index < 0 || index >= len(s.tracks) {
 		return nil
 	}
 	return s.tracks[index]
 }
 
-// GetTrackCodecs 모든 트랙의 코덱 목록 반환
-func (s *Stream) GetTrackCodecs() []Codec {
+// TrackCodecs 모든 트랙의 코덱 목록 반환
+func (s *Stream) TrackCodecs() []Codec {
 	codecs := make([]Codec, len(s.tracks))
 	for i, track := range s.tracks {
 		codecs[i] = track.Codec
@@ -218,13 +218,13 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 	return nil
 }
 
-// GetSinkCount returns the number of active sinks
-func (s *Stream) GetSinkCount() int {
+// SinkCount returns the number of active sinks
+func (s *Stream) SinkCount() int {
 	return len(s.sinks)
 }
 
-// GetSinks returns a copy of all active sinks
-func (s *Stream) GetSinks() []MediaSink {
+// Sinks returns a copy of all active sinks
+func (s *Stream) Sinks() []MediaSink {
 	sinks := make([]MediaSink, 0, len(s.sinks))
 	for _, sink := range s.sinks {
 		sinks = append(sinks, sink)
@@ -243,8 +243,8 @@ func (s *Stream) HasCachedData() bool {
 	return false
 }
 
-// GetCacheStats returns cache statistics
-func (s *Stream) GetCacheStats() map[string]any {
+// CacheStats returns cache statistics
+func (s *Stream) CacheStats() map[string]any {
 	stats := map[string]any{
 		"track_count": len(s.tracks),
 		"sink_count":  len(s.sinks),
