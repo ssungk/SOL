@@ -237,7 +237,7 @@ func (s *Session) handleInterleavedData() error {
 		if s.state == StateRecording && s.Stream != nil {
 			// 트랙이 없으면 추가
 			if s.Stream.GetTrackCount() <= frame.TrackIndex {
-				s.Stream.AddTrack(frame.Codec)
+				s.Stream.AddTrack(frame.Codec, media.TimeScaleRTP_Video)
 			}
 			
 			s.Stream.SendFrame(frame)

@@ -51,13 +51,13 @@ func (s *Stream) ID() string {
 }
 
 // AddTrack 새로운 트랙을 추가하고 인덱스를 반환 - 직접 처리 (이벤트 루프 우회)
-func (s *Stream) AddTrack(codec Codec) int {
+func (s *Stream) AddTrack(codec Codec, timeScale uint32) int {
 	index := len(s.tracks)
-	track := NewTrack(index, codec)
+	track := NewTrack(index, codec, timeScale)
 
 	s.tracks = append(s.tracks, track)
 
-	slog.Info("Track added to stream", "streamID", s.id, "trackIndex", index, "codec", codec)
+	slog.Info("Track added to stream", "streamID", s.id, "trackIndex", index, "codec", codec, "timeScale", timeScale)
 
 	return index
 }
