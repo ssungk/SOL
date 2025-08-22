@@ -6,6 +6,7 @@ const (
 	TimeScaleRTMP      = uint32(1000)  // 1ms 단위 (RTMP 표준)
 	TimeScaleRTP_Video = uint32(90000) // 90kHz (RTP 비디오 표준)
 	TimeScaleRTP_Audio = uint32(48000) // 48kHz (RTP 오디오 표준)
+	TimeScaleSRT       = uint32(90000) // 90kHz (SRT 표준)
 )
 
 // Track 스트림 내의 개별 미디어 트랙 (버퍼 포함)

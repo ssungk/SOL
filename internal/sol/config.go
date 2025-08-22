@@ -13,6 +13,7 @@ import (
 type Config struct {
 	RTMP    RTMPConfig    `yaml:"rtmp"`
 	RTSP    RTSPConfig    `yaml:"rtsp"`
+	SRT     SRTConfig     `yaml:"srt"`
 	API     APIConfig     `yaml:"api"`
 	Logging LoggingConfig `yaml:"logging"`
 	Stream  StreamConfig  `yaml:"stream"`
@@ -23,6 +24,11 @@ type RTMPConfig struct {
 }
 
 type RTSPConfig struct {
+	Port    int `yaml:"port"`
+	Timeout int `yaml:"timeout"`
+}
+
+type SRTConfig struct {
 	Port    int `yaml:"port"`
 	Timeout int `yaml:"timeout"`
 }
@@ -48,6 +54,10 @@ func GetConfigWithDefaults() *Config {
 		},
 		RTSP: RTSPConfig{
 			Port:    554,
+			Timeout: 60,
+		},
+		SRT: SRTConfig{
+			Port:    9000,
 			Timeout: 60,
 		},
 		API: APIConfig{
@@ -77,6 +87,8 @@ func LoadConfig() (*Config, error) {
 		fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 		fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 		fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+		fmt.Printf("  SRT Port: %d\n", config.SRT.Port)
+		fmt.Printf("  SRT Timeout: %d\n", config.SRT.Timeout)
 		fmt.Printf("  API Port: %d\n", config.API.Port)
 		fmt.Printf("  Log Level: %s\n", config.Logging.Level)
 		fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
@@ -104,6 +116,8 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("  RTMP Port: %d\n", config.RTMP.Port)
 	fmt.Printf("  RTSP Port: %d\n", config.RTSP.Port)
 	fmt.Printf("  RTSP Timeout: %d\n", config.RTSP.Timeout)
+	fmt.Printf("  SRT Port: %d\n", config.SRT.Port)
+	fmt.Printf("  SRT Timeout: %d\n", config.SRT.Timeout)
 	fmt.Printf("  API Port: %d\n", config.API.Port)
 	fmt.Printf("  Log Level: %s\n", config.Logging.Level)
 	fmt.Printf("  GOP Cache Size: %d\n", config.Stream.GopCacheSize)
@@ -126,6 +140,16 @@ func (c *Config) validate() error {
 	// RTSP 타임아웃 검증
 	if c.RTSP.Timeout <= 0 {
 		return fmt.Errorf("invalid rtsp timeout: %d (must be positive)", c.RTSP.Timeout)
+	}
+
+	// SRT 포트 검증
+	if c.SRT.Port <= 0 || c.SRT.Port > 65535 {
+		return fmt.Errorf("invalid srt port: %d (must be between 1-65535)", c.SRT.Port)
+	}
+
+	// SRT 타임아웃 검증
+	if c.SRT.Timeout <= 0 {
+		return fmt.Errorf("invalid srt timeout: %d (must be positive)", c.SRT.Timeout)
 	}
 
 	// API 포트 검증

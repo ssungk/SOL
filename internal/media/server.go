@@ -7,6 +7,7 @@ import (
 	"sol/pkg/media"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
+	"sol/pkg/srt"
 	"sol/pkg/utils"
 	"sync"
 )
@@ -23,7 +24,7 @@ type MediaServer struct {
 	nodes   map[uintptr]media.MediaNode // nodeID -> MediaNode (Source|Sink)
 }
 
-func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
+func NewMediaServer(rtmpPort, rtspPort, rtspTimeout, srtPort, srtTimeout int) *MediaServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mediaServer := &MediaServer{
@@ -41,6 +42,9 @@ func NewMediaServer(rtmpPort, rtspPort, rtspTimeout int) *MediaServer {
 
 	rtspServer := rtsp.NewServer(rtsp.NewRTSPConfig(rtspPort, rtspTimeout), mediaServer.channel, &mediaServer.wg)
 	mediaServer.servers[rtspServer.ID()] = rtspServer
+
+	srtServer := srt.NewServer(srt.NewSRTConfig(srtPort, srtTimeout), mediaServer.channel, &mediaServer.wg)
+	mediaServer.servers[srtServer.ID()] = srtServer
 
 	return mediaServer
 }
