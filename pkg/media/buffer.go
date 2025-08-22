@@ -12,11 +12,14 @@ type Buffer struct {
 	refCnt int32 // atomic 참조 카운트
 }
 
-// 다양한 크기별 메모리 풀들
+// 7단계 크기별 메모리 풀들
 var (
+	pool8B   = &sync.Pool{New: func() any { return make([]byte, 8) }}
+	pool16B  = &sync.Pool{New: func() any { return make([]byte, 16) }}
+	pool32B  = &sync.Pool{New: func() any { return make([]byte, 32) }}
+	pool128B = &sync.Pool{New: func() any { return make([]byte, 128) }}
 	pool1KB  = &sync.Pool{New: func() any { return make([]byte, 1024) }}
 	pool4KB  = &sync.Pool{New: func() any { return make([]byte, 4096) }}
-	pool16KB = &sync.Pool{New: func() any { return make([]byte, 16384) }}
 	pool64KB = &sync.Pool{New: func() any { return make([]byte, 65536) }}
 )
 
@@ -26,15 +29,24 @@ func GetBuffer(size int) *Buffer {
 	var data []byte
 
 	switch {
+	case size <= 8:
+		pool = pool8B
+		data = pool8B.Get().([]byte)[:size]
+	case size <= 16:
+		pool = pool16B
+		data = pool16B.Get().([]byte)[:size]
+	case size <= 32:
+		pool = pool32B
+		data = pool32B.Get().([]byte)[:size]
+	case size <= 128:
+		pool = pool128B
+		data = pool128B.Get().([]byte)[:size]
 	case size <= 1024:
 		pool = pool1KB
 		data = pool1KB.Get().([]byte)[:size]
 	case size <= 4096:
 		pool = pool4KB
 		data = pool4KB.Get().([]byte)[:size]
-	case size <= 16384:
-		pool = pool16KB
-		data = pool16KB.Get().([]byte)[:size]
 	case size <= 65536:
 		pool = pool64KB
 		data = pool64KB.Get().([]byte)[:size]
@@ -87,14 +99,23 @@ func (b *Buffer) Release() {
 		if b.pool != nil {
 			// 원본 크기로 복구하여 풀에 반납
 			switch b.pool {
+			case pool8B:
+				original := b.data[:cap(b.data)][:8]
+				b.pool.Put(original)
+			case pool16B:
+				original := b.data[:cap(b.data)][:16]
+				b.pool.Put(original)
+			case pool32B:
+				original := b.data[:cap(b.data)][:32]
+				b.pool.Put(original)
+			case pool128B:
+				original := b.data[:cap(b.data)][:128]
+				b.pool.Put(original)
 			case pool1KB:
 				original := b.data[:cap(b.data)][:1024]
 				b.pool.Put(original)
 			case pool4KB:
 				original := b.data[:cap(b.data)][:4096]
-				b.pool.Put(original)
-			case pool16KB:
-				original := b.data[:cap(b.data)][:16384]
 				b.pool.Put(original)
 			case pool64KB:
 				original := b.data[:cap(b.data)][:65536]
