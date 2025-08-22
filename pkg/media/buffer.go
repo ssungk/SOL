@@ -82,15 +82,11 @@ func (b *Buffer) AddRef() *Buffer {
 // Release 참조 카운트를 감소시키고, 0이 되면 풀에 반납
 func (b *Buffer) Release() {
 	if atomic.AddInt32(&b.refCnt, -1) == 0 {
-		// 참조 카운트가 0이 되면 풀에 반납
+		// 풀에 반납 (pool이 nil이면 GC가 처리)
 		if b.pool != nil {
-			// 원본 크기로 복구하여 풀에 반납
-			if b.pool != nil {
-				original := b.data[:cap(b.data)]
-				b.pool.Put(original)
-			}
+			original := b.data[:cap(b.data)]
+			b.pool.Put(original)
 		}
-		// 큰 사이즈는 GC가 자동 처리
 	}
 }
 
