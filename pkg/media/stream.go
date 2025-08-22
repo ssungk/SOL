@@ -62,14 +62,14 @@ func (s *Stream) AddTrack(codec Codec, timeScale uint32) int {
 	return index
 }
 
-// SendFrame 미디어 프레임 전송 (프레임에 포함된 trackIndex 사용) - 이벤트 기반으로 변경
-func (s *Stream) SendFrame(frame Frame) error {
+// SendPacket 미디어 패킷 전송 (패킷에 포함된 trackIndex 사용) - 이벤트 기반으로 변경
+func (s *Stream) SendPacket(packet Packet) error {
 	select {
-	case s.channel <- sendFrameEvent{frame: frame}:
+	case s.channel <- sendPacketEvent{packet: packet}:
 		return nil
 	default:
 		// 채널이 가득 차면 드랍 (실시간 스트리밍 특성)
-		slog.Warn("Stream channel full, dropping frame", "streamID", s.id, "trackIndex", frame.TrackIndex)
+		slog.Warn("Stream channel full, dropping packet", "streamID", s.id, "trackIndex", packet.TrackIndex)
 		return errors.New("stream channel full")
 	}
 }
@@ -133,8 +133,8 @@ func (s *Stream) eventLoop() {
 // handleChannel 이벤트 타입별 처리 (MediaServer 패턴과 동일)
 func (s *Stream) handleChannel(data any) {
 	switch v := data.(type) {
-	case sendFrameEvent:
-		s.handleSendFrame(v)
+	case sendPacketEvent:
+		s.handleSendPacket(v)
 	case sendMetadataEvent:
 		s.handleSendMetadata(v)
 	case addSinkEvent:
@@ -195,23 +195,23 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 		}
 	}
 
-	// Send cached frames from all tracks
+	// Send cached packets from all tracks
 	for trackIndex, track := range s.tracks {
-		cachedFrames := track.Buffer.GetCachedFrames()
-		if len(cachedFrames) > 0 {
-			slog.Debug("Sending cached frames to new sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "frameCount", len(cachedFrames))
+		cachedPackets := track.Buffer.GetCachedPackets()
+		if len(cachedPackets) > 0 {
+			slog.Debug("Sending cached packets to new sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "packetCount", len(cachedPackets))
 
-			for _, frame := range cachedFrames {
+			for _, packet := range cachedPackets {
 				// 각 sink의 선호 포맷에 맞게 변환
-				convertedFrame := s.convertFrameForSink(frame, sink)
+				convertedPacket := s.convertPacketForSink(packet, sink)
 
-				if err := sink.SendFrame(s.id, convertedFrame); err != nil {
-					slog.Error("Failed to send cached track frame to sink", "streamID", s.id, "trackIndex", frame.TrackIndex, "nodeId", nodeId, "codec", frame.Codec, "err", err)
-					// Continue with next frame even if one fails
+				if err := sink.SendPacket(s.id, convertedPacket); err != nil {
+					slog.Error("Failed to send cached track packet to sink", "streamID", s.id, "trackIndex", packet.TrackIndex, "nodeId", nodeId, "codec", packet.Codec, "err", err)
+					// Continue with next packet even if one fails
 				}
 			}
 
-			slog.Debug("Finished sending cached frames to sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId)
+			slog.Debug("Finished sending cached packets to sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId)
 		}
 	}
 
@@ -259,18 +259,18 @@ func (s *Stream) CacheStats() map[string]any {
 	return stats
 }
 
-// convertFrameForSink 각 sink의 선호 포맷에 맞게 프레임 변환 (현재는 변환 없음)
-func (s *Stream) convertFrameForSink(frame Frame, sink MediaSink) Frame {
+// convertPacketForSink 각 sink의 선호 포맷에 맞게 패킷 변환 (현재는 변환 없음)
+func (s *Stream) convertPacketForSink(packet Packet, sink MediaSink) Packet {
 	// 아직 포맷 변환이 필요한 프로토콜이 없으므로 원본 그대로 반환
-	return frame
+	return packet
 }
 
 // 이벤트 핸들러 메서드들
 
-// handleSendFrame 프레임 전송 이벤트 처리
-func (s *Stream) handleSendFrame(event sendFrameEvent) {
-	frame := event.frame
-	trackIndex := frame.TrackIndex
+// handleSendPacket 패킷 전송 이벤트 처리
+func (s *Stream) handleSendPacket(event sendPacketEvent) {
+	packet := event.packet
+	trackIndex := packet.TrackIndex
 
 	if trackIndex < 0 || trackIndex >= len(s.tracks) {
 		slog.Error("Invalid track index", "streamID", s.id, "trackIndex", trackIndex, "maxTrackIndex", len(s.tracks)-1)
@@ -278,15 +278,15 @@ func (s *Stream) handleSendFrame(event sendFrameEvent) {
 	}
 
 	// 트랙별 버퍼에 캐시
-	s.tracks[trackIndex].Buffer.AddFrame(frame)
+	s.tracks[trackIndex].Buffer.AddPacket(packet)
 
 	// 모든 sink에 브로드캐스트
 	for _, sink := range s.sinks {
 		// 각 sink의 선호 포맷에 맞게 변환
-		convertedFrame := s.convertFrameForSink(frame, sink)
+		convertedPacket := s.convertPacketForSink(packet, sink)
 
-		if err := sink.SendFrame(s.id, convertedFrame); err != nil {
-			slog.Error("Failed to send track frame to sink", "streamID", s.id, "trackIndex", frame.TrackIndex, "nodeId", sink.ID(), "codec", frame.Codec, "err", err)
+		if err := sink.SendPacket(s.id, convertedPacket); err != nil {
+			slog.Error("Failed to send track packet to sink", "streamID", s.id, "trackIndex", packet.TrackIndex, "nodeId", sink.ID(), "codec", packet.Codec, "err", err)
 		}
 	}
 }

@@ -23,8 +23,8 @@ type MediaSource interface {
 type MediaSink interface {
 	MediaNode
 
-	// SendFrame sends a frame to the sink
-	SendFrame(streamID string, frame Frame) error
+	// SendPacket sends a packet to the sink
+	SendPacket(streamID string, packet Packet) error
 	// SendMetadata sends metadata to the sink
 	SendMetadata(streamID string, metadata map[string]string) error
 	

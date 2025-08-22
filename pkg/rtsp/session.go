@@ -226,28 +226,28 @@ func (s *Session) handleInterleavedData() error {
 		// RTP data from client - convert to media frame and send to stream
 		slog.Debug("Received interleaved RTP data from client", "sessionId", s.ID(), "dataSize", len(data))
 		
-		// RTP 패킷을 media.Frame으로 변환
-		frame, err := s.convertRTPToFrame(data, s.streamPath)
+		// RTP 패킷을 media.Packet으로 변환
+		packet, err := s.convertRTPToPacket(data, s.streamPath)
 		if err != nil {
-			slog.Error("Failed to convert RTP to frame", "sessionId", s.ID(), "err", err)
+			slog.Error("Failed to convert RTP to packet", "sessionId", s.ID(), "err", err)
 			return nil
 		}
 
-		// Stream에 프레임 전송 (RECORD 모드에서)
+		// Stream에 패킷 전송 (RECORD 모드에서)
 		if s.state == StateRecording && s.Stream != nil {
 			// 트랙이 없으면 추가
-			if s.Stream.TrackCount() <= frame.TrackIndex {
-				s.Stream.AddTrack(frame.Codec, media.TimeScaleRTP_Video)
+			if s.Stream.TrackCount() <= packet.TrackIndex {
+				s.Stream.AddTrack(packet.Codec, media.TimeScaleRTP_Video)
 			}
 			
-			s.Stream.SendFrame(frame)
-			slog.Debug("RTP frame sent to stream", 
+			s.Stream.SendPacket(packet)
+			slog.Debug("RTP packet sent to stream", 
 				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
-				"frameType", frame.Type,
-				"codec", frame.Codec)
+				"packetType", packet.Type,
+				"codec", packet.Codec)
 		} else {
-			slog.Debug("RTP frame converted but not sent (no stream or not recording)", 
+			slog.Debug("RTP packet converted but not sent (no stream or not recording)", 
 				"sessionId", s.ID(), 
 				"streamPath", s.streamPath, 
 				"state", s.state.String(),
@@ -736,17 +736,17 @@ func (s *Session) Address() string {
 
 // MediaSink 인터페이스 구현 (RTSP 플레이어 세션용)
 
-// SendFrame MediaSink 인터페이스 구현 - 프레임을 세션으로 전송
-func (s *Session) SendFrame(streamID string, frame media.Frame) error {
+// SendPacket MediaSink 인터페이스 구현 - 패킷을 세션으로 전송
+func (s *Session) SendPacket(streamID string, packet media.Packet) error {
 	// RTSP 세션이 플레이 중이고 스트림 ID가 일치하는 경우에만 전송
 	if s.state != StatePlaying || s.streamPath != streamID {
-		return fmt.Errorf("session not ready for frame: state=%v, streamPath=%s", s.state, s.streamPath)
+		return fmt.Errorf("session not ready for packet: state=%v, streamPath=%s", s.state, s.streamPath)
 	}
 
-	// Frame을 RTP 패킷으로 변환
-	rtpData, err := s.convertFrameToRTP(frame)
+	// Packet을 RTP 패킷으로 변환
+	rtpData, err := s.convertPacketToRTP(packet)
 	if err != nil {
-		return fmt.Errorf("failed to convert frame to RTP: %v", err)
+		return fmt.Errorf("failed to convert packet to RTP: %v", err)
 	}
 
 	// 전송 모드에 따라 RTP 패킷 전송
@@ -768,27 +768,27 @@ func (s *Session) SendMetadata(streamID string, metadata map[string]string) erro
 	return nil
 }
 
-// convertFrameToRTP Frame을 RTP 패킷으로 변환
-func (s *Session) convertFrameToRTP(frame media.Frame) ([]byte, error) {
+// convertPacketToRTP Packet을 RTP 패킷으로 변환
+func (s *Session) convertPacketToRTP(packet media.Packet) ([]byte, error) {
 	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
 	// RTP 헤더 (12바이트) + 페이로드
 	
-	// 프레임 데이터 사용 (이미 []byte)
-	payload := frame.Data
+	// 패킷 데이터 사용 (이미 []byte)
+	payload := packet.Data
 
 	// 간단한 RTP 헤더 생성
 	rtpHeader := make([]byte, 12)
 	rtpHeader[0] = 0x80 // V=2, P=0, X=0, CC=0
 	
-	// 프레임 타입에 따라 페이로드 타입 설정
-	if frame.IsVideo() {
+	// 패킷 타입에 따라 페이로드 타입 설정
+	if packet.IsVideo() {
 		rtpHeader[1] = 96 // H.264 페이로드 타입
-	} else if frame.IsAudio() {
+	} else if packet.IsAudio() {
 		rtpHeader[1] = 97 // AAC 페이로드 타입
 	}
 	
 	// 타임스탬프 설정 (DTS32 사용)
-	timestamp := frame.DTS32()
+	timestamp := packet.DTS32()
 	rtpHeader[4] = byte(timestamp >> 24)
 	rtpHeader[5] = byte(timestamp >> 16)
 	rtpHeader[6] = byte(timestamp >> 8)
@@ -815,16 +815,16 @@ func (s *Session) GetStreamPath() string {
 // MediaSource 인터페이스 구현 (RECORD 시 사용)
 // RTSP Session은 RECORD 모드에서는 MediaSource로, PLAY 모드에서는 MediaSink로 동작
 
-// convertRTPToFrame RTP 패킷을 Frame으로 변환 (RECORD 시 사용)
-func (s *Session) convertRTPToFrame(rtpData []byte, streamID string) (media.Frame, error) {
+// convertRTPToPacket RTP 패킷을 Packet으로 변환 (RECORD 시 사용)
+func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Packet, error) {
 	if len(rtpData) < 12 {
-		return media.Frame{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
+		return media.Packet{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
 	}
 
 	// RTP 헤더 파싱
 	version := (rtpData[0] & 0xC0) >> 6
 	if version != 2 {
-		return media.Frame{}, fmt.Errorf("unsupported RTP version: %d", version)
+		return media.Packet{}, fmt.Errorf("unsupported RTP version: %d", version)
 	}
 
 	payloadType := rtpData[1] & 0x7F
@@ -833,41 +833,41 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamID string) (media.Fram
 	// 페이로드 추출 (헤더 제외)
 	payload := rtpData[12:]
 
-	// 페이로드 타입에 따른 Codec, BitstreamFormat, FrameType 결정
+	// 페이로드 타입에 따른 Codec, BitstreamFormat, PacketType 결정
 	var codec media.Codec
 	var format media.BitstreamFormat
-	var frameType media.FrameType
+	var packetType media.PacketType
 	var trackIndex int
 
 	switch payloadType {
 	case 96: // H.264
 		codec = media.H264
 		format = media.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
-		frameType = media.TypeData    // 기본값으로 Data
+		packetType = media.TypeData    // 기본값으로 Data
 		trackIndex = 0 // 비디오는 트랙 0
 	case 97: // AAC
 		codec = media.AAC
 		format = media.FormatRawStream // 오디오는 raw 데이터
-		frameType = media.TypeData // 기본값으로 Data
+		packetType = media.TypeData // 기본값으로 Data
 		trackIndex = 1 // 오디오는 트랙 1
 	default:
 		codec = media.H264
 		format = media.FormatH26xAnnexB
-		frameType = media.TypeData
+		packetType = media.TypeData
 		trackIndex = 0 // 기본값은 비디오
 	}
 	
-	frame := media.NewFrame(
+	packet := media.NewPacket(
 		trackIndex,
 		codec,
 		format,
-		frameType,
+		packetType,
 		uint64(timestamp),
 		0, // CTS = 0 (RTSP는 일반적으로 CTS 사용 안함)
 		payload,
 	)
 
-	slog.Debug("Converted RTP to Frame", 
+	slog.Debug("Converted RTP to Packet", 
 		"sessionId", s.ID(), 
 		"streamID", streamID,
 		"payloadType", payloadType,
@@ -875,7 +875,7 @@ func (s *Session) convertRTPToFrame(rtpData []byte, streamID string) (media.Fram
 		"timestamp", timestamp,
 		"payloadSize", len(payload))
 
-	return frame, nil
+	return packet, nil
 }
 
 // --- MediaSource 인터페이스 구현 (RECORD 모드) ---

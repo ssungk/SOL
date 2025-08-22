@@ -49,49 +49,49 @@ const (
 	FormatAACADTS BitstreamFormat = 1 // AAC ADTS (= FormatPackaged)
 )
 
-// FrameType 프레임 타입 (개념적 분류 기반)
-type FrameType uint8
+// PacketType 패킷 타입 (개념적 분류 기반)
+type PacketType uint8
 
 const (
-	TypeData   FrameType = 0 // 일반 데이터 (비디오 P/B프레임, 오디오 데이터)
-	TypeConfig FrameType = 1 // 설정 데이터 (비디오 SPS/PPS, 오디오 AudioSpecificConfig)
-	TypeKey    FrameType = 2 // 키프레임 (비디오 I-프레임만)
+	TypeData   PacketType = 0 // 일반 데이터 (비디오 P/B패킷, 오디오 데이터)
+	TypeConfig PacketType = 1 // 설정 데이터 (비디오 SPS/PPS, 오디오 AudioSpecificConfig)
+	TypeKey    PacketType = 2 // 키패킷 (비디오 I-패킷만)
 )
 
-// Frame 새로운 단순화된 프레임 구조
-type Frame struct {
+// Packet 새로운 단순화된 패킷 구조
+type Packet struct {
 	TrackIndex int             // 트랙 인덱스 (0=비디오, 1=오디오, 2=...)
 	Codec      Codec           // 통합된 코덱 (비디오/오디오 구분 포함)
 	Format     BitstreamFormat // 코덱별 비트스트림 포맷
-	Type       FrameType       // 프레임 타입
+	Type       PacketType      // 패킷 타입
 	DTS        uint64          // Decode Time Stamp (해당 트랙의 TimeScale 단위)
 	CTS        int             // Composition Time Stamp (PTS-DTS, TimeScale 단위)
-	Data       []byte          // 프레임 데이터
+	Data       []byte          // 패킷 데이터
 }
 
-// Frame 헬퍼 함수들
-func (f *Frame) IsVideo() bool    { return f.Codec.IsVideo() }
-func (f *Frame) IsAudio() bool    { return f.Codec.IsAudio() }
-func (f *Frame) IsData() bool     { return f.Codec.IsData() }
-func (f *Frame) IsKeyFrame() bool { return f.Type == TypeKey }
+// Packet 헬퍼 함수들
+func (p *Packet) IsVideo() bool    { return p.Codec.IsVideo() }
+func (p *Packet) IsAudio() bool    { return p.Codec.IsAudio() }
+func (p *Packet) IsData() bool     { return p.Codec.IsData() }
+func (p *Packet) IsKeyPacket() bool { return p.Type == TypeKey }
 
 // PTS Presentation Time Stamp 계산 (DTS + CTS, TimeScale 단위)
-func (f *Frame) PTS() uint64 {
-	return uint64(int64(f.DTS) + int64(f.CTS))
+func (p *Packet) PTS() uint64 {
+	return uint64(int64(p.DTS) + int64(p.CTS))
 }
 
 // DTS32 프로토콜용 32비트 DTS 변환 (현재 TimeScale 단위)
-func (f *Frame) DTS32() uint32 {
-	return uint32(f.DTS & 0xFFFFFFFF)
+func (p *Packet) DTS32() uint32 {
+	return uint32(p.DTS & 0xFFFFFFFF)
 }
 
-// NewFrame 미디어 프레임 생성 (CTS 포함)
-func NewFrame(trackIndex int, codec Codec, format BitstreamFormat, frameType FrameType, dts uint64, cts int, data []byte) Frame {
-	return Frame{
+// NewPacket 미디어 패킷 생성 (CTS 포함)
+func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data []byte) Packet {
+	return Packet{
 		TrackIndex: trackIndex,
 		Codec:      codec,
 		Format:     format,
-		Type:       frameType,
+		Type:       packetType,
 		DTS:        dts,
 		CTS:        cts,
 		Data:       data,

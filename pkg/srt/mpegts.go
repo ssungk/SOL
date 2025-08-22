@@ -290,24 +290,24 @@ func (p *MPEGTSParser) parseVideoES(payload []byte, pusi bool) error {
 		return nil
 	}
 
-	// H.264 프레임 생성 및 전송
-	frameType := media.TypeData
+	// H.264 패킷 생성 및 전송
+	packetType := media.TypeData
 	if p.isKeyFrame(esData) {
-		frameType = media.TypeKey
+		packetType = media.TypeKey
 	}
 	
-	frame := media.NewFrame(
+	packet := media.NewPacket(
 		0, // 비디오 트랙 인덱스
 		media.H264,
 		media.FormatH26xAnnexB,
-		frameType,
+		packetType,
 		pts,
 		0, // CTS (단순화)
 		esData,
 	)
 
 	if p.session.stream != nil {
-		return p.session.stream.SendFrame(frame)
+		return p.session.stream.SendPacket(packet)
 	}
 
 	return nil
@@ -346,8 +346,8 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 		return nil
 	}
 
-	// AAC 프레임 생성 및 전송
-	frame := media.NewFrame(
+	// AAC 패킷 생성 및 전송
+	packet := media.NewPacket(
 		1, // 오디오 트랙 인덱스
 		media.AAC,
 		media.FormatAACRaw,
@@ -358,13 +358,13 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 	)
 
 	if p.session.stream != nil {
-		return p.session.stream.SendFrame(frame)
+		return p.session.stream.SendPacket(packet)
 	}
 
 	return nil
 }
 
-// isKeyFrame H.264 키프레임 여부 확인
+// isKeyFrame H.264 키패킷 여부 확인
 func (p *MPEGTSParser) isKeyFrame(data []byte) bool {
 	// NAL unit 탐색
 	for i := 0; i+4 < len(data); i++ {

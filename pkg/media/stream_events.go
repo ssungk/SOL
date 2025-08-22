@@ -2,9 +2,9 @@ package media
 
 // Stream 내부 이벤트 타입들 (MediaServer 패턴과 동일)
 
-// sendFrameEvent 프레임 전송 이벤트
-type sendFrameEvent struct {
-	frame Frame
+// sendPacketEvent 패킷 전송 이벤트
+type sendPacketEvent struct {
+	packet Packet
 }
 
 // sendMetadataEvent 메타데이터 전송 이벤트

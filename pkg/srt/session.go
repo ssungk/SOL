@@ -119,18 +119,18 @@ func (s *Session) PublishingStreams() []*media.Stream {
 
 // MediaSink 인터페이스 구현 (구독 모드)
 
-// SendFrame 프레임 전송 (구독자에게)
-func (s *Session) SendFrame(streamID string, frame media.Frame) error {
+// SendPacket 패킷 전송 (구독자에게)
+func (s *Session) SendPacket(streamID string, packet media.Packet) error {
 	if !s.isActive() || s.mode != ModeSubscribe {
 		return nil
 	}
 
 	// TODO: SRT 패킷으로 변환하여 전송
 	// 현재는 간단히 로그만 출력
-	slog.Debug("Sending frame to SRT subscriber", 
+	slog.Debug("Sending packet to SRT subscriber", 
 		"sessionId", s.id, 
 		"streamID", streamID, 
-		"frameType", frame.Type)
+		"packetType", packet.Type)
 
 	return nil
 }

@@ -132,8 +132,8 @@ func (s *session) readLoop() {
 // handleChannel 이벤트 종류에 따라 적절한 핸들러 호출
 func (s *session) handleChannel(data any) {
 	switch e := data.(type) {
-	case sendFrameEvent:
-		s.handleSendFrame(e)
+	case sendPacketEvent:
+		s.handleSendPacket(e)
 	case sendMetadataEvent:
 		s.handleSendMetadata(e)
 	case commandEvent:
@@ -169,14 +169,14 @@ func (s *session) sendChannelEvent(event any, eventType string) error {
 	}
 }
 
-func (s *session) SendFrame(streamID string, frame media.Frame) error {
+func (s *session) SendPacket(streamID string, packet media.Packet) error {
 	// RTMP는 현재 비디오(트랙0), 오디오(트랙1)만 지원
-	if frame.TrackIndex > 1 {
+	if packet.TrackIndex > 1 {
 		return nil // 추가 트랙은 무시
 	}
 
-	event := sendFrameEvent{streamPath: streamID, frame: frame}
-	return s.sendChannelEvent(event, "frame")
+	event := sendPacketEvent{streamPath: streamID, packet: packet}
+	return s.sendChannelEvent(event, "packet")
 }
 
 func (s *session) SendMetadata(streamID string, metadata map[string]string) error {
@@ -186,38 +186,38 @@ func (s *session) SendMetadata(streamID string, metadata map[string]string) erro
 
 // --- 이벤트 핸들러 ---
 
-// handleSendFrame MediaSink로부터 받은 프레임을 클라이언트로 전송
-func (s *session) handleSendFrame(e sendFrameEvent) {
+// handleSendPacket MediaSink로부터 받은 패킷을 클라이언트로 전송
+func (s *session) handleSendPacket(e sendPacketEvent) {
 	streamID, exists := s.streamPathToId[e.streamPath]
 	if !exists {
-		slog.Warn("Stream mapping not found, skipping frame", "sessionId", s.ID(), "streamPath", e.streamPath)
+		slog.Warn("Stream mapping not found, skipping packet", "sessionId", s.ID(), "streamPath", e.streamPath)
 		return
 	}
 
 	var msgType uint8
 	var rtmpData []byte
 
-	if e.frame.IsVideo() {
+	if e.packet.IsVideo() {
 		msgType = MsgTypeVideo
-		// 비디오: RTMP 헤더 재생성 후 데이터와 결합 (Frame의 CTS 사용)
-		header := GenerateVideoHeader(e.frame, e.frame.CTS)
-		rtmpData = CombineHeaderAndData(header, e.frame.Data)
+		// 비디오: RTMP 헤더 재생성 후 데이터와 결합 (Packet의 CTS 사용)
+		header := GenerateVideoHeader(e.packet, e.packet.CTS)
+		rtmpData = CombineHeaderAndData(header, e.packet.Data)
 
-	} else if e.frame.IsAudio() {
+	} else if e.packet.IsAudio() {
 		msgType = MsgTypeAudio
 		// 오디오: RTMP 헤더 재생성 후 데이터와 결합
-		header := GenerateAudioHeader(e.frame)
-		rtmpData = CombineHeaderAndData(header, e.frame.Data)
+		header := GenerateAudioHeader(e.packet)
+		rtmpData = CombineHeaderAndData(header, e.packet.Data)
 
 	} else {
-		slog.Warn("Unsupported frame type", "codec", e.frame.Codec, "sessionId", s.ID())
+		slog.Warn("Unsupported packet type", "codec", e.packet.Codec, "sessionId", s.ID())
 		return
 	}
 
-	messageHeader := NewMessageHeader(e.frame.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamID))
+	messageHeader := NewMessageHeader(e.packet.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamID))
 	message := NewMessage(messageHeader, rtmpData)
 	if err := s.writer.writeMessage(s.conn, message); err != nil {
-		slog.Error("Failed to send frame to RTMP session", "sessionId", s.ID(), "frameType", e.frame.Type, "err", err)
+		slog.Error("Failed to send packet to RTMP session", "sessionId", s.ID(), "packetType", e.packet.Type, "err", err)
 	}
 }
 
@@ -304,18 +304,18 @@ func (s *session) handleAudio(message *Message) {
 	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
 
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
-	// Frame 생성 (오디오는 트랙 1)
+	// Packet 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	frame := media.NewFrame(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, message.payload)
+	packet := media.NewPacket(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, message.payload)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
-			stream.AddTrack(frame.Codec, media.TimeScaleRTMP)
+			stream.AddTrack(packet.Codec, media.TimeScaleRTMP)
 		}
 
-		stream.SendFrame(frame)
+		stream.SendPacket(packet)
 	}
 }
 
@@ -339,23 +339,23 @@ func (s *session) handleVideo(message *Message) {
 	// RTMP는 항상 원본 payload 사용 (AVCC 포맷)
 	frameData := message.payload
 
-	// Frame 생성 (비디오는 트랙 0)
+	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	frame := media.NewFrame(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
+	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
-			stream.AddTrack(frame.Codec, media.TimeScaleRTMP)
+			stream.AddTrack(packet.Codec, media.TimeScaleRTMP)
 		}
 
-		stream.SendFrame(frame)
+		stream.SendPacket(packet)
 	}
 }
 
 // parseAudioFrameType 오디오 프레임 타입 파싱
-func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.FrameType {
+func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.PacketType {
 	// AAC 특수 처리
 	if ((firstByte>>4)&0x0F) == 10 && len(payload) > 1 {
 		switch payload[1] {
@@ -371,7 +371,7 @@ func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.Fram
 }
 
 // parseVideoFrameType 비디오 프레임 타입 파싱
-func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.FrameType {
+func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.PacketType {
 	// 프레임 타입 (4비트)
 	frameTypeFlag := (firstByte >> 4) & 0x0F
 	codecId := firstByte & 0x0F
