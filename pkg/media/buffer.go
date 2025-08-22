@@ -4,7 +4,7 @@ import (
 	"log/slog"
 )
 
-type TrackBuffer struct {
+type TrackCache struct {
 	// 시간순으로 정렬된 모든 패킷 (Packet)
 	packets []Packet
 
@@ -23,14 +23,14 @@ type TrackBuffer struct {
 	lastKeyPacketIndex int // 마지막 키패킷 위치
 }
 
-// 새로운 스트림 버퍼를 생성합니다 (기본 설정)
-func NewTrackBuffer() *TrackBuffer {
-	return NewTrackBufferWithConfig(2000, 10000, 1000) // 2-10초, 최대 1000패킷
+// 새로운 트랙 캐시를 생성합니다 (기본 설정)
+func NewTrackCache() *TrackCache {
+	return NewTrackCacheWithConfig(2000, 10000, 1000) // 2-10초, 최대 1000패킷
 }
 
-// 설정 가능한 스트림 버퍼를 생성합니다
-func NewTrackBufferWithConfig(minDurationMs, maxDurationMs uint64, maxPackets int) *TrackBuffer {
-	return &TrackBuffer{
+// 설정 가능한 트랙 캐시를 생성합니다
+func NewTrackCacheWithConfig(minDurationMs, maxDurationMs uint64, maxPackets int) *TrackCache {
+	return &TrackCache{
 		packets:             make([]Packet, 0),
 		extraData:           make(map[Codec]Packet),
 		minBufferDurationMs: minDurationMs,
@@ -42,47 +42,47 @@ func NewTrackBufferWithConfig(minDurationMs, maxDurationMs uint64, maxPackets in
 
 // 패킷을 캐시에 추가합니다 (Packet 사용)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) AddPacket(packet Packet) {
+func (tc *TrackCache) AddPacket(packet Packet) {
 	// Handle extra data (config packets) separately
 	if packet.Type == TypeConfig {
-		tb.extraData[packet.Codec] = packet
+		tc.extraData[packet.Codec] = packet
 		slog.Debug("Extra data cached", "codec", packet.Codec, "dts", packet.DTS)
 		return
 	}
 
 	// 키패킷 추적 및 위치 기록
 	if packet.IsKeyPacket() {
-		tb.lastKeyPacketIndex = len(tb.packets)
-		slog.Debug("New key packet detected", "dts", packet.DTS, "index", tb.lastKeyPacketIndex)
+		tc.lastKeyPacketIndex = len(tc.packets)
+		slog.Debug("New key packet detected", "dts", packet.DTS, "index", tc.lastKeyPacketIndex)
 	}
 
 	// Add packet to cache
-	tb.packets = append(tb.packets, packet)
+	tc.packets = append(tc.packets, packet)
 
 	// 시간 기준으로 오래된 패킷 정리
-	tb.cleanupOldPackets()
+	tc.cleanupOldPackets()
 }
 
 // cleanupOldPackets 시간 기반으로 오래된 패킷을 정리합니다
-func (tb *TrackBuffer) cleanupOldPackets() {
-	if len(tb.packets) == 0 {
+func (tc *TrackCache) cleanupOldPackets() {
+	if len(tc.packets) == 0 {
 		return
 	}
 
-	currentTime := tb.getCurrentTimestamp() // 최신 패킷 타임스탬프
-	minTime := currentTime - tb.minBufferDurationMs
+	currentTime := tc.getCurrentTimestamp() // 최신 패킷 타임스탬프
+	minTime := currentTime - tc.minBufferDurationMs
 
 	// 최소 버퍼 시간 이상 유지하면서 정리
 	// 단, 키패킷은 보존하여 재생 연속성 확보
 	cleanupIndex := 0
-	for i, packet := range tb.packets {
+	for i, packet := range tc.packets {
 		if packet.DTS >= minTime {
 			break // 최소 시간 이후 패킷들은 모두 유지
 		}
 
 		// 키패킷이면서 최소 시간 내에 다른 키패킷이 있으면 제거 가능
 		if packet.IsKeyPacket() {
-			if tb.hasKeyPacketAfter(i, minTime) {
+			if tc.hasKeyPacketAfter(i, minTime) {
 				cleanupIndex = i + 1
 			}
 		} else {
@@ -92,44 +92,44 @@ func (tb *TrackBuffer) cleanupOldPackets() {
 
 	// 정리 실행
 	if cleanupIndex > 0 {
-		tb.packets = tb.packets[cleanupIndex:]
+		tc.packets = tc.packets[cleanupIndex:]
 		// 키패킷 인덱스 조정
-		if tb.lastKeyPacketIndex >= cleanupIndex {
-			tb.lastKeyPacketIndex -= cleanupIndex
+		if tc.lastKeyPacketIndex >= cleanupIndex {
+			tc.lastKeyPacketIndex -= cleanupIndex
 		} else {
-			tb.lastKeyPacketIndex = -1 // 키패킷이 정리됨
+			tc.lastKeyPacketIndex = -1 // 키패킷이 정리됨
 		}
 
-		slog.Debug("Old packets cleaned up", "removedCount", cleanupIndex, "remainingCount", len(tb.packets))
+		slog.Debug("Old packets cleaned up", "removedCount", cleanupIndex, "remainingCount", len(tc.packets))
 	}
 
 	// 안전장치: 최대 패킷 수 제한
-	if len(tb.packets) > tb.maxPackets {
-		excessCount := len(tb.packets) - tb.maxPackets
-		tb.packets = tb.packets[excessCount:]
+	if len(tc.packets) > tc.maxPackets {
+		excessCount := len(tc.packets) - tc.maxPackets
+		tc.packets = tc.packets[excessCount:]
 		// 키패킷 인덱스 조정
-		if tb.lastKeyPacketIndex >= excessCount {
-			tb.lastKeyPacketIndex -= excessCount
+		if tc.lastKeyPacketIndex >= excessCount {
+			tc.lastKeyPacketIndex -= excessCount
 		} else {
-			tb.lastKeyPacketIndex = -1
+			tc.lastKeyPacketIndex = -1
 		}
 
-		slog.Warn("Buffer overflow protection triggered", "removedCount", excessCount, "maxPackets", tb.maxPackets)
+		slog.Warn("Buffer overflow protection triggered", "removedCount", excessCount, "maxPackets", tc.maxPackets)
 	}
 }
 
 // getCurrentTimestamp 현재(최신) 패킷의 DTS 반환
-func (tb *TrackBuffer) getCurrentTimestamp() uint64 {
-	if len(tb.packets) == 0 {
+func (tc *TrackCache) getCurrentTimestamp() uint64 {
+	if len(tc.packets) == 0 {
 		return 0
 	}
-	return tb.packets[len(tb.packets)-1].DTS
+	return tc.packets[len(tc.packets)-1].DTS
 }
 
 // hasKeyPacketAfter 지정된 인덱스 이후에 최소 시간 내 키패킷이 있는지 확인
-func (tb *TrackBuffer) hasKeyPacketAfter(index int, minTime uint64) bool {
-	for i := index + 1; i < len(tb.packets); i++ {
-		packet := tb.packets[i]
+func (tc *TrackCache) hasKeyPacketAfter(index int, minTime uint64) bool {
+	for i := index + 1; i < len(tc.packets); i++ {
+		packet := tc.packets[i]
 		if packet.IsKeyPacket() && packet.DTS >= minTime {
 			return true
 		}
@@ -138,63 +138,63 @@ func (tb *TrackBuffer) hasKeyPacketAfter(index int, minTime uint64) bool {
 }
 
 // getBufferDuration 현재 버퍼의 총 지속 시간 반환 (ms)
-func (tb *TrackBuffer) getBufferDuration() uint64 {
-	if len(tb.packets) < 2 {
+func (tc *TrackCache) getBufferDuration() uint64 {
+	if len(tc.packets) < 2 {
 		return 0
 	}
-	return tb.packets[len(tb.packets)-1].DTS - tb.packets[0].DTS
+	return tc.packets[len(tc.packets)-1].DTS - tc.packets[0].DTS
 }
 
 // 메타데이터를 캐시에 추가합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) AddMetadata(metadata map[string]string) {
+func (tc *TrackCache) AddMetadata(metadata map[string]string) {
 	// Make a copy of metadata to avoid reference issues
 	cached := make(map[string]string)
 	for k, v := range metadata {
 		cached[k] = v
 	}
 
-	tb.metadata = cached
+	tc.metadata = cached
 	slog.Debug("Metadata cached")
 }
 
 // 새로운 플레이어를 위해 적절한 순서로 모든 캐시된 패킷을 반환합니다
 // H.264 디코딩을 위해 키패킷부터 시작하는 GOP를 보장합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) GetCachedPackets() []Packet {
+func (tc *TrackCache) GetCachedPackets() []Packet {
 	allPackets := make([]Packet, 0)
 
 	// 1. 모든 extra data 먼저 추가 (비디오 → 오디오 순서)
 	// 비디오 설정 패킷 (SPS/PPS) 먼저
 	for codec := H264; codec <= AV1; codec++ {
-		if extraPacket, exists := tb.extraData[codec]; exists {
+		if extraPacket, exists := tc.extraData[codec]; exists {
 			allPackets = append(allPackets, extraPacket)
 			slog.Debug("Added video config packet", "codec", codec, "timestamp", extraPacket.DTS)
 		}
 	}
 	// 오디오 설정 패킷
 	for codec := AAC; codec <= MP3; codec++ {
-		if extraPacket, exists := tb.extraData[codec]; exists {
+		if extraPacket, exists := tc.extraData[codec]; exists {
 			allPackets = append(allPackets, extraPacket)
 			slog.Debug("Added audio config packet", "codec", codec, "timestamp", extraPacket.DTS)
 		}
 	}
 
 	// 2. 키패킷부터 시작하는 패킷들만 포함 (디코딩 보장)
-	if tb.lastKeyPacketIndex >= 0 && tb.lastKeyPacketIndex < len(tb.packets) {
+	if tc.lastKeyPacketIndex >= 0 && tc.lastKeyPacketIndex < len(tc.packets) {
 		// 마지막 키패킷부터 끝까지의 패킷들
-		keyPacketBasedPackets := tb.packets[tb.lastKeyPacketIndex:]
+		keyPacketBasedPackets := tc.packets[tc.lastKeyPacketIndex:]
 		allPackets = append(allPackets, keyPacketBasedPackets...)
 
 		slog.Debug("Cached packets prepared with key packet GOP",
 			"totalPackets", len(keyPacketBasedPackets),
-			"keyPacketIndex", tb.lastKeyPacketIndex,
-			"extraDataCount", len(tb.extraData))
-	} else if len(tb.packets) > 0 {
+			"keyPacketIndex", tc.lastKeyPacketIndex,
+			"extraDataCount", len(tc.extraData))
+	} else if len(tc.packets) > 0 {
 		// 키패킷이 없는 경우 경고하고 모든 패킷 포함 (fallback)
 		slog.Warn("No key packet available for new player, this may cause decoding issues",
-			"totalPackets", len(tb.packets))
-		allPackets = append(allPackets, tb.packets...)
+			"totalPackets", len(tc.packets))
+		allPackets = append(allPackets, tc.packets...)
 	}
 
 	return allPackets
@@ -202,14 +202,14 @@ func (tb *TrackBuffer) GetCachedPackets() []Packet {
 
 // 캐시된 메타데이터를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) GetMetadata() map[string]string {
-	if tb.metadata == nil {
+func (tc *TrackCache) GetMetadata() map[string]string {
+	if tc.metadata == nil {
 		return nil
 	}
 
 	// Return a copy to avoid reference issues
 	cached := make(map[string]string)
-	for k, v := range tb.metadata {
+	for k, v := range tc.metadata {
 		cached[k] = v
 	}
 
@@ -218,53 +218,53 @@ func (tb *TrackBuffer) GetMetadata() map[string]string {
 
 // Clear 모든 캐시된 데이터를 정리합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) Clear() {
-	tb.extraData = make(map[Codec]Packet)
-	tb.packets = make([]Packet, 0)
-	tb.metadata = nil
+func (tc *TrackCache) Clear() {
+	tc.extraData = make(map[Codec]Packet)
+	tc.packets = make([]Packet, 0)
+	tc.metadata = nil
 
 	slog.Debug("Stream buffer cleared")
 }
 
 // 캐시된 데이터가 있으면 true를 반환합니다
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) HasCachedData() bool {
-	hasPackets := len(tb.packets) > 0
-	hasExtraData := len(tb.extraData) > 0
-	hasMetadata := tb.metadata != nil
+func (tc *TrackCache) HasCachedData() bool {
+	hasPackets := len(tc.packets) > 0
+	hasExtraData := len(tc.extraData) > 0
+	hasMetadata := tc.metadata != nil
 
 	return hasPackets || hasExtraData || hasMetadata
 }
 
 // 캐시 통계를 반환합니다 (개선된 버전)
 // 이벤트 드리븐: 이벤트 루프에서 호출되어야 합니다
-func (tb *TrackBuffer) GetCacheStats() map[string]any {
-	bufferDuration := tb.getBufferDuration()
-	keyPacketCount := tb.getKeyPacketCount()
+func (tc *TrackCache) GetCacheStats() map[string]any {
+	bufferDuration := tc.getBufferDuration()
+	keyPacketCount := tc.getKeyPacketCount()
 
 	stats := map[string]any{
 		// 기본 정보
-		"total_packet_count": len(tb.packets),
-		"extra_data_count":   len(tb.extraData),
-		"has_metadata":       tb.metadata != nil,
+		"total_packet_count": len(tc.packets),
+		"extra_data_count":   len(tc.extraData),
+		"has_metadata":       tc.metadata != nil,
 
 		// 시간 기반 통계
 		"buffer_duration_ms":     bufferDuration,
 		"buffer_duration_sec":    float64(bufferDuration) / 1000.0,
-		"min_buffer_duration_ms": tb.minBufferDurationMs,
-		"max_buffer_duration_ms": tb.maxBufferDurationMs,
+		"min_buffer_duration_ms": tc.minBufferDurationMs,
+		"max_buffer_duration_ms": tc.maxBufferDurationMs,
 
 		// 키패킷 통계
 		"key_packet_count":      keyPacketCount,
-		"last_key_packet_index": tb.lastKeyPacketIndex,
+		"last_key_packet_index": tc.lastKeyPacketIndex,
 
 		// 버퍼 효율성
-		"buffer_utilization": tb.getBufferUtilization(),
-		"max_packets_limit":  tb.maxPackets,
+		"buffer_utilization": tc.getBufferUtilization(),
+		"max_packets_limit":  tc.maxPackets,
 	}
 
 	// 평균 키패킷 간격 계산 (키패킷이 2개 이상일 때)
-	if avgInterval := tb.getAverageKeyPacketInterval(); avgInterval > 0 {
+	if avgInterval := tc.getAverageKeyPacketInterval(); avgInterval > 0 {
 		stats["avg_keypacket_interval_ms"] = avgInterval
 		stats["avg_keypacket_interval_sec"] = float64(avgInterval) / 1000.0
 	}
@@ -273,9 +273,9 @@ func (tb *TrackBuffer) GetCacheStats() map[string]any {
 }
 
 // getKeyPacketCount 버퍼 내 키패킷 개수 반환
-func (tb *TrackBuffer) getKeyPacketCount() int {
+func (tc *TrackCache) getKeyPacketCount() int {
 	count := 0
-	for _, packet := range tb.packets {
+	for _, packet := range tc.packets {
 		if packet.IsKeyPacket() {
 			count++
 		}
@@ -284,10 +284,10 @@ func (tb *TrackBuffer) getKeyPacketCount() int {
 }
 
 // getAverageKeyPacketInterval 평균 키패킷 간격 반환 (ms)
-func (tb *TrackBuffer) getAverageKeyPacketInterval() uint64 {
+func (tc *TrackCache) getAverageKeyPacketInterval() uint64 {
 	keyPacketTimes := make([]uint64, 0)
 
-	for _, packet := range tb.packets {
+	for _, packet := range tc.packets {
 		if packet.IsKeyPacket() {
 			keyPacketTimes = append(keyPacketTimes, packet.DTS)
 		}
@@ -306,15 +306,15 @@ func (tb *TrackBuffer) getAverageKeyPacketInterval() uint64 {
 }
 
 // getBufferUtilization 버퍼 사용률 반환 (0.0 ~ 1.0)
-func (tb *TrackBuffer) getBufferUtilization() float64 {
-	if tb.maxBufferDurationMs == 0 {
+func (tc *TrackCache) getBufferUtilization() float64 {
+	if tc.maxBufferDurationMs == 0 {
 		return 0.0
 	}
 
-	currentDuration := tb.getBufferDuration()
-	if currentDuration >= tb.maxBufferDurationMs {
+	currentDuration := tc.getBufferDuration()
+	if currentDuration >= tc.maxBufferDurationMs {
 		return 1.0
 	}
 
-	return float64(currentDuration) / float64(tb.maxBufferDurationMs)
+	return float64(currentDuration) / float64(tc.maxBufferDurationMs)
 }

@@ -11,7 +11,7 @@ import (
 // Stream represents a protocol-independent stream with multiple tracks
 type Stream struct {
 	id     string
-	tracks []*Track // 트랙 배열 (인덱스 기반, 버퍼 포함)
+	tracks []*Track // 트랙 배열 (인덱스 기반, 캐시 포함)
 
 	// Stream routing
 	sinks map[uintptr]MediaSink // Multiple sinks indexed by node ID
@@ -152,9 +152,9 @@ func (s *Stream) handleChannel(data any) {
 func (s *Stream) shutdown() {
 	slog.Info("Stream shutdown starting", "streamID", s.id)
 
-	// Clear all track buffers
+	// Clear all track caches
 	for _, track := range s.tracks {
-		track.Buffer.Clear()
+		track.Cache.Clear()
 	}
 
 	slog.Info("Stream shutdown completed", "streamID", s.id)
@@ -186,7 +186,7 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 
 	// Send cached metadata first (from first track buffer if exists)
 	if len(s.tracks) > 0 {
-		if metadata := s.tracks[0].Buffer.GetMetadata(); metadata != nil {
+		if metadata := s.tracks[0].Cache.GetMetadata(); metadata != nil {
 			if err := sink.SendMetadata(s.id, metadata); err != nil {
 				slog.Error("Failed to send cached metadata to sink", "streamID", s.id, "nodeId", nodeId, "err", err)
 			} else {
@@ -197,7 +197,7 @@ func (s *Stream) sendCachedDataToSink(sink MediaSink) error {
 
 	// Send cached packets from all tracks
 	for trackIndex, track := range s.tracks {
-		cachedPackets := track.Buffer.GetCachedPackets()
+		cachedPackets := track.Cache.GetCachedPackets()
 		if len(cachedPackets) > 0 {
 			slog.Debug("Sending cached packets to new sink", "streamID", s.id, "trackIndex", trackIndex, "nodeId", nodeId, "packetCount", len(cachedPackets))
 
@@ -236,7 +236,7 @@ func (s *Stream) Sinks() []MediaSink {
 // HasCachedData returns whether the stream has any cached data
 func (s *Stream) HasCachedData() bool {
 	for _, track := range s.tracks {
-		if track.Buffer.HasCachedData() {
+		if track.Cache.HasCachedData() {
 			return true
 		}
 	}
@@ -252,7 +252,7 @@ func (s *Stream) CacheStats() map[string]any {
 
 	// 트랙별 통계 추가
 	for i, track := range s.tracks {
-		trackStats := track.Buffer.GetCacheStats()
+		trackStats := track.Cache.GetCacheStats()
 		stats[fmt.Sprintf("track_%d", i)] = trackStats
 	}
 
@@ -277,8 +277,8 @@ func (s *Stream) handleSendPacket(event sendPacketEvent) {
 		return
 	}
 
-	// 트랙별 버퍼에 캐시
-	s.tracks[trackIndex].Buffer.AddPacket(packet)
+	// 트랙별 캐시에 저장
+	s.tracks[trackIndex].Cache.AddPacket(packet)
 
 	// 모든 sink에 브로드캐스트
 	for _, sink := range s.sinks {
@@ -295,9 +295,9 @@ func (s *Stream) handleSendPacket(event sendPacketEvent) {
 func (s *Stream) handleSendMetadata(event sendMetadataEvent) {
 	metadata := event.metadata
 
-	// 첫 번째 트랙 버퍼에 메타데이터 저장 (임시)
+	// 첫 번째 트랙 캐시에 메타데이터 저장 (임시)
 	if len(s.tracks) > 0 {
-		s.tracks[0].Buffer.AddMetadata(metadata)
+		s.tracks[0].Cache.AddMetadata(metadata)
 	}
 
 	// 모든 sink에 브로드캐스트
