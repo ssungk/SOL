@@ -65,35 +65,22 @@ func GetBuffer(size int) *Buffer {
 
 // Data 버퍼의 바이트 슬라이스 반환
 func (b *Buffer) Data() []byte {
-	if b == nil {
-		return nil
-	}
 	return b.data
 }
 
 // Len 버퍼 길이 반환
 func (b *Buffer) Len() int {
-	if b == nil {
-		return 0
-	}
 	return len(b.data)
 }
 
 // AddRef 참조 카운트를 증가시키고 자신을 반환 (멀티 컨슈머용)
 func (b *Buffer) AddRef() *Buffer {
-	if b == nil {
-		return nil
-	}
 	atomic.AddInt32(&b.refCnt, 1)
 	return b
 }
 
 // Release 참조 카운트를 감소시키고, 0이 되면 풀에 반납
 func (b *Buffer) Release() {
-	if b == nil {
-		return
-	}
-
 	if atomic.AddInt32(&b.refCnt, -1) == 0 {
 		// 참조 카운트가 0이 되면 풀에 반납
 		if b.pool != nil {
@@ -128,18 +115,11 @@ func (b *Buffer) Release() {
 
 // RefCount 현재 참조 카운트 반환 (디버깅용)
 func (b *Buffer) RefCount() int32 {
-	if b == nil {
-		return 0
-	}
 	return atomic.LoadInt32(&b.refCnt)
 }
 
 // Copy 데이터를 복사하여 새로운 Buffer 생성
 func (b *Buffer) Copy() *Buffer {
-	if b == nil {
-		return nil
-	}
-	
 	newBuffer := GetBuffer(len(b.data))
 	copy(newBuffer.data, b.data)
 	return newBuffer
