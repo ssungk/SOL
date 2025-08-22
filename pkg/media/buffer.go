@@ -94,10 +94,3 @@ func (b *Buffer) Release() {
 func (b *Buffer) RefCount() int32 {
 	return atomic.LoadInt32(&b.refCnt)
 }
-
-// Copy 데이터를 복사하여 새로운 Buffer 생성
-func (b *Buffer) Copy() *Buffer {
-	newBuffer := GetBuffer(len(b.data))
-	copy(newBuffer.data, b.data)
-	return newBuffer
-}
