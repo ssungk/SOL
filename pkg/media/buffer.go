@@ -85,27 +85,8 @@ func (b *Buffer) Release() {
 		// 참조 카운트가 0이 되면 풀에 반납
 		if b.pool != nil {
 			// 원본 크기로 복구하여 풀에 반납
-			switch b.pool {
-			case pool8B:
-				original := b.data[:cap(b.data)][:8]
-				b.pool.Put(original)
-			case pool16B:
-				original := b.data[:cap(b.data)][:16]
-				b.pool.Put(original)
-			case pool32B:
-				original := b.data[:cap(b.data)][:32]
-				b.pool.Put(original)
-			case pool128B:
-				original := b.data[:cap(b.data)][:128]
-				b.pool.Put(original)
-			case pool1KB:
-				original := b.data[:cap(b.data)][:1024]
-				b.pool.Put(original)
-			case pool4KB:
-				original := b.data[:cap(b.data)][:4096]
-				b.pool.Put(original)
-			case pool64KB:
-				original := b.data[:cap(b.data)][:65536]
+			if b.pool != nil {
+				original := b.data[:cap(b.data)]
 				b.pool.Put(original)
 			}
 		}
