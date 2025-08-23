@@ -75,23 +75,22 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 	// 청크 데이터 읽기
 	if chunkSize > 0 {
-		// 청크용 버퍼 할당 및 읽기
-		chunkBuffer := make([]byte, chunkSize)
-		if _, err := io.ReadFull(r, chunkBuffer); err != nil {
-			// Pool 버퍼는 abortChunkStream에서 자동 반환
+		// media.Buffer를 사용한 풀링된 버퍼 할당
+		buffer := media.NewBuffer(int(chunkSize))
+		if _, err := io.ReadFull(r, buffer.Data()); err != nil {
+			buffer.Release() // 실패시 버퍼 해제
 			ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 			return nil, err
 		}
 
-		// 읽은 청크를 추가 (기존 로직)
-		ms.readerContext.addNewChunk(basicHeader.chunkStreamID, chunkBuffer)
-
-		// media.Buffer로도 중복 저장 (추가 구현)
-		mediaBuffer := media.NewBuffer(int(chunkSize))
-		copy(mediaBuffer.Data(), chunkBuffer)
-		ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, mediaBuffer)
-
-		return NewChunk(basicHeader, messageHeader, chunkBuffer), nil
+		// media.Buffer를 직접 사용하여 컨텍스트에 추가
+		ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, buffer)
+		
+		// Chunk 반환용 데이터 복사 (호환성 유지)
+		chunkData := make([]byte, len(buffer.Data()))
+		copy(chunkData, buffer.Data())
+		
+		return NewChunk(basicHeader, messageHeader, chunkData), nil
 	}
 
 	// 빈 청크인 경우

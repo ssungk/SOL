@@ -4,65 +4,42 @@ import (
 	"fmt"
 	"log/slog"
 	"sol/pkg/media"
-	"sync"
 )
 
-const (
-	SmallBufferSize  = 4 * 1024    // 4KB
-	MediumBufferSize = 64 * 1024   // 64KB
-	LargeBufferSize  = 1024 * 1024 // 1MB
-)
 
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
-	payload        map[uint32][]*media.Buffer
-	payloads       map[uint32][][]byte
+	payloads map[uint32][]*media.Buffer // 메모리 풀링을 위한 버퍼 참조
 	payloadLengths map[uint32]uint32
-	pooledBuffers  map[uint32]*sync.Pool // 각 chunkStreamId별 pool 추적
-	mediaHeaders   map[uint32][]byte     // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	mediaHeaders   map[uint32][]byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
-
-	// 크기별 Pool 계층
-	smallPool  *sync.Pool // ~4KB
-	mediumPool *sync.Pool // ~64KB
-	largePool  *sync.Pool // ~1MB
 }
 
 func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
 		messageHeaders: make(map[uint32]*messageHeader),
-		payload:        make(map[uint32][]*media.Buffer),
-		payloads:       make(map[uint32][][]byte),
+		payloads: make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
-		pooledBuffers:  make(map[uint32]*sync.Pool),
 		mediaHeaders:   make(map[uint32][]byte),
 		chunkSize:      DefaultChunkSize,
-
-		// 크기별 Pool 계층 초기화
-		smallPool:  NewBufferPool(SmallBufferSize),
-		mediumPool: NewBufferPool(MediumBufferSize),
-		largePool:  NewBufferPool(LargeBufferSize),
 	}
 }
 
 func (mrc *messageReaderContext) setChunkSize(size uint32) {
 	mrc.chunkSize = size
-	// Pool 크기는 고정이므로 청크 크기 변경 시에도 기존 Pool 사용
 }
 
 func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
-	// Pool 버퍼 반납 후 상태 제거
-	if pool, exists := mrc.pooledBuffers[chunkStreamId]; exists {
-		if payload, payloadExists := mrc.payloads[chunkStreamId]; payloadExists {
-			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
+	// 버퍼들 해제
+	if buffers, exists := mrc.payloads[chunkStreamId]; exists {
+		for _, buffer := range buffers {
+			buffer.Release()
 		}
 	}
-
 	// 해당 청크 스트림의 모든 상태 제거
 	delete(mrc.messageHeaders, chunkStreamId)
 	delete(mrc.payloads, chunkStreamId)
 	delete(mrc.payloadLengths, chunkStreamId)
-	delete(mrc.pooledBuffers, chunkStreamId)
 	delete(mrc.mediaHeaders, chunkStreamId)
 }
 
@@ -70,40 +47,23 @@ func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHea
 	ms.messageHeaders[chunkStreamId] = messageHeader
 }
 
-// selectAppropriatePool 메시지 크기에 따라 적절한 Pool 선택
-func (ms *messageReaderContext) selectAppropriatePool(size uint32) *sync.Pool {
-	switch {
-	case size <= SmallBufferSize:
-		return ms.smallPool
-	case size <= MediumBufferSize:
-		return ms.mediumPool
-	default:
-		return ms.largePool
-	}
-}
 
 // storeMediaHeader 미디어 헤더 저장
 func (ms *messageReaderContext) storeMediaHeader(chunkStreamId uint32, header []byte) {
 	ms.mediaHeaders[chunkStreamId] = header
 }
 
-// addNewChunk 새로운 청크를 추가
-func (ms *messageReaderContext) addNewChunk(chunkStreamId uint32, chunkData []byte) {
+
+// addMediaBuffer 미디어 버퍼를 추가
+func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
 	if ms.payloads[chunkStreamId] == nil {
-		ms.payloads[chunkStreamId] = make([][]byte, 0)
+		ms.payloads[chunkStreamId] = make([]*media.Buffer, 0)
 	}
-	ms.payloads[chunkStreamId] = append(ms.payloads[chunkStreamId], chunkData)
-	// length 업데이트는 addMediaBuffer에서만 수행
+	
+	ms.payloads[chunkStreamId] = append(ms.payloads[chunkStreamId], buffer)
+	ms.payloadLengths[chunkStreamId] += uint32(len(buffer.Data()))
 }
 
-// addMediaBuffer media.Buffer를 추가
-func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
-	if ms.payload[chunkStreamId] == nil {
-		ms.payload[chunkStreamId] = make([]*media.Buffer, 0)
-	}
-	ms.payload[chunkStreamId] = append(ms.payload[chunkStreamId], buffer)
-	ms.payloadLengths[chunkStreamId] += uint32(buffer.Len())
-}
 
 func (ms *messageReaderContext) isInitialChunk(chunkStreamId uint32) bool {
 	_, ok := ms.payloads[chunkStreamId]
@@ -152,7 +112,7 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 			continue
 		}
 
-		payload, ok := ms.payloads[chunkStreamId]
+		buffers, ok := ms.payloads[chunkStreamId]
 		if !ok {
 			continue
 		}
@@ -176,7 +136,16 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		// 메시지 생성
 		var msg *Message
 
-		// 원본 청크 배열 보관 (zero-copy용) - payload 수정 전에 보관
+		// 버퍼에서 데이터 복사하여 payload 생성 (버퍼 해제 후에도 안전)
+		payload := make([][]byte, len(buffers))
+		for i, buffer := range buffers {
+			// 데이터 복사하여 버퍼 해제 후에도 안전하게 사용
+			chunkData := make([]byte, len(buffer.Data()))
+			copy(chunkData, buffer.Data())
+			payload[i] = chunkData
+		}
+		
+		// 원본 청크 배열 보관 (zero-copy용)
 		originalChunks := make([][]byte, len(payload))
 		copy(originalChunks, payload)
 
@@ -227,8 +196,13 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		// 원본 청크 배열 설정 (zero-copy용)
 		msg.chunks = originalChunks
 
-		// 청크 배열은 Pool 사용하지 않으므로 반납 불필요
-
+		// 버퍼들 해제
+		if buffers, exists := ms.payloads[chunkStreamId]; exists {
+			for _, buffer := range buffers {
+				buffer.Release()
+			}
+		}
+		
 		// 상태 정리
 		delete(ms.payloadLengths, chunkStreamId)
 		delete(ms.payloads, chunkStreamId)
@@ -239,10 +213,3 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 	return nil, fmt.Errorf("no complete message available")
 }
 
-func NewBufferPool(size uint32) *sync.Pool {
-	return &sync.Pool{
-		New: func() any {
-			return make([]byte, size)
-		},
-	}
-}
