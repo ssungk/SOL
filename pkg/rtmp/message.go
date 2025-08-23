@@ -67,19 +67,6 @@ func (m *Message) FullPayload() []byte {
 	return result
 }
 
-// PayloadChunks 버퍼들을 [][]byte 형태로 반환 (기존 호환성용)
-func (m *Message) PayloadChunks() [][]byte {
-	if len(m.payloads) == 0 {
-		return nil
-	}
-	
-	result := make([][]byte, len(m.payloads))
-	for i, buffer := range m.payloads {
-		result[i] = buffer.Data()
-	}
-	
-	return result
-}
 
 // Release 모든 버퍼의 참조 카운트를 감소시킴
 func (m *Message) Release() {

@@ -198,7 +198,7 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 		return
 	}
 
-	// 코덱 호환성 검증: 스트림의 모든 트랙 코덱이 Sink에서 지원되는지 확인
+	// 코덱 검증: 스트림의 모든 트랙 코덱이 Sink에서 지원되는지 확인
 	for _, trackCodec := range stream.TrackCodecs() {
 		if !media.ContainsCodec(event.SupportedCodecs, trackCodec) {
 			event.ResponseChan <- media.NewErrorResponse(fmt.Sprintf("Unsupported codec: %d", trackCodec))

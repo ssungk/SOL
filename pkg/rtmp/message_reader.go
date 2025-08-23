@@ -32,7 +32,7 @@ func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
 			slog.Error("readChunk failed", "err", err)
 			return nil, err
 		}
-		slog.Debug("Chunk read", "chunkStreamID", chunk.basicHeader.chunkStreamID, "payload_len", len(chunk.payload))
+		slog.Debug("Chunk read", "chunkStreamID", chunk.basicHeader.chunkStreamID, "payload_len", len(chunk.payload.Data()))
 
 		message, err := ms.readerContext.popMessageIfPossible()
 		if err == nil {
@@ -85,16 +85,13 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 
 		// media.Buffer를 직접 사용하여 컨텍스트에 추가
 		ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, buffer)
-		
-		// Chunk 반환용 데이터 복사 (호환성 유지)
-		chunkData := make([]byte, len(buffer.Data()))
-		copy(chunkData, buffer.Data())
-		
-		return NewChunk(basicHeader, messageHeader, chunkData), nil
+
+		return NewChunk(basicHeader, messageHeader, buffer), nil
 	}
 
 	// 빈 청크인 경우
-	return NewChunk(basicHeader, messageHeader, []byte{}), nil
+	emptyBuffer := media.NewBuffer(0)
+	return NewChunk(basicHeader, messageHeader, emptyBuffer), nil
 }
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리

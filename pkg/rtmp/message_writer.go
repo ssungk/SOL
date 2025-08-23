@@ -28,8 +28,13 @@ func (mw *messageWriter) writeMessage(w io.Writer, msg *Message) error {
 	// 모든 청크를 순차적으로 전송 (zero-copy)
 	for _, chunk := range chunks {
 		if err := mw.writeChunk(w, chunk); err != nil {
+			// 오류 시 남은 청크들 해제
+			for _, remainingChunk := range chunks {
+				remainingChunk.Release()
+			}
 			return err
 		}
+		chunk.Release() // 전송 완료 후 청크 해제
 	}
 
 	return nil
@@ -127,17 +132,22 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 		msg.messageHeader.streamID,
 	)
 
-	// payload 슬라이스 (복사 없이 참조) - 미디어 메시지는 FullPayload 사용
-	var payloadSlice []byte
+	// payload 버퍼 생성 - 미디어 메시지는 FullPayload 사용
+	var payloadBuffer *media.Buffer
 	if chunkSize > 0 {
+		var payloadSlice []byte
 		if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
 			payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
 		} else {
 			payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
 		}
+		payloadBuffer = media.NewBuffer(len(payloadSlice))
+		copy(payloadBuffer.Data(), payloadSlice)
+	} else {
+		payloadBuffer = media.NewBuffer(0)
 	}
 
-	return NewChunk(basicHdr, msgHdr, payloadSlice)
+	return NewChunk(basicHdr, msgHdr, payloadBuffer)
 }
 
 // 연속 청크 생성 (fmt=3 - no header)
@@ -149,15 +159,18 @@ func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize 
 	// Type 3는 message header가 없음
 	var msgHdr *messageHeader = nil
 
-	// payload 슬라이스 (복사 없이 참조) - 미디어 메시지는 FullPayload 사용
+	// payload 버퍼 생성 - 미디어 메시지는 FullPayload 사용
+	var payloadBuffer *media.Buffer
 	var payloadSlice []byte
 	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
 		payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
 	} else {
 		payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
 	}
+	payloadBuffer = media.NewBuffer(len(payloadSlice))
+	copy(payloadBuffer.Data(), payloadSlice)
 
-	return NewChunk(basicHdr, msgHdr, payloadSlice)
+	return NewChunk(basicHdr, msgHdr, payloadBuffer)
 }
 
 // 단일 청크 전송
@@ -189,8 +202,8 @@ func (mw *messageWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 	}
 
 	// Payload 전송 (zero-copy)
-	if len(chunk.payload) > 0 {
-		if _, err := w.Write(chunk.payload); err != nil {
+	if chunk.payload != nil && len(chunk.payload.Data()) > 0 {
+		if _, err := w.Write(chunk.payload.Data()); err != nil {
 			return err
 		}
 	}

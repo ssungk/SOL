@@ -94,14 +94,6 @@ func (p *Packet) Release() {
 	}
 }
 
-// DataAsBytes 버퍼들을 [][]byte로 변환 (임시 호환성)
-func (p *Packet) DataAsBytes() [][]byte {
-	result := make([][]byte, len(p.Data))
-	for i, buffer := range p.Data {
-		result[i] = buffer.Data()
-	}
-	return result
-}
 
 // NewPacket 미디어 패킷 생성 (CTS 포함)
 func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data []*Buffer) Packet {
