@@ -144,58 +144,41 @@ func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId u
 	return nil
 }
 
-func readBasicHeader(r io.Reader) (basicHeader, error) {
-	slog.Debug("readBasicHeader called")
-	buf := [1]byte{}
-	if _, err := io.ReadFull(r, buf[:1]); err != nil {
+func readBasicHeader(r io.Reader) (header basicHeader, err error) {
+	header1 := [1]byte{}
+	if _, err = io.ReadFull(r, header1[:]); err != nil {
 		slog.Debug("readBasicHeader ReadFull failed", "err", err)
-		return basicHeader{}, err
+		return
 	}
 
-	format := (buf[0] & 0xC0) >> 6
-	firstByte := buf[0] & 0x3F
-	var chunkStreamId uint32
+	format := (header1[0] & 0xC0) >> 6
+	chunkStreamId := uint32(header1[0] & 0x3F)
 
-	switch firstByte {
+	switch chunkStreamId {
 	case 0:
 		// 2바이트 basic header: chunk stream ID = 64 + 다음 바이트 값
-		secondByte := [1]byte{}
-		if _, err := io.ReadFull(r, secondByte[:]); err != nil {
-			return basicHeader{}, fmt.Errorf("failed to read 2-byte basic header: %w", err)
+		header2 := [1]byte{}
+		if _, err = io.ReadFull(r, header2[:]); err != nil {
+			err = fmt.Errorf("failed to read 2-byte basic header: %w", err)
+			return
 		}
-		chunkStreamId = 64 + uint32(secondByte[0])
-
-		// 범위 검증 (64-319)
-		if chunkStreamId > 319 {
-			return basicHeader{}, fmt.Errorf("invalid chunk stream ID %d for 2-byte header (must be 64-319)", chunkStreamId)
-		}
-
+		chunkStreamId = 64 + uint32(header2[0]) // 자동으로 64-319 범위
 	case 1:
 		// 3바이트 basic header: chunk stream ID = 64 + 리틀엔디안 16비트
-		extraBytes := [2]byte{}
-		if _, err := io.ReadFull(r, extraBytes[:2]); err != nil {
-			return basicHeader{}, fmt.Errorf("failed to read 3-byte basic header: %w", err)
+		header23 := [2]byte{}
+		if _, err = io.ReadFull(r, header23[:]); err != nil {
+			err = fmt.Errorf("failed to read 3-byte basic header: %w", err)
+			return
 		}
-		value := uint32(binary.LittleEndian.Uint16(extraBytes[:]))
-		chunkStreamId = 64 + value
-
-		// 범위 검증 (320-65599)
-		if chunkStreamId < 320 || chunkStreamId > 65599 {
-			return basicHeader{}, fmt.Errorf("invalid chunk stream ID %d for 3-byte header (must be 320-65599)", chunkStreamId)
-		}
-
+		value := uint32(binary.LittleEndian.Uint16(header23[:]))
+		chunkStreamId = 64 + value // 64-65599 범위 (겹치는 구간 허용)
 	default:
-		// 1바이트 basic header: chunk stream ID = 2-63 (직접 사용)
-		chunkStreamId = uint32(firstByte)
-
-		// 유효한 범위 검증 (2-63)
-		if chunkStreamId < 2 {
-			return basicHeader{}, fmt.Errorf("invalid chunk stream ID %d (must be >= 2)", chunkStreamId)
-		}
-
+		// 1바이트 basic header: chunk stream ID = 2-63 (이미 올바른 값)
+		// switch문으로 0과 1은 이미 처리되었으므로 2-63 범위 보장됨
 	}
 
-	return newBasicHeader(format, chunkStreamId), nil
+	header = newBasicHeader(format, chunkStreamId)
+	return
 }
 
 func readMessageHeader(r io.Reader, fmt byte, header *messageHeader) (*messageHeader, error) {

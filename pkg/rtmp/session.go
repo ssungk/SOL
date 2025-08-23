@@ -1,6 +1,7 @@
 package rtmp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -16,9 +17,10 @@ import (
 
 // session RTMP에서 사용하는 세션 구조체 (이벤트 루프 기반)
 type session struct {
-	reader *messageReader
-	writer *messageWriter
-	conn   net.Conn
+	reader    *messageReader
+	writer    *messageWriter
+	conn      net.Conn
+	bufReader *bufio.ReadWriter
 
 	// 스트림 관리 (이벤트 루프 내에서만 접근)
 	appName string
@@ -47,10 +49,17 @@ type session struct {
 // newSession 새로운 세션 생성 (내부 사용)
 func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup) *session {
 	ctx, cancel := context.WithCancel(context.Background())
+	
+	// bufio.ReadWriter 생성 (8KB 버퍼 크기)
+	bufReader := bufio.NewReaderSize(conn, 8192)
+	bufWriter := bufio.NewWriterSize(conn, 8192)
+	readWriter := bufio.NewReadWriter(bufReader, bufWriter)
+	
 	s := &session{
 		reader:             newMessageReader(),
 		writer:             newMessageWriter(),
 		conn:               conn,
+		bufReader:          readWriter,
 		mediaServerChannel: mediaServerChannel,
 		channel:            make(chan any, media.DefaultChannelBufferSize),
 		ctx:                ctx,
@@ -118,7 +127,7 @@ func (s *session) readLoop() {
 	slog.Info("Handshake successful with", "addr", s.conn.RemoteAddr())
 
 	for {
-		message, err := s.reader.readNextMessage(s.conn)
+		message, err := s.reader.readNextMessage(s.bufReader)
 		if err != nil {
 			return
 		}
@@ -233,11 +242,13 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 			message.payloads[i] = buffer.AddRef() // 참조 카운트 증가
 		}
 	}
-	if err := s.writer.writeMessage(s.conn, message); err != nil {
+	if err := s.writer.writeMessage(s.bufReader, message); err != nil {
 		slog.Error("Failed to send packet to RTMP session", "sessionId", s.ID(), "err", err)
 		message.Release() // 오류 시에도 메모리 해제
 		return
 	}
+	// 즉시 플러시하여 전송 보장
+	s.bufReader.Flush()
 	message.Release() // 전송 완료 후 메모리 해제
 }
 
@@ -565,7 +576,10 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 		}(),
 	}
 
-	err = s.writer.writeMessage(s.conn, message)
+	err = s.writer.writeMessage(s.bufReader, message)
+	if err == nil {
+		s.bufReader.Flush()
+	}
 	message.Release() // 전송 완료 후 메모리 해제
 	return err
 }
@@ -724,7 +738,7 @@ func (s *session) handleConnect(values []any) {
 		return
 	}
 
-	err = s.writer.writeSetChunkSize(s.conn, 4096)
+	err = s.writer.writeSetChunkSize(s.bufReader, 4096)
 	if err != nil {
 		return
 	}
@@ -732,10 +746,13 @@ func (s *session) handleConnect(values []any) {
 	// 서버 측에서도 청크 크기 설정 (들어오는 데이터 처리용)
 	s.reader.setChunkSize(4096)
 
-	err = s.writer.writeCommand(s.conn, sequence)
+	err = s.writer.writeCommand(s.bufReader, sequence)
 	if err != nil {
 		return
 	}
+	
+	// 명령어 전송 후 플러시
+	s.bufReader.Flush()
 }
 
 // handleCreateStream createStream 명령어 처리
@@ -762,11 +779,14 @@ func (s *session) handleCreateStream(values []any) {
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, sequence)
+	err = s.writer.writeCommand(s.bufReader, sequence)
 	if err != nil {
 		slog.Error("createStream: failed to write response", "err", err)
 		return
 	}
+	
+	// 응답 전송 후 플러시
+	s.bufReader.Flush()
 
 	slog.Info("createStream successful", "streamID", newStreamID, "transactionID", transactionID)
 }
@@ -903,7 +923,8 @@ func (s *session) handlePlay(message *Message, values []any) {
 				"description": response.Error,
 			}
 			if failedSequence, err := amf.EncodeAMF0Sequence("onStatus", 0.0, nil, failedStatusObj); err == nil {
-				s.writer.writeCommand(s.conn, failedSequence)
+				s.writer.writeCommand(s.bufReader, failedSequence)
+				s.bufReader.Flush()
 			}
 			return
 		}
@@ -929,7 +950,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, resetSequence)
+	err = s.writer.writeCommand(s.bufReader, resetSequence)
 	if err != nil {
 		slog.Error("play: failed to write reset onStatus", "err", err)
 		return
@@ -949,11 +970,14 @@ func (s *session) handlePlay(message *Message, values []any) {
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, startSequence)
+	err = s.writer.writeCommand(s.bufReader, startSequence)
 	if err != nil {
 		slog.Error("play: failed to write start onStatus", "err", err)
 		return
 	}
+	
+	// 최종 응답 전송 후 플러시
+	s.bufReader.Flush()
 
 	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
@@ -1223,9 +1247,11 @@ func (s *session) sendPublishErrorResponse(_ float64, code string, description s
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, statusSequence)
+	err = s.writer.writeCommand(s.bufReader, statusSequence)
 	if err != nil {
 		slog.Error("Failed to write publish error response", "sessionId", s.ID(), "err", err)
+	} else {
+		s.bufReader.Flush()
 	}
 }
 
@@ -1244,9 +1270,11 @@ func (s *session) sendPublishSuccessResponse(_ float64, streamPath string) {
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, statusSequence)
+	err = s.writer.writeCommand(s.bufReader, statusSequence)
 	if err != nil {
 		slog.Error("Failed to write publish success response", "sessionId", s.ID(), "err", err)
+	} else {
+		s.bufReader.Flush()
 	}
 }
 
@@ -1335,11 +1363,14 @@ func (s *session) handleGetStreamLength(values []any) {
 		return
 	}
 
-	err = s.writer.writeCommand(s.conn, sequence)
+	err = s.writer.writeCommand(s.bufReader, sequence)
 	if err != nil {
 		slog.Error("getStreamLength: failed to write response", "sessionId", s.ID(), "err", err)
 		return
 	}
+	
+	// 응답 전송 후 플러시
+	s.bufReader.Flush()
 
 	slog.Debug("getStreamLength response sent", "sessionId", s.ID(), "streamName", streamName, "length", streamLength, "transactionID", transactionID)
 }

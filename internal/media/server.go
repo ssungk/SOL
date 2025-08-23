@@ -118,14 +118,14 @@ func (s *MediaServer) shutdown() {
 	slog.Info("Media Server stopped successfully")
 }
 
-// AddNode 노드 추가
-func (s *MediaServer) AddNode(nodeID uintptr, node media.MediaNode) {
+// addNode 노드 추가 (이벤트 루프 내에서만 호출)
+func (s *MediaServer) addNode(nodeID uintptr, node media.MediaNode) {
 	s.nodes[nodeID] = node
 	slog.Info("Node added", "nodeID", nodeID, "nodeType", node.NodeType(), "totalNodes", len(s.nodes))
 }
 
-// RemoveNode 노드 제거
-func (s *MediaServer) RemoveNode(nodeID uintptr) {
+// removeNode 노드 제거 (이벤트 루프 내에서만 호출)
+func (s *MediaServer) removeNode(nodeID uintptr) {
 	node, exists := s.nodes[nodeID]
 	if !exists {
 		slog.Debug("Node not found for removal", "nodeID", nodeID)
@@ -143,13 +143,13 @@ func (s *MediaServer) RemoveNode(nodeID uintptr) {
 // handleNodeCreated 노드 생성 이벤트 처리
 func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
 	slog.Info("Node created", "nodeID", event.ID, "nodeType", event.Node.NodeType().String())
-	s.AddNode(event.ID, event.Node)
+	s.addNode(event.ID, event.Node)
 }
 
 // handleNodeTerminated 노드 종료 이벤트 처리
 func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
 	slog.Info("Node terminated", "nodeID", event.ID)
-	s.RemoveNode(event.ID)
+	s.removeNode(event.ID)
 }
 
 // handlePublishStarted 실제 publish 시도 처리
