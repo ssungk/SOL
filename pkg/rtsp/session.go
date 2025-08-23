@@ -802,7 +802,7 @@ func (s *Session) convertPacketToRTP(packet media.Packet) ([]byte, error) {
 	rtpHeader[11] = byte(ssrc)
 
 	// RTP 패킷 = 헤더 + 페이로드
-	rtpPacket := append(rtpHeader, payload...)
+	rtpPacket := append(rtpHeader, payload.Data()...)
 	
 	return rtpPacket, nil
 }
@@ -857,6 +857,10 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 		trackIndex = 0 // 기본값은 비디오
 	}
 	
+	// 페이로드를 Buffer로 변환
+	payloadBuffer := media.NewBuffer(len(payload))
+	copy(payloadBuffer.Data(), payload)
+	
 	packet := media.NewPacket(
 		trackIndex,
 		codec,
@@ -864,7 +868,7 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 		packetType,
 		uint64(timestamp),
 		0, // CTS = 0 (RTSP는 일반적으로 CTS 사용 안함)
-		[][]byte{payload},
+		[]*media.Buffer{payloadBuffer},
 	)
 
 	slog.Debug("Converted RTP to Packet", 

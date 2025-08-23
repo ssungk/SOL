@@ -296,6 +296,10 @@ func (p *MPEGTSParser) parseVideoES(payload []byte, pusi bool) error {
 		packetType = media.TypeKey
 	}
 	
+	// ES 데이터를 Buffer로 변환
+	esBuffer := media.NewBuffer(len(esData))
+	copy(esBuffer.Data(), esData)
+	
 	packet := media.NewPacket(
 		0, // 비디오 트랙 인덱스
 		media.H264,
@@ -303,7 +307,7 @@ func (p *MPEGTSParser) parseVideoES(payload []byte, pusi bool) error {
 		packetType,
 		pts,
 		0, // CTS (단순화)
-		[][]byte{esData},
+		[]*media.Buffer{esBuffer},
 	)
 
 	if p.session.stream != nil {
@@ -346,6 +350,10 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 		return nil
 	}
 
+	// ES 데이터를 Buffer로 변환
+	esBuffer := media.NewBuffer(len(esData))
+	copy(esBuffer.Data(), esData)
+	
 	// AAC 패킷 생성 및 전송
 	packet := media.NewPacket(
 		1, // 오디오 트랙 인덱스
@@ -354,7 +362,7 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 		media.TypeData, // 오디오는 모두 일반 데이터로 처리
 		pts,
 		0, // CTS (단순화)
-		[][]byte{esData},
+		[]*media.Buffer{esBuffer},
 	)
 
 	if p.session.stream != nil {

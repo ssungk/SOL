@@ -6,10 +6,9 @@ import (
 	"sol/pkg/media"
 )
 
-
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
-	payloads map[uint32][]*media.Buffer // 메모리 풀링을 위한 버퍼 참조
+	payloads       map[uint32][]*media.Buffer // 메모리 풀링을 위한 버퍼 참조
 	payloadLengths map[uint32]uint32
 	mediaHeaders   map[uint32][]byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
@@ -18,7 +17,7 @@ type messageReaderContext struct {
 func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
 		messageHeaders: make(map[uint32]*messageHeader),
-		payloads: make(map[uint32][]*media.Buffer),
+		payloads:       make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
 		mediaHeaders:   make(map[uint32][]byte),
 		chunkSize:      DefaultChunkSize,
@@ -47,23 +46,20 @@ func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHea
 	ms.messageHeaders[chunkStreamId] = messageHeader
 }
 
-
 // storeMediaHeader 미디어 헤더 저장
 func (ms *messageReaderContext) storeMediaHeader(chunkStreamId uint32, header []byte) {
 	ms.mediaHeaders[chunkStreamId] = header
 }
-
 
 // addMediaBuffer 미디어 버퍼를 추가
 func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
 	if ms.payloads[chunkStreamId] == nil {
 		ms.payloads[chunkStreamId] = make([]*media.Buffer, 0)
 	}
-	
+
 	ms.payloads[chunkStreamId] = append(ms.payloads[chunkStreamId], buffer)
 	ms.payloadLengths[chunkStreamId] += uint32(len(buffer.Data()))
 }
-
 
 func (ms *messageReaderContext) isInitialChunk(chunkStreamId uint32) bool {
 	_, ok := ms.payloads[chunkStreamId]
@@ -125,84 +121,34 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 
 		// 전체 메시지 길이와 비교 (헤더 + 순수 데이터)
 		if payloadLength+headerSize != messageHeader.length {
-			slog.Debug("Message incomplete", "chunkStreamId", chunkStreamId, 
-				"payloadLength", payloadLength, "headerSize", headerSize, 
+			slog.Debug("Message incomplete", "chunkStreamId", chunkStreamId,
+				"payloadLength", payloadLength, "headerSize", headerSize,
 				"expectedLength", messageHeader.length)
 			continue
 		}
-		
+
 		slog.Info("Complete message found", "chunkStreamId", chunkStreamId, "typeId", messageHeader.typeId)
 
 		// 메시지 생성
-		var msg *Message
+		msg := NewMessage(messageHeader)
 
-		// 버퍼에서 데이터 복사하여 payload 생성 (버퍼 해제 후에도 안전)
-		payload := make([][]byte, len(buffers))
-		for i, buffer := range buffers {
-			// 데이터 복사하여 버퍼 해제 후에도 안전하게 사용
-			chunkData := make([]byte, len(buffer.Data()))
-			copy(chunkData, buffer.Data())
-			payload[i] = chunkData
-		}
-		
-		// 원본 청크 배열 보관 (zero-copy용)
-		originalChunks := make([][]byte, len(payload))
-		copy(originalChunks, payload)
-
-		// 비디오/오디오 메시지의 경우 payload에 순수 데이터만 저장 (기존 호환성)
+		// 비디오/오디오 메시지의 경우 미디어 헤더 정보 설정 (별도 저장)
 		if mediaHeader, hasHeader := ms.mediaHeaders[chunkStreamId]; hasHeader {
-			// 첫 번째 청크에 헤더 포함하여 처리 (기존 호환성)
-			if len(payload) > 0 {
-				// 첫 번째 청크에 헤더 결합
-				firstChunk := make([]byte, len(mediaHeader)+len(payload[0]))
-				copy(firstChunk, mediaHeader)
-				copy(firstChunk[len(mediaHeader):], payload[0])
-				payload[0] = firstChunk
-			}
-
-			// 전체 데이터 연결 (기존 호환성을 위해)
-			totalLen := 0
-			for _, chunk := range payload {
-				totalLen += len(chunk)
-			}
-			fullPayload := make([]byte, totalLen)
-			offset := 0
-			for _, chunk := range payload {
-				copy(fullPayload[offset:], chunk)
-				offset += len(chunk)
-			}
-
-			msg = NewMessage(messageHeader, fullPayload)
 			msg.mediaHeader = make([]byte, len(mediaHeader))
 			copy(msg.mediaHeader, mediaHeader)
-			if len(fullPayload) > len(mediaHeader) {
-				msg.payload = fullPayload[len(mediaHeader):] // 헤더 제외한 부분
-			}
-		} else {
-			// 컨트롤 메시지는 payload 전체 연결
-			totalLen := 0
-			for _, chunk := range payload {
-				totalLen += len(chunk)
-			}
-			fullPayload := make([]byte, totalLen)
-			offset := 0
-			for _, chunk := range payload {
-				copy(fullPayload[offset:], chunk)
-				offset += len(chunk)
-			}
-			msg = NewMessage(messageHeader, fullPayload)
 		}
 
-		// 원본 청크 배열 설정 (zero-copy용)
-		msg.chunks = originalChunks
-
-		// 버퍼들 해제
-		if buffers, exists := ms.payloads[chunkStreamId]; exists {
-			for _, buffer := range buffers {
-				buffer.Release()
-			}
+		// 버퍼들을 직접 전달 (zero-copy)
+		msg.payloads = make([]*media.Buffer, len(buffers))
+		for i, buffer := range buffers {
+			msg.payloads[i] = buffer.AddRef() // 참조 카운트 증가
 		}
-		
+
+		// 원래 버퍼들 해제 (Message가 새로운 참조를 가지므로)
+		for _, buffer := range buffers {
+			buffer.Release()
+		}
+
 		// 상태 정리
 		delete(ms.payloadLengths, chunkStreamId)
 		delete(ms.payloads, chunkStreamId)
@@ -212,4 +158,3 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 	}
 	return nil, fmt.Errorf("no complete message available")
 }
-

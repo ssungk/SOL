@@ -66,7 +66,7 @@ type Packet struct {
 	Type       PacketType      // 패킷 타입
 	DTS        uint64          // Decode Time Stamp (해당 트랙의 TimeScale 단위)
 	CTS        int             // Composition Time Stamp (PTS-DTS, TimeScale 단위)
-	Data       [][]byte        // 패킷 데이터
+	Data       []*Buffer       // 패킷 데이터
 }
 
 // Packet 헬퍼 함수들
@@ -85,8 +85,26 @@ func (p *Packet) DTS32() uint32 {
 	return uint32(p.DTS & 0xFFFFFFFF)
 }
 
+// Release 패킷의 모든 버퍼 해제
+func (p *Packet) Release() {
+	for _, buffer := range p.Data {
+		if buffer != nil {
+			buffer.Release()
+		}
+	}
+}
+
+// DataAsBytes 버퍼들을 [][]byte로 변환 (임시 호환성)
+func (p *Packet) DataAsBytes() [][]byte {
+	result := make([][]byte, len(p.Data))
+	for i, buffer := range p.Data {
+		result[i] = buffer.Data()
+	}
+	return result
+}
+
 // NewPacket 미디어 패킷 생성 (CTS 포함)
-func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data [][]byte) Packet {
+func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data []*Buffer) Packet {
 	return Packet{
 		TrackIndex: trackIndex,
 		Codec:      codec,

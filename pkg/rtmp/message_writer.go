@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sol/pkg/media"
 	"sol/pkg/rtmp/amf"
 )
 
@@ -36,8 +37,15 @@ func (mw *messageWriter) writeMessage(w io.Writer, msg *Message) error {
 
 // 메시지를 청크 배열로 구성 (zero-copy)
 func (mw *messageWriter) buildChunks(msg *Message) ([]*Chunk, error) {
-	// payload의 전체 길이
-	totalPayloadLength := len(msg.payload)
+	// 실제 전송될 페이로드 길이 계산 (미디어 메시지는 헤더 포함)
+	var totalPayloadLength int
+	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
+		totalPayloadLength = len(msg.FullPayload())
+	} else {
+		for _, buffer := range msg.payloads {
+			totalPayloadLength += len(buffer.Data())
+		}
+	}
 
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
@@ -119,10 +127,14 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 		msg.messageHeader.streamID,
 	)
 
-	// payload 슬라이스 (복사 없이 참조)
+	// payload 슬라이스 (복사 없이 참조) - 미디어 메시지는 FullPayload 사용
 	var payloadSlice []byte
 	if chunkSize > 0 {
-		payloadSlice = extractPayloadSlice(msg.payload, offset, chunkSize)
+		if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
+			payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
+		} else {
+			payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
+		}
 	}
 
 	return NewChunk(basicHdr, msgHdr, payloadSlice)
@@ -137,8 +149,13 @@ func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize 
 	// Type 3는 message header가 없음
 	var msgHdr *messageHeader = nil
 
-	// payload 슬라이스 (복사 없이 참조)
-	payloadSlice := extractPayloadSlice(msg.payload, offset, chunkSize)
+	// payload 슬라이스 (복사 없이 참조) - 미디어 메시지는 FullPayload 사용
+	var payloadSlice []byte
+	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
+		payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
+	} else {
+		payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
+	}
 
 	return NewChunk(basicHdr, msgHdr, payloadSlice)
 }
@@ -229,7 +246,10 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) erro
 
 func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := NewMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
-	msg := NewMessage(header, payload)
+	msg := NewMessage(header)
+	buffer := media.NewBuffer(len(payload))
+	copy(buffer.Data(), payload)
+	msg.payloads = []*media.Buffer{buffer}
 	return mw.writeMessage(w, msg)
 }
 
@@ -239,7 +259,10 @@ func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error 
 	binary.BigEndian.PutUint32(payload, chunkSize)
 
 	header := NewMessageHeader(0, 4, MsgTypeSetChunkSize, 0)
-	msg := NewMessage(header, payload)
+	msg := NewMessage(header)
+	buffer := media.NewBuffer(len(payload))
+	copy(buffer.Data(), payload)
+	msg.payloads = []*media.Buffer{buffer}
 
 	if err := mw.writeMessage(w, msg); err != nil {
 		return err
@@ -259,14 +282,20 @@ func PutUint24(b []byte, v uint32) {
 // 오디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
 	header := NewMessageHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
-	msg := NewMessage(header, audioData)
+	msg := NewMessage(header)
+	audioBuffer := media.NewBuffer(len(audioData))
+	copy(audioBuffer.Data(), audioData)
+	msg.payloads = []*media.Buffer{audioBuffer}
 	return mw.writeMessage(w, msg)
 }
 
 // 비디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
 	header := NewMessageHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
-	msg := NewMessage(header, videoData)
+	msg := NewMessage(header)
+	videoBuffer := media.NewBuffer(len(videoData))
+	copy(videoBuffer.Data(), videoData)
+	msg.payloads = []*media.Buffer{videoBuffer}
 	return mw.writeMessage(w, msg)
 }
 
@@ -279,7 +308,10 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	}
 
 	header := NewMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
-	msg := NewMessage(header, payload)
+	msg := NewMessage(header)
+	buffer := media.NewBuffer(len(payload))
+	copy(buffer.Data(), payload)
+	msg.payloads = []*media.Buffer{buffer}
 	return mw.writeMessage(w, msg)
 }
 
