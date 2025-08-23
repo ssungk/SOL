@@ -16,7 +16,7 @@ const (
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
 	payload        map[uint32][]*media.Buffer
-	payloads       map[uint32][]byte
+	payloads       map[uint32][][]byte
 	payloadLengths map[uint32]uint32
 	pooledBuffers  map[uint32]*sync.Pool // 각 chunkStreamId별 pool 추적
 	mediaHeaders   map[uint32][]byte     // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
@@ -32,7 +32,7 @@ func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
 		messageHeaders: make(map[uint32]*messageHeader),
 		payload:        make(map[uint32][]*media.Buffer),
-		payloads:       make(map[uint32][]byte),
+		payloads:       make(map[uint32][][]byte),
 		payloadLengths: make(map[uint32]uint32),
 		pooledBuffers:  make(map[uint32]*sync.Pool),
 		mediaHeaders:   make(map[uint32][]byte),
@@ -82,39 +82,11 @@ func (ms *messageReaderContext) selectAppropriatePool(size uint32) *sync.Pool {
 	}
 }
 
-// allocateMessageBuffer 순수 데이터 크기만큼 버퍼 할당 (헤더 크기 제외)
-func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) []byte {
-	header := ms.messageHeaders[chunkStreamId]
-	if header == nil {
-		return nil
-	}
-
-	// 비디오/오디오 메시지의 경우 헤더 크기를 제외한 순수 데이터 크기 계산
-	payloadSize := header.length
-	if header.typeId == MsgTypeVideo {
-		if header.length < 5 {
-			slog.Warn("Video message too short for header", "length", header.length)
-		} else {
-			payloadSize = header.length - 5 // 비디오 헤더 5바이트 제외
-		}
-	} else if header.typeId == MsgTypeAudio {
-		if header.length < 2 {
-			slog.Warn("Audio message too short for header", "length", header.length)
-		} else {
-			payloadSize = header.length - 2 // 오디오 헤더 2바이트 제외
-		}
-	}
-
-	// 메시지 크기에 따라 적절한 Pool 선택 (전체 메시지 크기 기준)
-	pool := ms.selectAppropriatePool(header.length)
-
-	// Pool에서 버퍼 할당하고 순수 데이터 크기로 슬라이싱
-	buf := pool.Get().([]byte)[:payloadSize]
-	ms.payloads[chunkStreamId] = buf
+// allocateMessageBuffer 청크 배열 초기화
+func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) {
+	// 청크 배열 초기화
+	ms.payloads[chunkStreamId] = make([][]byte, 0)
 	ms.payloadLengths[chunkStreamId] = 0
-	ms.pooledBuffers[chunkStreamId] = pool // pool 추적
-
-	return buf
 }
 
 // storeMediaHeader 미디어 헤더 저장
@@ -122,11 +94,13 @@ func (ms *messageReaderContext) storeMediaHeader(chunkStreamId uint32, header []
 	ms.mediaHeaders[chunkStreamId] = header
 }
 
-// getMessageBuffer 현재 메시지 버퍼와 쓰기 위치 반환
-func (ms *messageReaderContext) getMessageBuffer(chunkStreamId uint32) ([]byte, uint32) {
-	buffer := ms.payloads[chunkStreamId]
-	offset := ms.payloadLengths[chunkStreamId]
-	return buffer, offset
+// addNewChunk 새로운 청크를 추가
+func (ms *messageReaderContext) addNewChunk(chunkStreamId uint32, chunkData []byte) {
+	if ms.payloads[chunkStreamId] == nil {
+		ms.payloads[chunkStreamId] = make([][]byte, 0)
+	}
+	ms.payloads[chunkStreamId] = append(ms.payloads[chunkStreamId], chunkData)
+	ms.payloadLengths[chunkStreamId] += uint32(len(chunkData))
 }
 
 // updatePayloadLength 읽은 데이터 길이 업데이트
@@ -197,38 +171,51 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		}
 
 		// 메시지 생성
-		var msgPayload []byte
 		var msg *Message
 
 		// 비디오/오디오 메시지의 경우 payload에 순수 데이터만 저장
 		if mediaHeader, hasHeader := ms.mediaHeaders[chunkStreamId]; hasHeader {
-			// payload는 순수 데이터만 (헤더 제외)
-			msgPayload = make([]byte, len(payload))
-			copy(msgPayload, payload)
-
-			// 전체 메시지 생성 (기존 호환성을 위해 헤더+데이터 합친 fullPayload 생성)
-			fullPayload := make([]byte, len(mediaHeader)+len(payload))
-			copy(fullPayload, mediaHeader)
-			copy(fullPayload[len(mediaHeader):], payload)
-
+			// 첫 번째 청크에 헤더 포함하여 처리 (기존 호환성)
+			if len(payload) > 0 {
+				// 첫 번째 청크에 헤더 결합
+				firstChunk := make([]byte, len(mediaHeader)+len(payload[0]))
+				copy(firstChunk, mediaHeader)
+				copy(firstChunk[len(mediaHeader):], payload[0])
+				payload[0] = firstChunk
+			}
+			
+			// 전체 데이터 연결 (기존 호환성을 위해)
+			totalLen := 0
+			for _, chunk := range payload {
+				totalLen += len(chunk)
+			}
+			fullPayload := make([]byte, totalLen)
+			offset := 0
+			for _, chunk := range payload {
+				copy(fullPayload[offset:], chunk)
+				offset += len(chunk)
+			}
+			
 			msg = NewMessage(messageHeader, fullPayload)
-
-			// 미디어 헤더 저장 및 payload를 순수 데이터로 교체
 			msg.mediaHeader = make([]byte, len(mediaHeader))
 			copy(msg.mediaHeader, mediaHeader)
-			msg.payload = msgPayload
+			msg.payload = fullPayload[len(mediaHeader):] // 헤더 제외한 부분
 		} else {
-			// 컨트롤 메시지는 payload에 전체 데이터 저장
-			msgPayload = make([]byte, len(payload))
-			copy(msgPayload, payload)
-			msg = NewMessage(messageHeader, msgPayload)
+			// 컨트롤 메시지는 payload 전체 연결
+			totalLen := 0
+			for _, chunk := range payload {
+				totalLen += len(chunk)
+			}
+			fullPayload := make([]byte, totalLen)
+			offset := 0
+			for _, chunk := range payload {
+				copy(fullPayload[offset:], chunk)
+				offset += len(chunk)
+			}
+			msg = NewMessage(messageHeader, fullPayload)
 		}
 
-		// Pool 버퍼 반납
-		if pool, exists := ms.pooledBuffers[chunkStreamId]; exists {
-			pool.Put(payload[:cap(payload)]) // 전체 용량으로 반납
-			delete(ms.pooledBuffers, chunkStreamId)
-		}
+		// 청크 배열은 Pool 사용하지 않으므로 반납 불필요
 
 		// 상태 정리
 		delete(ms.payloadLengths, chunkStreamId)

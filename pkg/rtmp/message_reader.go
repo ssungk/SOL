@@ -70,33 +70,24 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 		ms.readerContext.allocateMessageBuffer(basicHeader.chunkStreamID)
 	}
 
-	// 제로카피: 메시지 버퍼에 직접 읽기
-	messageBuffer, offset := ms.readerContext.getMessageBuffer(basicHeader.chunkStreamID)
-	if messageBuffer == nil {
-		return nil, fmt.Errorf("failed to get message buffer for chunkStreamId %d", basicHeader.chunkStreamID)
-	}
-
-	// 남은 데이터가 있을 때만 읽기
+	// 청크 데이터 읽기
 	if chunkSize > 0 {
-		// 메시지 버퍼의 적절한 위치에 직접 읽기
-		readBuffer := messageBuffer[offset : offset+chunkSize]
-		if _, err := io.ReadFull(r, readBuffer); err != nil {
+		// 청크용 버퍼 할당 및 읽기
+		chunkBuffer := make([]byte, chunkSize)
+		if _, err := io.ReadFull(r, chunkBuffer); err != nil {
 			// Pool 버퍼는 abortChunkStream에서 자동 반환
 			ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 			return nil, err
 		}
+		
+		// 읽은 청크를 추가
+		ms.readerContext.addNewChunk(basicHeader.chunkStreamID, chunkBuffer)
+		
+		return NewChunk(basicHeader, messageHeader, chunkBuffer), nil
 	}
 
-	// 읽은 데이터 길이 업데이트
-	ms.readerContext.updatePayloadLength(basicHeader.chunkStreamID, chunkSize)
-
-	// ReadBuffer는 실제로 읽은 데이터 참조 (chunkSize가 0일 수 있음)
-	var readData []byte
-	if chunkSize > 0 {
-		readData = messageBuffer[offset : offset+chunkSize]
-	}
-
-	return NewChunk(basicHeader, messageHeader, readData), nil
+	// 빈 청크인 경우
+	return NewChunk(basicHeader, messageHeader, []byte{}), nil
 }
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
