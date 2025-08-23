@@ -20,7 +20,7 @@ const (
 
 // 청크 스트림 ID 상수
 const (
-	ChunkStreamProtocol = 2 // 프로토콜 제어 메시지 (Set Chunk Size 등)
+	ChunkStreamProtocol = 2 // 프로토콜 제어 메시지
 	ChunkStreamCommand  = 3 // 명령어 메시지 (connect, publish, play 등)
 	ChunkStreamAudio    = 4 // 오디오 데이터
 	ChunkStreamVideo    = 5 // 비디오 데이터
@@ -55,4 +55,3 @@ const (
 	FmtType2 = 2 // 3바이트 - 타임스탬프만
 	FmtType3 = 3 // 0바이트 - 헤더 없음
 )
-

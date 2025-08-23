@@ -124,7 +124,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
-	basicHdr := NewBasicHeader(FmtType0, uint32(chunkStreamID))
+	basicHdr := newBasicHeader(FmtType0, uint32(chunkStreamID))
 	msgHdr := NewMessageHeader(
 		headerTimestamp,
 		uint32(totalPayloadLength),
@@ -154,7 +154,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize int) *Chunk {
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
-	basicHdr := NewBasicHeader(FmtType3, uint32(chunkStreamID))
+	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
 
 	// Type 3는 message header가 없음
 	var msgHdr *messageHeader = nil
@@ -220,7 +220,7 @@ func (mw *messageWriter) writeExtendedTimestamp(w io.Writer, timestamp uint32) e
 }
 
 // Basic Header 인코딩 및 전송
-func (mw *messageWriter) writeBasicHeader(w io.Writer, bh *basicHeader) error {
+func (mw *messageWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
 	var header []byte
 
 	if bh.chunkStreamID < 64 {
@@ -327,4 +327,3 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	msg.payloads = []*media.Buffer{buffer}
 	return mw.writeMessage(w, msg)
 }
-

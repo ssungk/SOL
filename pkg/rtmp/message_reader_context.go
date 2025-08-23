@@ -8,7 +8,7 @@ import (
 
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
-	payloads       map[uint32][]*media.Buffer // 메모리 풀링을 위한 버퍼 참조
+	payloads       map[uint32][]*media.Buffer
 	payloadLengths map[uint32]uint32
 	mediaHeaders   map[uint32][]byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32

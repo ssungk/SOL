@@ -3,12 +3,12 @@ package rtmp
 import "sol/pkg/media"
 
 type Chunk struct {
-	basicHeader   *basicHeader
+	basicHeader   basicHeader
 	messageHeader *messageHeader
 	payload       *media.Buffer
 }
 
-func NewChunk(basicHeader *basicHeader, messageHeader *messageHeader, payload *media.Buffer) *Chunk {
+func NewChunk(basicHeader basicHeader, messageHeader *messageHeader, payload *media.Buffer) *Chunk {
 	c := &Chunk{
 		basicHeader:   basicHeader,
 		messageHeader: messageHeader,
