@@ -25,14 +25,18 @@ func (ms *messageReader) setChunkSize(size uint32) {
 }
 
 func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
+	slog.Debug("readNextMessage called")
 	for {
-		_, err := ms.readChunk(r)
+		chunk, err := ms.readChunk(r)
 		if err != nil {
+			slog.Error("readChunk failed", "err", err)
 			return nil, err
 		}
+		slog.Debug("Chunk read", "chunkStreamID", chunk.basicHeader.chunkStreamID, "payload_len", len(chunk.payload))
 
 		message, err := ms.readerContext.popMessageIfPossible()
 		if err == nil {
+			slog.Info("Message ready", "typeId", message.messageHeader.typeId)
 			return message, err
 		}
 	}
@@ -144,8 +148,10 @@ func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId u
 }
 
 func readBasicHeader(r io.Reader) (*basicHeader, error) {
+	slog.Debug("readBasicHeader called")
 	buf := [1]byte{}
 	if _, err := io.ReadFull(r, buf[:1]); err != nil {
+		slog.Debug("readBasicHeader ReadFull failed", "err", err)
 		return nil, err
 	}
 

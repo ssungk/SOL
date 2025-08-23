@@ -22,7 +22,7 @@ api:
 
 # 로깅 설정
 logging:
-  level: info                   # 기본값: info (debug, info, warn, error)
+  level: debug                  # 기본값: info (debug, info, warn, error)
 
 # 스트림 관련 설정
 stream:

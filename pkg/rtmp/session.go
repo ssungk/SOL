@@ -355,6 +355,8 @@ func (s *session) handleVideo(message *Message) {
 	// RTMP는 청크 배열 사용 (AVCC 포맷)
 	frameData := message.chunks
 	frameData2 := [][]byte{message.payload} // 비교용
+	
+	slog.Info("Video frame debug", "chunks_len", len(message.chunks), "chunks_nil", message.chunks == nil)
 
 	// 데이터 일치 확인
 	var totalLen1, totalLen2 int
@@ -416,7 +418,10 @@ func (s *session) handleVideo(message *Message) {
 			stream.AddTrack(packet.Codec, media.TimeScaleRTMP)
 		}
 
+		slog.Info("Sending packet to stream", "streamID", message.messageHeader.streamID, "data_len", totalLen1)
 		stream.SendPacket(packet)
+	} else {
+		slog.Warn("Stream not found", "streamID", message.messageHeader.streamID)
 	}
 }
 
