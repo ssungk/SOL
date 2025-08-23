@@ -3,6 +3,7 @@ package rtmp
 import (
 	"fmt"
 	"log/slog"
+	"sol/pkg/media"
 	"sync"
 )
 
@@ -14,6 +15,7 @@ const (
 
 type messageReaderContext struct {
 	messageHeaders map[uint32]*messageHeader
+	payload        map[uint32][]*media.Buffer
 	payloads       map[uint32][]byte
 	payloadLengths map[uint32]uint32
 	pooledBuffers  map[uint32]*sync.Pool // 각 chunkStreamId별 pool 추적
@@ -29,6 +31,7 @@ type messageReaderContext struct {
 func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
 		messageHeaders: make(map[uint32]*messageHeader),
+		payload:        make(map[uint32][]*media.Buffer),
 		payloads:       make(map[uint32][]byte),
 		payloadLengths: make(map[uint32]uint32),
 		pooledBuffers:  make(map[uint32]*sync.Pool),
@@ -142,20 +145,20 @@ func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 		slog.Error("message header not found", "chunkStreamId", chunkStreamId)
 		return 0
 	}
-	
+
 	// 현재 읽은 순수 데이터 길이
 	currentPayloadLength := ms.payloadLengths[chunkStreamId]
-	
+
 	// 헤더 크기 계산
 	headerSize := uint32(0)
 	if mediaHeader, exists := ms.mediaHeaders[chunkStreamId]; exists {
 		headerSize = uint32(len(mediaHeader))
 	}
-	
+
 	// 전체 메시지에서 헤더와 현재까지 읽은 데이터를 제외한 남은 크기
 	totalRead := headerSize + currentPayloadLength
 	remain := header.length - totalRead
-	
+
 	if remain > ms.chunkSize {
 		return ms.chunkSize
 	}
@@ -181,7 +184,7 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		if !ok {
 			continue
 		}
-		
+
 		// 헤더 크기 계산
 		headerSize := uint32(0)
 		if mediaHeader, exists := ms.mediaHeaders[chunkStreamId]; exists {
@@ -202,14 +205,14 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 			// payload는 순수 데이터만 (헤더 제외)
 			msgPayload = make([]byte, len(payload))
 			copy(msgPayload, payload)
-			
+
 			// 전체 메시지 생성 (기존 호환성을 위해 헤더+데이터 합친 fullPayload 생성)
 			fullPayload := make([]byte, len(mediaHeader)+len(payload))
 			copy(fullPayload, mediaHeader)
 			copy(fullPayload[len(mediaHeader):], payload)
-			
+
 			msg = NewMessage(messageHeader, fullPayload)
-			
+
 			// 미디어 헤더 저장 및 payload를 순수 데이터로 교체
 			msg.mediaHeader = make([]byte, len(mediaHeader))
 			copy(msg.mediaHeader, mediaHeader)

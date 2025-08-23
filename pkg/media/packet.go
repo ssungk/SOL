@@ -66,7 +66,7 @@ type Packet struct {
 	Type       PacketType      // 패킷 타입
 	DTS        uint64          // Decode Time Stamp (해당 트랙의 TimeScale 단위)
 	CTS        int             // Composition Time Stamp (PTS-DTS, TimeScale 단위)
-	Data       []byte          // 패킷 데이터
+	Data       [][]byte        // 패킷 데이터
 }
 
 // Packet 헬퍼 함수들
@@ -86,7 +86,7 @@ func (p *Packet) DTS32() uint32 {
 }
 
 // NewPacket 미디어 패킷 생성 (CTS 포함)
-func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data []byte) Packet {
+func NewPacket(trackIndex int, codec Codec, format BitstreamFormat, packetType PacketType, dts uint64, cts int, data [][]byte) Packet {
 	return Packet{
 		TrackIndex: trackIndex,
 		Codec:      codec,

@@ -774,7 +774,7 @@ func (s *Session) convertPacketToRTP(packet media.Packet) ([]byte, error) {
 	// RTP 헤더 (12바이트) + 페이로드
 	
 	// 패킷 데이터 사용 (이미 []byte)
-	payload := packet.Data
+	payload := packet.Data[0]
 
 	// 간단한 RTP 헤더 생성
 	rtpHeader := make([]byte, 12)
@@ -864,7 +864,7 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 		packetType,
 		uint64(timestamp),
 		0, // CTS = 0 (RTSP는 일반적으로 CTS 사용 안함)
-		payload,
+		[][]byte{payload},
 	)
 
 	slog.Debug("Converted RTP to Packet", 

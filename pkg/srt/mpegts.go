@@ -303,7 +303,7 @@ func (p *MPEGTSParser) parseVideoES(payload []byte, pusi bool) error {
 		packetType,
 		pts,
 		0, // CTS (단순화)
-		esData,
+		[][]byte{esData},
 	)
 
 	if p.session.stream != nil {
@@ -354,7 +354,7 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 		media.TypeData, // 오디오는 모두 일반 데이터로 처리
 		pts,
 		0, // CTS (단순화)
-		esData,
+		[][]byte{esData},
 	)
 
 	if p.session.stream != nil {

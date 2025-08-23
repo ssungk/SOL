@@ -195,29 +195,41 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	}
 
 	var msgType uint8
-	var rtmpData []byte
+	var header []byte
 
 	if e.packet.IsVideo() {
 		msgType = MsgTypeVideo
-		// 비디오: RTMP 헤더 재생성 후 데이터와 결합 (Packet의 CTS 사용)
-		header := GenerateVideoHeader(e.packet, e.packet.CTS)
-		rtmpData = CombineHeaderAndData(header, e.packet.Data)
+		// 비디오: RTMP 헤더 재생성 (Packet의 CTS 사용)
+		header = GenerateVideoHeader(e.packet, e.packet.CTS)
 
 	} else if e.packet.IsAudio() {
 		msgType = MsgTypeAudio
-		// 오디오: RTMP 헤더 재생성 후 데이터와 결합
-		header := GenerateAudioHeader(e.packet)
-		rtmpData = CombineHeaderAndData(header, e.packet.Data)
+		// 오디오: RTMP 헤더 재생성
+		header = GenerateAudioHeader(e.packet)
 
 	} else {
 		slog.Warn("Unsupported packet type", "codec", e.packet.Codec, "sessionId", s.ID())
 		return
 	}
 
-	messageHeader := NewMessageHeader(e.packet.DTS32(), uint32(len(rtmpData)), msgType, uint32(streamID))
-	message := NewMessage(messageHeader, rtmpData)
-	if err := s.writer.writeMessage(s.conn, message); err != nil {
-		slog.Error("Failed to send packet to RTMP session", "sessionId", s.ID(), "packetType", e.packet.Type, "err", err)
+	// 여러 청크를 개별 메시지로 전송
+	for i, chunk := range e.packet.Data {
+		var messageData []byte
+		
+		if i == 0 {
+			// 첫 번째 청크: 헤더 + 데이터
+			messageData = CombineHeaderAndData(header, chunk)
+		} else {
+			// 나머지 청크: 데이터만
+			messageData = chunk
+		}
+
+		messageHeader := NewMessageHeader(e.packet.DTS32(), uint32(len(messageData)), msgType, uint32(streamID))
+		message := NewMessage(messageHeader, messageData)
+		if err := s.writer.writeMessage(s.conn, message); err != nil {
+			slog.Error("Failed to send packet chunk to RTMP session", "sessionId", s.ID(), "chunkIndex", i, "err", err)
+			return
+		}
 	}
 }
 
@@ -306,7 +318,7 @@ func (s *session) handleAudio(message *Message) {
 	// payload는 이미 순수 오디오 데이터 (헤더 제외됨)
 	// Packet 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	packet := media.NewPacket(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, message.payload)
+	packet := media.NewPacket(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, [][]byte{message.payload})
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
@@ -341,7 +353,7 @@ func (s *session) handleVideo(message *Message) {
 
 	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
+	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, [][]byte{frameData})
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
