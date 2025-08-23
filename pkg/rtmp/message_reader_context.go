@@ -82,12 +82,6 @@ func (ms *messageReaderContext) selectAppropriatePool(size uint32) *sync.Pool {
 	}
 }
 
-// allocateMessageBuffer 청크 배열 초기화
-func (ms *messageReaderContext) allocateMessageBuffer(chunkStreamId uint32) {
-	// 청크 배열 초기화
-	ms.payloads[chunkStreamId] = make([][]byte, 0)
-	ms.payloadLengths[chunkStreamId] = 0
-}
 
 // storeMediaHeader 미디어 헤더 저장
 func (ms *messageReaderContext) storeMediaHeader(chunkStreamId uint32, header []byte) {
@@ -101,6 +95,14 @@ func (ms *messageReaderContext) addNewChunk(chunkStreamId uint32, chunkData []by
 	}
 	ms.payloads[chunkStreamId] = append(ms.payloads[chunkStreamId], chunkData)
 	ms.payloadLengths[chunkStreamId] += uint32(len(chunkData))
+}
+
+// addMediaBuffer media.Buffer를 추가
+func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
+	if ms.payload[chunkStreamId] == nil {
+		ms.payload[chunkStreamId] = make([]*media.Buffer, 0)
+	}
+	ms.payload[chunkStreamId] = append(ms.payload[chunkStreamId], buffer)
 }
 
 // updatePayloadLength 읽은 데이터 길이 업데이트
@@ -173,7 +175,11 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 		// 메시지 생성
 		var msg *Message
 
-		// 비디오/오디오 메시지의 경우 payload에 순수 데이터만 저장
+		// 원본 청크 배열 보관 (zero-copy용) - payload 수정 전에 보관
+		originalChunks := make([][]byte, len(payload))
+		copy(originalChunks, payload)
+		
+		// 비디오/오디오 메시지의 경우 payload에 순수 데이터만 저장 (기존 호환성)
 		if mediaHeader, hasHeader := ms.mediaHeaders[chunkStreamId]; hasHeader {
 			// 첫 번째 청크에 헤더 포함하여 처리 (기존 호환성)
 			if len(payload) > 0 {
@@ -199,7 +205,9 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 			msg = NewMessage(messageHeader, fullPayload)
 			msg.mediaHeader = make([]byte, len(mediaHeader))
 			copy(msg.mediaHeader, mediaHeader)
-			msg.payload = fullPayload[len(mediaHeader):] // 헤더 제외한 부분
+			if len(fullPayload) > len(mediaHeader) {
+				msg.payload = fullPayload[len(mediaHeader):] // 헤더 제외한 부분
+			}
 		} else {
 			// 컨트롤 메시지는 payload 전체 연결
 			totalLen := 0
@@ -214,6 +222,9 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 			}
 			msg = NewMessage(messageHeader, fullPayload)
 		}
+		
+		// 원본 청크 배열 설정 (zero-copy용)
+		msg.chunks = originalChunks
 
 		// 청크 배열은 Pool 사용하지 않으므로 반납 불필요
 

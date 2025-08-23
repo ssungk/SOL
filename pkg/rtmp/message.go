@@ -6,6 +6,9 @@ type Message struct {
 
 	// 미디어 메시지 전용 (비디오/오디오)
 	mediaHeader []byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	
+	// 청크 배열 (zero-copy 처리용)
+	chunks [][]byte
 }
 
 func NewMessage(messageHeader *messageHeader, payload []byte) *Message {

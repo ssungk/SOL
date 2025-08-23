@@ -212,24 +212,28 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 		return
 	}
 
-	// 여러 청크를 개별 메시지로 전송
-	for i, chunk := range e.packet.Data {
-		var messageData []byte
-		
-		if i == 0 {
-			// 첫 번째 청크: 헤더 + 데이터
-			messageData = CombineHeaderAndData(header, chunk)
-		} else {
-			// 나머지 청크: 데이터만
-			messageData = chunk
-		}
+	// 모든 청크를 하나의 메시지로 합쳐서 전송
+	var totalLen int
+	for _, chunk := range e.packet.Data {
+		totalLen += len(chunk)
+	}
+	
+	// 헤더 + 전체 데이터 크기로 버퍼 할당
+	messageData := make([]byte, len(header)+totalLen)
+	copy(messageData, header)
+	
+	// 모든 청크 데이터를 연결
+	offset := len(header)
+	for _, chunk := range e.packet.Data {
+		copy(messageData[offset:], chunk)
+		offset += len(chunk)
+	}
 
-		messageHeader := NewMessageHeader(e.packet.DTS32(), uint32(len(messageData)), msgType, uint32(streamID))
-		message := NewMessage(messageHeader, messageData)
-		if err := s.writer.writeMessage(s.conn, message); err != nil {
-			slog.Error("Failed to send packet chunk to RTMP session", "sessionId", s.ID(), "chunkIndex", i, "err", err)
-			return
-		}
+	messageHeader := NewMessageHeader(e.packet.DTS32(), uint32(len(messageData)), msgType, uint32(streamID))
+	message := NewMessage(messageHeader, messageData)
+	if err := s.writer.writeMessage(s.conn, message); err != nil {
+		slog.Error("Failed to send packet to RTMP session", "sessionId", s.ID(), "err", err)
+		return
 	}
 }
 
@@ -348,12 +352,62 @@ func (s *session) handleVideo(message *Message) {
 	// 비디오 헤더에서 CompositionTime 추출
 	_, _, _, compositionTime := ParseVideoHeader(message.mediaHeader)
 
-	// RTMP는 항상 원본 payload 사용 (AVCC 포맷)
-	frameData := message.payload
+	// RTMP는 청크 배열 사용 (AVCC 포맷)
+	frameData := message.chunks
+	frameData2 := [][]byte{message.payload} // 비교용
+
+	// 데이터 일치 확인
+	var totalLen1, totalLen2 int
+	for _, chunk := range frameData {
+		totalLen1 += len(chunk)
+	}
+	for _, chunk := range frameData2 {
+		totalLen2 += len(chunk)
+	}
+
+	dataMatched := totalLen1 == totalLen2
+	if dataMatched && len(frameData) == 1 && len(frameData2) > 0 {
+		// 1차원 vs 2차원 바이트별 비교
+		payload1D := frameData[0]
+		offset := 0
+		for _, chunk := range frameData2 {
+			if offset+len(chunk) > len(payload1D) {
+				dataMatched = false
+				break
+			}
+			for i, b := range chunk {
+				if payload1D[offset+i] != b {
+					dataMatched = false
+					break
+				}
+			}
+			if !dataMatched {
+				break
+			}
+			offset += len(chunk)
+		}
+	}
+
+	// 미디어 헤더 확인
+	var mediaHeaderLen int
+	if message.mediaHeader != nil {
+		mediaHeaderLen = len(message.mediaHeader)
+	}
+
+	// 2차원 배열에서 미디어 헤더가 포함되었는지 확인
+	headerIncluded := len(frameData2) > 0 && totalLen2 == totalLen1+mediaHeaderLen
+
+	slog.Info("Data comparison",
+		"frameData1D_len", totalLen1,
+		"frameData2D_len", totalLen2,
+		"frameData2D_chunks", len(frameData2),
+		"media_header_len", mediaHeaderLen,
+		"header_included_in_2D", headerIncluded,
+		"data_matched", dataMatched)
 
 	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, [][]byte{frameData})
+	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
@@ -854,7 +908,7 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
 	responseChan := make(chan media.Response, 1)
-	
+
 	// RTMP가 지원하는 코덱 목록
 	supportedCodecs := []media.Codec{media.H264, media.AAC}
 

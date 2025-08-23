@@ -66,8 +66,7 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 			}
 		}
 
-		// 순수 데이터 크기만큼 버퍼 할당 (헤더 크기 제외)
-		ms.readerContext.allocateMessageBuffer(basicHeader.chunkStreamID)
+		// 청크 배열은 addNewChunk에서 자동 초기화
 	}
 
 	// 청크 데이터 읽기
@@ -79,10 +78,15 @@ func (ms *messageReader) readChunk(r io.Reader) (*Chunk, error) {
 			ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 			return nil, err
 		}
-		
-		// 읽은 청크를 추가
+
+		// 읽은 청크를 추가 (기존 로직)
 		ms.readerContext.addNewChunk(basicHeader.chunkStreamID, chunkBuffer)
-		
+
+		// media.Buffer로도 중복 저장 (추가 구현)
+		mediaBuffer := media.NewBuffer(int(chunkSize))
+		copy(mediaBuffer.Data(), chunkBuffer)
+		ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, mediaBuffer)
+
 		return NewChunk(basicHeader, messageHeader, chunkBuffer), nil
 	}
 
