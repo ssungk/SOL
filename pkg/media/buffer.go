@@ -1,6 +1,7 @@
 package media
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 )
@@ -23,8 +24,8 @@ var (
 	pool64KB = &sync.Pool{New: func() any { return make([]byte, 65536) }}
 )
 
-// GetBuffer 지정된 크기에 맞는 풀에서 버퍼 할당
-func GetBuffer(size int) *Buffer {
+// NewBuffer 지정된 크기에 맞는 풀에서 버퍼 할당
+func NewBuffer(size int) *Buffer {
 	var pool *sync.Pool
 	var data []byte
 
@@ -52,6 +53,7 @@ func GetBuffer(size int) *Buffer {
 		data = pool64KB.Get().([]byte)[:size]
 	default:
 		// 큰 사이즈는 풀링하지 않고 직접 할당
+		slog.Warn("Large buffer allocation without pooling", "size", size)
 		data = make([]byte, size)
 		pool = nil
 	}
@@ -82,11 +84,16 @@ func (b *Buffer) AddRef() *Buffer {
 // Release 참조 카운트를 감소시키고, 0이 되면 풀에 반납
 func (b *Buffer) Release() {
 	if atomic.AddInt32(&b.refCnt, -1) == 0 {
-		// 풀에 반납 (pool이 nil이면 GC가 처리)
-		if b.pool != nil {
-			original := b.data[:cap(b.data)]
-			b.pool.Put(original)
-		}
+		b.returnToPool()
+	}
+}
+
+// returnToPool 버퍼를 풀에 반납
+func (b *Buffer) returnToPool() {
+	// 풀에 반납 (pool이 nil이면 GC가 처리)
+	if b.pool != nil {
+		original := b.data[:cap(b.data)]
+		b.pool.Put(original)
 	}
 }
 
