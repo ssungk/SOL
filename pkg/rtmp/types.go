@@ -49,39 +49,7 @@ func GenerateAudioHeader(packet media.Packet) []byte {
 	return header
 }
 
-// CombineHeaderAndData RTMP 헤더와 데이터를 결합하여 새로운 []byte 생성
-func CombineHeaderAndData(header []byte, data []byte) []byte {
-	if len(data) == 0 {
-		return header
-	}
 
-	// 헤더와 데이터를 결합한 새로운 버퍼 생성
-	combined := make([]byte, len(header)+len(data))
-	copy(combined, header)
-	copy(combined[len(header):], data)
-
-	return combined
-}
-
-// ParseCompositionTime 3바이트 배열에서 signed 24-bit CTS 추출
-func ParseCompositionTime(data []byte) int {
-	if len(data) < 3 {
-		return 0
-	}
-	
-	// 24비트 값을 uint32로 조합
-	value := uint32(data[0])<<16 | uint32(data[1])<<8 | uint32(data[2])
-	
-	// 24비트 signed 값으로 변환 (2의 보수)
-	// 24비트에서 MSB가 1이면 음수
-	if value&0x800000 != 0 {
-		// 음수인 경우: 32비트로 확장하여 부호 유지
-		return int(int32(value | 0xFF000000))
-	}
-	
-	// 양수인 경우: 그대로 반환
-	return int(value)
-}
 
 // ParseVideoHeader 비디오 헤더에서 정보 추출
 func ParseVideoHeader(header []byte) (frameType byte, codecId byte, packetType byte, cts int) {
@@ -101,8 +69,14 @@ func ParseVideoHeader(header []byte) (frameType byte, codecId byte, packetType b
 	packetType = header[1]
 	
 	if len(header) >= 5 {
-		// Composition Time (3바이트)
-		cts = ParseCompositionTime(header[2:5])
+		// Composition Time (3바이트, signed 24-bit)
+		data := header[2:5]
+		value := uint32(data[0])<<16 | uint32(data[1])<<8 | uint32(data[2])
+		if value&0x800000 != 0 {
+			cts = int(int32(value | 0xFF000000))
+		} else {
+			cts = int(value)
+		}
 	}
 	
 	return frameType, codecId, packetType, cts

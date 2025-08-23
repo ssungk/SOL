@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"sol/pkg/media"
@@ -576,14 +575,6 @@ func (s *session) calculateDataSize(data []byte) uint32 {
 	return uint32(len(data))
 }
 
-// 바이트 슬라이스들을 Reader로 변환
-func ConcatByteSlicesReader(slices [][]byte) io.Reader {
-	readers := make([]io.Reader, 0, len(slices))
-	for _, b := range slices {
-		readers = append(readers, bytes.NewReader(b))
-	}
-	return io.MultiReader(readers...)
-}
 
 // handleSetChunkSize 청크 크기 설정 처리
 func (s *session) handleSetChunkSize(message *Message) {
