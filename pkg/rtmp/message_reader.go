@@ -27,19 +27,19 @@ func newMsgReader() *msgReader {
 	return ms
 }
 
-func (ms *msgReader) setChunkSize(size uint32) {
-	ms.readerContext.setChunkSize(size)
+func (mr *msgReader) setChunkSize(size uint32) {
+	mr.readerContext.setChunkSize(size)
 }
 
-func (ms *msgReader) readNextMessage(r io.Reader) (*Message, error) {
+func (mr *msgReader) readNextMessage(r io.Reader) (*Message, error) {
 	for {
-		err := ms.readChunk(r)
+		err := mr.readChunk(r)
 		if err != nil {
 			slog.Error("readChunk failed", "err", err)
 			return nil, err
 		}
 
-		message, err := ms.readerContext.popMessageIfPossible()
+		message, err := mr.readerContext.popMessageIfPossible()
 		if err == nil {
 			// slog.Info("Message ready", "typeId", message.messageHeader.typeId) // 너무 빈번하거나 주석 처리
 			return message, err
@@ -47,30 +47,30 @@ func (ms *msgReader) readNextMessage(r io.Reader) (*Message, error) {
 	}
 }
 
-func (ms *msgReader) readChunk(r io.Reader) error {
+func (mr *msgReader) readChunk(r io.Reader) error {
 	basicHeader, err := readBasicHeader(r)
 	if err != nil {
 		slog.Error("Failed to read basic header", "err", err)
 		return err
 	}
 
-	messageHeader, err := readMessageHeader(r, basicHeader.fmt, ms.readerContext.getMsgHeader(basicHeader.chunkStreamID))
+	messageHeader, err := readMessageHeader(r, basicHeader.fmt, mr.readerContext.getMsgHeader(basicHeader.chunkStreamID))
 	if err != nil {
 		return err
 	}
 
 	// 모든 경우에 헤더를 업데이트
-	ms.readerContext.updateMsgHeader(basicHeader.chunkStreamID, &messageHeader)
+	mr.readerContext.updateMsgHeader(basicHeader.chunkStreamID, &messageHeader)
 
-	chunkSize := ms.readerContext.nextChunkSize(basicHeader.chunkStreamID)
+	chunkSize := mr.readerContext.nextChunkSize(basicHeader.chunkStreamID)
 
 	// 첫 번째 청크인 경우 특별 처리
-	if ms.readerContext.isInitialChunk(basicHeader.chunkStreamID) {
+	if mr.readerContext.isInitialChunk(basicHeader.chunkStreamID) {
 		// 비디오/오디오 메시지인 경우 헤더 먼저 읽고 분리
 		if messageHeader.typeId == MsgTypeVideo || messageHeader.typeId == MsgTypeAudio {
-			err := ms.readAndSeparateMediaHeader(r, basicHeader.chunkStreamID, messageHeader.typeId, &chunkSize)
+			err := mr.readAndSeparateMediaHeader(r, basicHeader.chunkStreamID, messageHeader.typeId, &chunkSize)
 			if err != nil {
-				ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
+				mr.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 				return err
 			}
 		}
@@ -84,12 +84,12 @@ func (ms *msgReader) readChunk(r io.Reader) error {
 		buffer := media.NewBuffer(int(chunkSize))
 		if _, err := io.ReadFull(r, buffer.Data()); err != nil {
 			buffer.Release() // 실패시 버퍼 해제
-			ms.readerContext.abortChunkStream(basicHeader.chunkStreamID)
+			mr.readerContext.abortChunkStream(basicHeader.chunkStreamID)
 			return err
 		}
 
 		// media.Buffer를 직접 사용하여 컨텍스트에 추가
-		ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, buffer)
+		mr.readerContext.addMediaBuffer(basicHeader.chunkStreamID, buffer)
 		// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", len(buffer.Data())) // 너무 빈번함
 
 		return nil
@@ -97,13 +97,13 @@ func (ms *msgReader) readChunk(r io.Reader) error {
 
 	// 빈 청크인 경우
 	emptyBuffer := media.NewBuffer(0)
-	ms.readerContext.addMediaBuffer(basicHeader.chunkStreamID, emptyBuffer)
+	mr.readerContext.addMediaBuffer(basicHeader.chunkStreamID, emptyBuffer)
 	// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", 0) // 너무 빈번함
 	return nil
 }
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
-func (ms *msgReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
+func (mr *msgReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
 	// 최소한 첫 바이트는 읽어서 코덱을 판단해야 함
 	if *chunkSize == 0 {
 		return fmt.Errorf("chunk size is 0, cannot read media header")
@@ -143,7 +143,7 @@ func (ms *msgReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint3
 	copy(fullHeader[1:], remainingHeader)
 
 	// 헤더 저장
-	ms.readerContext.storeMediaHeader(chunkStreamId, fullHeader)
+	mr.readerContext.storeMediaHeader(chunkStreamId, fullHeader)
 
 	// 읽은 헤더 크기만큼 청크 크기에서 차감
 	*chunkSize -= (1 + availableRemainingSize)
