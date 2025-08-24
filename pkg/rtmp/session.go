@@ -3,7 +3,6 @@ package rtmp
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -594,15 +593,11 @@ func (s *session) handleSetChunkSize(message *Message) {
 		return
 	}
 
-	// Fallback: 복잡한 경우 기존 방식 사용
-	payload := message.Payload()
-	if len(payload) != 4 {
-		slog.Error("Invalid Set Chunk Size message length", "length", len(payload), "sessionId", s.ID())
-		return
-	}
-
-	newChunkSize := binary.BigEndian.Uint32(payload[:4])
-	s.processChunkSizeValue(newChunkSize)
+	// 예상치 못한 상황: Set Chunk Size 메시지는 항상 단일 4바이트 버퍼여야 함
+	slog.Error("Set Chunk Size message is not a single 4-byte buffer - this should never happen", 
+		"payloadCount", len(message.payloads), 
+		"totalSize", message.TotalPayloadLen(), 
+		"sessionId", s.ID())
 }
 
 // processChunkSizeValue 청크 크기 값 처리 (공통 로직)
@@ -636,19 +631,11 @@ func (s *session) handleAbort(message *Message) {
 		return
 	}
 
-	// Fallback: 복잡한 경우 기존 방식 사용
-	payload := message.Payload()
-	if len(payload) != 4 {
-		slog.Error("Invalid Abort message length", "length", len(payload), "sessionId", s.ID())
-		return
-	}
-
-	chunkStreamId := binary.BigEndian.Uint32(payload[:4])
-	
-	// Reader에서 해당 청크 스트림 상태 초기화
-	s.reader.abortChunkStream(chunkStreamId)
-
-	slog.Info("Chunk stream aborted", "chunkStreamId", chunkStreamId, "sessionId", s.ID())
+	// 예상치 못한 상황: Abort 메시지는 항상 단일 4바이트 버퍼여야 함
+	slog.Error("Abort message is not a single 4-byte buffer - this should never happen", 
+		"payloadCount", len(message.payloads), 
+		"totalSize", message.TotalPayloadLen(), 
+		"sessionId", s.ID())
 }
 
 // handleAMF0Command AMF0 명령어 처리

@@ -100,11 +100,7 @@ func (m *Message) GetFixedSizePayload(expectedSize int) ([]byte, bool) {
 		}
 	}
 	
-	// 다중 버퍼이거나 크기가 다른 경우 - fallback 필요 신호
-	if m.TotalPayloadLen() == expectedSize {
-		return nil, false // fallback 사용하라는 신호
-	}
-	
+	// 다중 버퍼이거나 크기가 다른 경우
 	return nil, false
 }
 
