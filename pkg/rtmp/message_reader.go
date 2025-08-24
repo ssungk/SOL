@@ -9,6 +9,13 @@ import (
 	"sol/pkg/media"
 )
 
+// 메시지 헤더 크기 상수
+const (
+	FMT0_HEADER_SIZE = 11
+	FMT1_HEADER_SIZE = 7
+	FMT2_HEADER_SIZE = 3
+)
+
 type messageReader struct {
 	readerContext *messageReaderContext
 }
@@ -183,20 +190,20 @@ func readBasicHeader(r io.Reader) (header basicHeader, err error) {
 
 func readMessageHeader(r io.Reader, fmt byte, header *messageHeader) (*messageHeader, error) {
 	switch fmt {
-	case 0:
+	case FmtType0:
 		return readFmt0MessageHeader(r, header)
-	case 1:
+	case FmtType1:
 		return readFmt1MessageHeader(r, header)
-	case 2:
+	case FmtType2:
 		return readFmt2MessageHeader(r, header)
-	case 3:
+	case FmtType3:
 		return readFmt3MessageHeader(r, header)
 	}
 	return nil, errors.New("fmt must be 0-3")
 }
 
 func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (*messageHeader, error) {
-	buf := [11]byte{}
+	buf := [FMT0_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return nil, err
 	}
@@ -206,19 +213,16 @@ func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (*messageHeader, error
 	typeId := buf[6]
 	streamID := binary.LittleEndian.Uint32(buf[7:11])
 
-	if timestamp == ExtendedTimestampThreshold {
-		var err error
-		timestamp, err = readExtendedTimestamp(r)
-		if err != nil {
-			return nil, err
-		}
+	timestamp, err := readTimestampIfExtended(r, timestamp)
+	if err != nil {
+		return nil, err
 	}
 
 	return NewMessageHeader(timestamp, length, typeId, streamID), nil
 }
 
 func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
-	buf := [7]byte{}
+	buf := [FMT1_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return nil, err
 	}
@@ -227,37 +231,29 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 	length := readUint24BE(buf[3:6])
 	typeId := buf[6]
 
-	if timestampDelta == ExtendedTimestampThreshold {
-		var err error
-		timestampDelta, err = readExtendedTimestamp(r)
-		if err != nil {
-			return nil, err
-		}
+	timestampDelta, err := readTimestampIfExtended(r, timestampDelta)
+	if err != nil {
+		return nil, err
 	}
 
-	// 타임스탬프 계산 (32비트 산술로 오버플로우 자동 처리)
-	newTimestamp := header.timestamp + timestampDelta
+	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
 	return NewMessageHeader(newTimestamp, length, typeId, header.streamID), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
-	buf := [3]byte{}
+	buf := [FMT2_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return nil, err
 	}
 
 	timestampDelta := readUint24BE(buf[:])
-	if timestampDelta == ExtendedTimestampThreshold {
-		var err error
-		timestampDelta, err = readExtendedTimestamp(r)
-		if err != nil {
-			return nil, err
-		}
+	timestampDelta, err := readTimestampIfExtended(r, timestampDelta)
+	if err != nil {
+		return nil, err
 	}
 
-	// 타임스탬프 계산
-	newTimestamp := header.timestamp + timestampDelta
+	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
 	return NewMessageHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
 }
@@ -277,6 +273,19 @@ func readExtendedTimestamp(r io.Reader) (uint32, error) {
 
 func readUint24BE(buf []byte) uint32 {
 	return uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])
+}
+
+// Extended timestamp 공통 처리 함수
+func readTimestampIfExtended(r io.Reader, timestamp uint32) (uint32, error) {
+	if timestamp == ExtendedTimestampThreshold {
+		return readExtendedTimestamp(r)
+	}
+	return timestamp, nil
+}
+
+// Delta timestamp 계산 공통 함수 (32비트 산술로 오버플로우 자동 처리)
+func calculateNewTimestamp(baseTimestamp, timestampDelta uint32) uint32 {
+	return baseTimestamp + timestampDelta
 }
 
 // abortChunkStream aborts a specific chunk stream
