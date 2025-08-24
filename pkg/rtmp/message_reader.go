@@ -218,7 +218,7 @@ func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (*messageHeader, error
 		return nil, err
 	}
 
-	return NewMessageHeader(timestamp, length, typeId, streamID), nil
+	return newMessageHeader(timestamp, length, typeId, streamID), nil
 }
 
 func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -238,7 +238,7 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 
 	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
-	return NewMessageHeader(newTimestamp, length, typeId, header.streamID), nil
+	return newMessageHeader(newTimestamp, length, typeId, header.streamID), nil
 }
 
 func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
@@ -255,12 +255,12 @@ func readFmt2MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, 
 
 	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
-	return NewMessageHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
+	return newMessageHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
 }
 
 func readFmt3MessageHeader(r io.Reader, header *messageHeader) (*messageHeader, error) {
 	// FMT3은 이전 메시지의 헤더와 동일. 여기선 아무것도 읽지 않음
-	return NewMessageHeader(header.timestamp, header.length, header.typeId, header.streamID), nil
+	return newMessageHeader(header.timestamp, header.length, header.typeId, header.streamID), nil
 }
 
 func readExtendedTimestamp(r io.Reader) (uint32, error) {

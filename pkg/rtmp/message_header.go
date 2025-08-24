@@ -7,8 +7,8 @@ type messageHeader struct {
 	streamID  uint32
 }
 
-// NewMessageHeader creates a new message header
-func NewMessageHeader(timestamp uint32, length uint32, typeId uint8, streamID uint32) *messageHeader {
+// newMessageHeader creates a new message header
+func newMessageHeader(timestamp uint32, length uint32, typeId uint8, streamID uint32) *messageHeader {
 	return &messageHeader{
 		timestamp: timestamp,
 		length:    length,
