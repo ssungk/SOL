@@ -7,7 +7,7 @@ import (
 )
 
 type messageReaderContext struct {
-	messageHeaders map[uint32]*messageHeader
+	messageHeaders map[uint32]messageHeader
 	payloads       map[uint32][]*media.Buffer
 	payloadLengths map[uint32]uint32
 	mediaHeaders   map[uint32][]byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
@@ -16,7 +16,7 @@ type messageReaderContext struct {
 
 func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
-		messageHeaders: make(map[uint32]*messageHeader),
+		messageHeaders: make(map[uint32]messageHeader),
 		payloads:       make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
 		mediaHeaders:   make(map[uint32][]byte),
@@ -43,7 +43,7 @@ func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
 }
 
 func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *messageHeader) {
-	ms.messageHeaders[chunkStreamId] = messageHeader
+	ms.messageHeaders[chunkStreamId] = *messageHeader
 }
 
 // storeMediaHeader 미디어 헤더 저장
@@ -97,11 +97,10 @@ func (ms *messageReaderContext) getMsgHeader(chunkStreamId uint32) *messageHeade
 	if !ok {
 		return nil
 	}
-	return header
+	return &header
 }
 
 func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
-	slog.Debug("popMessageIfPossible called", "headers_count", len(ms.messageHeaders))
 	for chunkStreamId, messageHeader := range ms.messageHeaders {
 		payloadLength, ok := ms.payloadLengths[chunkStreamId]
 		if !ok {
@@ -121,16 +120,12 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 
 		// 전체 메시지 길이와 비교 (헤더 + 순수 데이터)
 		if payloadLength+headerSize != messageHeader.length {
-			slog.Debug("Message incomplete", "chunkStreamId", chunkStreamId,
-				"payloadLength", payloadLength, "headerSize", headerSize,
-				"expectedLength", messageHeader.length)
 			continue
 		}
 
-		slog.Info("Complete message found", "chunkStreamId", chunkStreamId, "typeId", messageHeader.typeId)
 
 		// 메시지 생성
-		msg := NewMessage(messageHeader)
+		msg := NewMessage(&messageHeader)
 
 		// 비디오/오디오 메시지의 경우 미디어 헤더 정보 설정 (별도 저장)
 		if mediaHeader, hasHeader := ms.mediaHeaders[chunkStreamId]; hasHeader {

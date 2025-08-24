@@ -100,8 +100,7 @@ func (tc *TrackCache) cleanupOldPackets() {
 			tc.lastKeyPacketIndex = -1 // 키패킷이 정리됨
 		}
 
-		slog.Debug("Old packets cleaned up", "removedCount", cleanupIndex, "remainingCount", len(tc.packets))
-	}
+		}
 
 	// 안전장치: 최대 패킷 수 제한
 	if len(tc.packets) > tc.maxPackets {

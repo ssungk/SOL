@@ -147,7 +147,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 		payloadBuffer = media.NewBuffer(0)
 	}
 
-	return NewChunk(basicHdr, msgHdr, payloadBuffer)
+	return NewChunk(basicHdr, &msgHdr, payloadBuffer)
 }
 
 // 연속 청크 생성 (fmt=3 - no header)
@@ -259,7 +259,7 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) erro
 
 func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := newMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
-	msg := NewMessage(header)
+	msg := NewMessage(&header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
 	msg.payloads = []*media.Buffer{buffer}
@@ -272,7 +272,7 @@ func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error 
 	binary.BigEndian.PutUint32(payload, chunkSize)
 
 	header := newMessageHeader(0, 4, MsgTypeSetChunkSize, 0)
-	msg := NewMessage(header)
+	msg := NewMessage(&header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
 	msg.payloads = []*media.Buffer{buffer}
@@ -295,7 +295,7 @@ func PutUint24(b []byte, v uint32) {
 // 오디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
 	header := newMessageHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
-	msg := NewMessage(header)
+	msg := NewMessage(&header)
 	audioBuffer := media.NewBuffer(len(audioData))
 	copy(audioBuffer.Data(), audioData)
 	msg.payloads = []*media.Buffer{audioBuffer}
@@ -305,7 +305,7 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 // 비디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
 	header := newMessageHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
-	msg := NewMessage(header)
+	msg := NewMessage(&header)
 	videoBuffer := media.NewBuffer(len(videoData))
 	copy(videoBuffer.Data(), videoData)
 	msg.payloads = []*media.Buffer{videoBuffer}
@@ -321,7 +321,7 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 	}
 
 	header := newMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
-	msg := NewMessage(header)
+	msg := NewMessage(&header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
 	msg.payloads = []*media.Buffer{buffer}

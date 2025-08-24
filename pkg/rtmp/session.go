@@ -124,7 +124,6 @@ func (s *session) readLoop() {
 		slog.Error("Handshake failed", "err", err)
 		return
 	}
-	slog.Info("Handshake successful with", "addr", s.conn.RemoteAddr())
 
 	for {
 		message, err := s.reader.readNextMessage(s.bufReadWriter)
@@ -162,7 +161,6 @@ func (s *session) cleanup() {
 	// MediaServer에 최종 종료 알림
 	s.mediaServerChannel <- media.NewNodeTerminated(s.ID())
 
-	slog.Info("session cleanup completed", "sessionId", s.ID())
 }
 
 // --- MediaSink 인터페이스 구현 ---
@@ -229,7 +227,7 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	// Message Header 길이는 실제 페이로드 길이 (미디어헤더 + 데이터)
 	payloadLen := len(header) + totalLen
 	messageHeader := newMessageHeader(e.packet.DTS32(), uint32(payloadLen), msgType, uint32(streamID))
-	message := NewMessage(messageHeader)
+	message := NewMessage(&messageHeader)
 	
 	// 미디어 헤더 저장
 	message.mediaHeader = make([]byte, len(header))
@@ -267,7 +265,6 @@ func (s *session) handleSendMetadata(e sendMetadataEvent) {
 
 // handleCommand 클라이언트로부터 받은 RTMP 메시지 처리
 func (s *session) handleCommand(message *Message) {
-	slog.Debug("receive message", "sessionId", s.ID(), "typeId", message.messageHeader.typeId)
 	switch message.messageHeader.typeId {
 	case MsgTypeSetChunkSize:
 		// SetChunkSize는 readLoop에서 직접 처리됨 (레이스 컨디션 방지)
@@ -381,7 +378,6 @@ func (s *session) handleVideo(message *Message) {
 		frameData[i] = buffer.AddRef() // 참조 카운트 증가
 	}
 	
-	slog.Info("Video frame debug", "payloads_len", len(message.payloads), "payloads_nil", message.payloads == nil)
 
 	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
@@ -398,7 +394,6 @@ func (s *session) handleVideo(message *Message) {
 		for _, buffer := range frameData {
 			totalLen += len(buffer.Data())
 		}
-		slog.Info("Sending packet to stream", "streamID", message.messageHeader.streamID, "data_len", totalLen)
 		stream.SendPacket(packet)
 	} else {
 		slog.Warn("Stream not found", "streamID", message.messageHeader.streamID)
@@ -531,7 +526,6 @@ func (s *session) handleOnMetaData(values []any) {
 		for _, stream := range s.publishedStreams {
 			stream.SendMetadata(stringMetadata)
 		}
-		slog.Info("Metadata sent to all published streams", "sessionId", s.ID(), "streamCount", len(s.publishedStreams), "metadataKeys", len(metadata))
 	} else {
 		slog.Warn("No published streams for metadata", "sessionId", s.ID())
 	}
@@ -722,8 +716,7 @@ func (s *session) handleConnect(values []any) {
 	if app, ok := commandObj["app"]; ok {
 		if appName, ok := app.(string); ok {
 			s.appName = appName
-			slog.Info("app name extracted", "appName", appName)
-		}
+			}
 	}
 
 	obj := map[string]any{
@@ -788,7 +781,6 @@ func (s *session) handleCreateStream(values []any) {
 	// 응답 전송 후 플러시
 	s.bufReadWriter.Flush()
 
-	slog.Info("createStream successful", "streamID", newStreamID, "transactionID", transactionID)
 }
 
 // handlePublish publish 명령어 처리 (소스 모드 활성화)
@@ -812,11 +804,11 @@ func (s *session) handlePublish(message *Message, values []any) {
 		return
 	}
 
-	// 발행 유형 (옵션널)
-	publishType := "live" // 기본값
+	// 발행 유형 (옵션널) - 현재 사용하지 않음
+	_ = "live" // 기본값
 	if len(values) > 4 {
 		if pt, ok := values[4].(string); ok {
-			publishType = pt
+			_ = pt
 		}
 	}
 
@@ -826,7 +818,6 @@ func (s *session) handlePublish(message *Message, values []any) {
 		return
 	}
 
-	slog.Info("publish request", "fullStreamPath", fullStreamPath, "publishType", publishType, "transactionID", transactionID)
 
 	// 1단계: message의 streamID 사용 및 스트림 준비
 	streamID := message.messageHeader.streamID
@@ -844,7 +835,6 @@ func (s *session) handlePublish(message *Message, values []any) {
 	// 3단계: 성공 응답 전송
 	s.sendPublishSuccessResponse(transactionID, fullStreamPath)
 
-	slog.Info("publish started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
 
 // handleFCPublish Flash Media Server 호환 명령어 처리
@@ -861,14 +851,13 @@ func (s *session) handleReleaseStream(_ []any) {
 func (s *session) handlePlay(message *Message, values []any) {
 	streamID := message.messageHeader.streamID
 
-	slog.Info("Play request initiated", "sessionId", s.ID(), "streamID", streamID, "currentSubscriptions", len(s.subscribedStreams), "isPublisher", s.IsPublisher())
 
 	if len(values) < 3 {
 		slog.Error("play: not enough parameters", "length", len(values))
 		return
 	}
 
-	transactionID, ok := values[1].(float64)
+	_, ok := values[1].(float64)
 	if !ok {
 		slog.Error("play: invalid transaction ID", "type", utils.TypeName(values[1]))
 		return
@@ -887,7 +876,6 @@ func (s *session) handlePlay(message *Message, values []any) {
 		return
 	}
 
-	slog.Info("Play request details", "sessionId", s.ID(), "streamID", streamID, "fullStreamPath", fullStreamPath, "transactionID", transactionID, "currentSubscribedStreams", s.subscribedStreams)
 
 	// 이미 구독 중인지 체크
 	for existingStreamId, existingPath := range s.subscribedStreams {
@@ -898,7 +886,6 @@ func (s *session) handlePlay(message *Message, values []any) {
 
 	// 먼저 구독 스트림 매핑을 설정 (MediaServer 신호 보내기 전에)
 	s.addSubscribedStream(streamID, fullStreamPath)
-	slog.Info("Stream mapping added, now sending SubscribeStarted event to MediaServer", "sessionId", s.ID(), "streamPath", fullStreamPath)
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
 	responseChan := make(chan media.Response, 1)
@@ -928,7 +915,6 @@ func (s *session) handlePlay(message *Message, values []any) {
 			}
 			return
 		}
-		slog.Info("Subscribe attempt succeeded", "sessionId", s.ID(), "streamPath", fullStreamPath)
 	case <-s.ctx.Done():
 		slog.Error("Subscribe attempt cancelled", "sessionId", s.ID(), "streamPath", fullStreamPath)
 		// 취소 시 미리 추가한 매핑 제거
@@ -979,7 +965,6 @@ func (s *session) handlePlay(message *Message, values []any) {
 	// 최종 응답 전송 후 플러시
 	s.bufReadWriter.Flush()
 
-	slog.Info("play started successfully", "fullStreamPath", fullStreamPath, "transactionID", transactionID)
 }
 
 // stopPublishing 발행 중단 처리
@@ -1221,8 +1206,7 @@ func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) b
 	select {
 	case response := <-responseChan:
 		if response.Success {
-			slog.Info("Stream publish attempt succeeded", "sessionId", s.ID(), "streamKey", streamKey)
-			return true
+				return true
 		} else {
 			slog.Error("Stream publish attempt failed", "sessionId", s.ID(), "streamKey", streamKey, "error", response.Error)
 			return false
