@@ -1,6 +1,9 @@
 package rtmp
 
-import "sol/pkg/media"
+import (
+	"encoding/binary"
+	"sol/pkg/media"
+)
 
 type Message struct {
 	messageHeader *messageHeader
@@ -75,4 +78,38 @@ func (m *Message) Release() {
 			buffer.Release()
 		}
 	}
+}
+
+// TotalPayloadLen 전체 페이로드 길이를 계산 (메모리 할당 없이)
+func (m *Message) TotalPayloadLen() int {
+	total := 0
+	for _, buffer := range m.payloads {
+		total += len(buffer.Data())
+	}
+	return total
+}
+
+// GetFixedSizePayload 고정 크기 페이로드 직접 접근 (zero-copy 시도)
+func (m *Message) GetFixedSizePayload(expectedSize int) ([]byte, bool) {
+	if len(m.payloads) == 1 {
+		data := m.payloads[0].Data()
+		if len(data) == expectedSize {
+			return data, true // zero-copy 성공
+		}
+	}
+	
+	// 다중 버퍼이거나 크기가 다른 경우 - fallback 필요 신호
+	if m.TotalPayloadLen() == expectedSize {
+		return nil, false // fallback 사용하라는 신호
+	}
+	
+	return nil, false
+}
+
+// GetUint32FromPayload 4바이트 페이로드에서 uint32 추출 (zero-copy 시도)
+func (m *Message) GetUint32FromPayload() (uint32, bool) {
+	if data, ok := m.GetFixedSizePayload(4); ok {
+		return binary.BigEndian.Uint32(data), true
+	}
+	return 0, false
 }

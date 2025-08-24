@@ -588,16 +588,26 @@ func (s *session) calculateDataSize(data []byte) uint32 {
 func (s *session) handleSetChunkSize(message *Message) {
 	slog.Debug("handleSetChunkSize", "sessionId", s.ID())
 
+	// Zero-copy 시도: 단일 버퍼이고 정확히 4바이트인 경우
+	if newChunkSize, ok := message.GetUint32FromPayload(); ok {
+		// Zero-copy 성공 - 직접 처리
+		s.processChunkSizeValue(newChunkSize)
+		return
+	}
+
+	// Fallback: 복잡한 경우 기존 방식 사용
 	payload := message.Payload()
 	if len(payload) != 4 {
 		slog.Error("Invalid Set Chunk Size message length", "length", len(payload), "sessionId", s.ID())
 		return
 	}
 
-	// 4바이트 읽기 (big endian)
-	chunkSizeBytes := payload[:4]
+	newChunkSize := binary.BigEndian.Uint32(payload[:4])
+	s.processChunkSizeValue(newChunkSize)
+}
 
-	newChunkSize := binary.BigEndian.Uint32(chunkSizeBytes)
+// processChunkSizeValue 청크 크기 값 처리 (공통 로직)
+func (s *session) processChunkSizeValue(newChunkSize uint32) {
 
 	// 첫 번째 비트(최상위 비트) 체크: 반드시 0이어야 함
 	if newChunkSize&0x80000000 != 0 {
@@ -619,17 +629,23 @@ func (s *session) handleSetChunkSize(message *Message) {
 func (s *session) handleAbort(message *Message) {
 	slog.Debug("handleAbort", "sessionId", s.ID())
 
+	// Zero-copy 시도: 단일 버퍼이고 정확히 4바이트인 경우
+	if chunkStreamId, ok := message.GetUint32FromPayload(); ok {
+		// Zero-copy 성공 - 직접 처리
+		s.reader.abortChunkStream(chunkStreamId)
+		slog.Info("Chunk stream aborted", "chunkStreamId", chunkStreamId, "sessionId", s.ID())
+		return
+	}
+
+	// Fallback: 복잡한 경우 기존 방식 사용
 	payload := message.Payload()
 	if len(payload) != 4 {
 		slog.Error("Invalid Abort message length", "length", len(payload), "sessionId", s.ID())
 		return
 	}
 
-	// 4바이트 읽기 (big endian)
-	chunkStreamIdBytes := payload[:4]
-
-	chunkStreamId := binary.BigEndian.Uint32(chunkStreamIdBytes)
-
+	chunkStreamId := binary.BigEndian.Uint32(payload[:4])
+	
 	// Reader에서 해당 청크 스트림 상태 초기화
 	s.reader.abortChunkStream(chunkStreamId)
 
