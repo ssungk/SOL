@@ -188,7 +188,7 @@ func readBasicHeader(r io.Reader) (header basicHeader, err error) {
 	return
 }
 
-func readMessageHeader(r io.Reader, fmt byte, header *messageHeader) (messageHeader, error) {
+func readMessageHeader(r io.Reader, fmt byte, header *msgHeader) (msgHeader, error) {
 	switch fmt {
 	case FmtType0:
 		return readFmt0MessageHeader(r, header)
@@ -199,13 +199,13 @@ func readMessageHeader(r io.Reader, fmt byte, header *messageHeader) (messageHea
 	case FmtType3:
 		return readFmt3MessageHeader(r, header)
 	}
-	return messageHeader{}, errors.New("fmt must be 0-3")
+	return msgHeader{}, errors.New("fmt must be 0-3")
 }
 
-func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (messageHeader, error) {
+func readFmt0MessageHeader(r io.Reader, _ *msgHeader) (msgHeader, error) {
 	buf := [FMT0_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
 	timestamp := readUint24BE(buf[0:3])
@@ -215,16 +215,16 @@ func readFmt0MessageHeader(r io.Reader, _ *messageHeader) (messageHeader, error)
 
 	timestamp, err := readTimestampIfExtended(r, timestamp)
 	if err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
-	return newMessageHeader(timestamp, length, typeId, streamID), nil
+	return newMsgHeader(timestamp, length, typeId, streamID), nil
 }
 
-func readFmt1MessageHeader(r io.Reader, header *messageHeader) (messageHeader, error) {
+func readFmt1MessageHeader(r io.Reader, header *msgHeader) (msgHeader, error) {
 	buf := [FMT1_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
 	timestampDelta := readUint24BE(buf[0:3])
@@ -233,34 +233,34 @@ func readFmt1MessageHeader(r io.Reader, header *messageHeader) (messageHeader, e
 
 	timestampDelta, err := readTimestampIfExtended(r, timestampDelta)
 	if err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
 	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
-	return newMessageHeader(newTimestamp, length, typeId, header.streamID), nil
+	return newMsgHeader(newTimestamp, length, typeId, header.streamID), nil
 }
 
-func readFmt2MessageHeader(r io.Reader, header *messageHeader) (messageHeader, error) {
+func readFmt2MessageHeader(r io.Reader, header *msgHeader) (msgHeader, error) {
 	buf := [FMT2_HEADER_SIZE]byte{}
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
 	timestampDelta := readUint24BE(buf[:])
 	timestampDelta, err := readTimestampIfExtended(r, timestampDelta)
 	if err != nil {
-		return messageHeader{}, err
+		return msgHeader{}, err
 	}
 
 	newTimestamp := calculateNewTimestamp(header.timestamp, timestampDelta)
 
-	return newMessageHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
+	return newMsgHeader(newTimestamp, header.length, header.typeId, header.streamID), nil
 }
 
-func readFmt3MessageHeader(r io.Reader, header *messageHeader) (messageHeader, error) {
+func readFmt3MessageHeader(r io.Reader, header *msgHeader) (msgHeader, error) {
 	// FMT3은 이전 메시지의 헤더와 동일. 여기선 아무것도 읽지 않음
-	return newMessageHeader(header.timestamp, header.length, header.typeId, header.streamID), nil
+	return newMsgHeader(header.timestamp, header.length, header.typeId, header.streamID), nil
 }
 
 func readExtendedTimestamp(r io.Reader) (uint32, error) {

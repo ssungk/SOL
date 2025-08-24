@@ -7,7 +7,7 @@ import (
 )
 
 type messageReaderContext struct {
-	messageHeaders map[uint32]messageHeader
+	messageHeaders map[uint32]msgHeader
 	payloads       map[uint32][]*media.Buffer
 	payloadLengths map[uint32]uint32
 	mediaHeaders   map[uint32][]byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
@@ -16,7 +16,7 @@ type messageReaderContext struct {
 
 func newMessageReaderContext() *messageReaderContext {
 	return &messageReaderContext{
-		messageHeaders: make(map[uint32]messageHeader),
+		messageHeaders: make(map[uint32]msgHeader),
 		payloads:       make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
 		mediaHeaders:   make(map[uint32][]byte),
@@ -42,7 +42,7 @@ func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
 	delete(mrc.mediaHeaders, chunkStreamId)
 }
 
-func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *messageHeader) {
+func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *msgHeader) {
 	ms.messageHeaders[chunkStreamId] = *messageHeader
 }
 
@@ -92,7 +92,7 @@ func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 	return remain
 }
 
-func (ms *messageReaderContext) getMsgHeader(chunkStreamId uint32) *messageHeader {
+func (ms *messageReaderContext) getMsgHeader(chunkStreamId uint32) *msgHeader {
 	header, ok := ms.messageHeaders[chunkStreamId]
 	if !ok {
 		return nil

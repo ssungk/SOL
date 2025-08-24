@@ -125,7 +125,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
 	basicHdr := newBasicHeader(FmtType0, uint32(chunkStreamID))
-	msgHdr := newMessageHeader(
+	msgHdr := newMsgHeader(
 		headerTimestamp,
 		uint32(totalPayloadLength),
 		msg.messageHeader.typeId,
@@ -157,7 +157,7 @@ func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize 
 	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
 
 	// Type 3는 message header가 없음
-	var msgHdr *messageHeader = nil
+	var msgHdr *msgHeader = nil
 
 	// payload 버퍼 생성 - 미디어 메시지는 FullPayload 사용
 	var payloadBuffer *media.Buffer
@@ -247,7 +247,7 @@ func (mw *messageWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
 }
 
 // Message Header 인코딩 및 전송
-func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) error {
+func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
 	header := make([]byte, 11)
 	PutUint24(header[0:], mh.timestamp)                    // 3 bytes timestamp
 	PutUint24(header[3:], mh.length)                       // 3 bytes message length
@@ -258,7 +258,7 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *messageHeader) erro
 }
 
 func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
-	header := newMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
+	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
 	msg := NewMessage(header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
@@ -271,7 +271,7 @@ func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error 
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, chunkSize)
 
-	header := newMessageHeader(0, 4, MsgTypeSetChunkSize, 0)
+	header := newMsgHeader(0, 4, MsgTypeSetChunkSize, 0)
 	msg := NewMessage(header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
@@ -294,7 +294,7 @@ func PutUint24(b []byte, v uint32) {
 
 // 오디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
-	header := newMessageHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
+	header := newMsgHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
 	msg := NewMessage(header)
 	audioBuffer := media.NewBuffer(len(audioData))
 	copy(audioBuffer.Data(), audioData)
@@ -304,7 +304,7 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 
 // 비디오 데이터 전송 (zero-copy)
 func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
-	header := newMessageHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
+	header := newMsgHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
 	msg := NewMessage(header)
 	videoBuffer := media.NewBuffer(len(videoData))
 	copy(videoBuffer.Data(), videoData)
@@ -320,7 +320,7 @@ func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metada
 		return err
 	}
 
-	header := newMessageHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
+	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
 	msg := NewMessage(header)
 	buffer := media.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)

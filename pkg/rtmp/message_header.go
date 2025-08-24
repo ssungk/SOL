@@ -1,15 +1,15 @@
 package rtmp
 
-type messageHeader struct {
+type msgHeader struct {
 	timestamp uint32
 	length    uint32
 	typeId    uint8
 	streamID  uint32
 }
 
-// newMessageHeader creates a new message header
-func newMessageHeader(timestamp uint32, length uint32, typeId uint8, streamID uint32) messageHeader {
-	return messageHeader{
+// newMsgHeader creates a new message header
+func newMsgHeader(timestamp uint32, length uint32, typeId uint8, streamID uint32) msgHeader {
+	return msgHeader{
 		timestamp: timestamp,
 		length:    length,
 		typeId:    typeId,
