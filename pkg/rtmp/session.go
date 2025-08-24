@@ -226,7 +226,7 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	// Message Header 길이는 실제 페이로드 길이 (미디어헤더 + 데이터)
 	payloadLen := len(header) + totalLen
 	messageHeader := newMessageHeader(e.packet.DTS32(), uint32(payloadLen), msgType, uint32(streamID))
-	message := NewMessage(&messageHeader)
+	message := NewMessage(messageHeader)
 	
 	// 미디어 헤더 저장
 	message.mediaHeader = make([]byte, len(header))
@@ -556,7 +556,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 
 	// script data 메시지로 전송
 	message := &Message{
-		messageHeader: &messageHeader{
+		messageHeader: messageHeader{
 			timestamp: 0,
 			length:    uint32(len(encodedData)),
 			typeId:    MsgTypeAMF0Data,

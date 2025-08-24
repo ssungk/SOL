@@ -125,7 +125,7 @@ func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
 
 
 		// 메시지 생성
-		msg := NewMessage(&messageHeader)
+		msg := NewMessage(messageHeader)
 
 		// 비디오/오디오 메시지의 경우 미디어 헤더 정보 설정 (별도 저장)
 		if mediaHeader, hasHeader := ms.mediaHeaders[chunkStreamId]; hasHeader {
