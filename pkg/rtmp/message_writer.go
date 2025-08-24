@@ -8,18 +8,18 @@ import (
 	"sol/pkg/rtmp/amf"
 )
 
-type messageWriter struct {
+type msgWriter struct {
 	chunkSize uint32
 }
 
-func newMessageWriter() *messageWriter {
-	return &messageWriter{
+func newMsgWriter() *msgWriter {
+	return &msgWriter{
 		chunkSize: DefaultChunkSize,
 	}
 }
 
 // 공통 메시지 쓰기 함수 - 모든 RTMP 메시지는 이 함수를 통해 전송
-func (mw *messageWriter) writeMessage(w io.Writer, msg *Message) error {
+func (mw *msgWriter) writeMessage(w io.Writer, msg *Message) error {
 	chunks, err := mw.buildChunks(msg)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func (mw *messageWriter) writeMessage(w io.Writer, msg *Message) error {
 }
 
 // 메시지를 청크 배열로 구성 (zero-copy)
-func (mw *messageWriter) buildChunks(msg *Message) ([]*Chunk, error) {
+func (mw *msgWriter) buildChunks(msg *Message) ([]*Chunk, error) {
 	// 실제 전송될 페이로드 길이 계산 (미디어 메시지는 헤더 포함)
 	var totalPayloadLength int
 	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
@@ -115,7 +115,7 @@ func getChunkStreamIDForMessageType(messageType byte) byte {
 }
 
 // 첫 번째 청크 생성 (fmt=0 - full header)
-func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalPayloadLength int) *Chunk {
+func (mw *msgWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalPayloadLength int) *Chunk {
 	// 확장 타임스탬프 처리
 	headerTimestamp := msg.messageHeader.timestamp
 	if msg.messageHeader.timestamp >= ExtendedTimestampThreshold {
@@ -151,7 +151,7 @@ func (mw *messageWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalP
 }
 
 // 연속 청크 생성 (fmt=3 - no header)
-func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize int) *Chunk {
+func (mw *msgWriter) buildContinuationChunk(msg *Message, offset, chunkSize int) *Chunk {
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
 	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
@@ -174,7 +174,7 @@ func (mw *messageWriter) buildContinuationChunk(msg *Message, offset, chunkSize 
 }
 
 // 단일 청크 전송
-func (mw *messageWriter) writeChunk(w io.Writer, chunk *Chunk) error {
+func (mw *msgWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 	// Basic Header 전송
 	if err := mw.writeBasicHeader(w, chunk.basicHeader); err != nil {
 		return err
@@ -212,7 +212,7 @@ func (mw *messageWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 }
 
 // Extended Timestamp 인코딩 및 전송
-func (mw *messageWriter) writeExtendedTimestamp(w io.Writer, timestamp uint32) error {
+func (mw *msgWriter) writeExtendedTimestamp(w io.Writer, timestamp uint32) error {
 	header := make([]byte, 4)
 	binary.BigEndian.PutUint32(header, timestamp)
 	_, err := w.Write(header)
@@ -220,7 +220,7 @@ func (mw *messageWriter) writeExtendedTimestamp(w io.Writer, timestamp uint32) e
 }
 
 // Basic Header 인코딩 및 전송
-func (mw *messageWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
+func (mw *msgWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
 	var header []byte
 
 	if bh.chunkStreamID < 64 {
@@ -247,7 +247,7 @@ func (mw *messageWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
 }
 
 // Message Header 인코딩 및 전송
-func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
+func (mw *msgWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
 	header := make([]byte, 11)
 	PutUint24(header[0:], mh.timestamp)                    // 3 bytes timestamp
 	PutUint24(header[3:], mh.length)                       // 3 bytes message length
@@ -257,7 +257,7 @@ func (mw *messageWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
 	return err
 }
 
-func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
+func (mw *msgWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
 	msg := NewMessage(header)
 	buffer := media.NewBuffer(len(payload))
@@ -266,7 +266,7 @@ func (mw *messageWriter) writeCommand(w io.Writer, payload []byte) error {
 	return mw.writeMessage(w, msg)
 }
 
-func (mw *messageWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
+func (mw *msgWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
 	// 페이로드 생성 (4바이트 빅엔디안)
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, chunkSize)
@@ -293,7 +293,7 @@ func PutUint24(b []byte, v uint32) {
 }
 
 // 오디오 데이터 전송 (zero-copy)
-func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
+func (mw *msgWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
 	header := newMsgHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
 	msg := NewMessage(header)
 	audioBuffer := media.NewBuffer(len(audioData))
@@ -303,7 +303,7 @@ func (mw *messageWriter) writeAudioData(w io.Writer, audioData []byte, timestamp
 }
 
 // 비디오 데이터 전송 (zero-copy)
-func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
+func (mw *msgWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
 	header := newMsgHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
 	msg := NewMessage(header)
 	videoBuffer := media.NewBuffer(len(videoData))
@@ -313,7 +313,7 @@ func (mw *messageWriter) writeVideoData(w io.Writer, videoData []byte, timestamp
 }
 
 // 메타데이터 전송
-func (mw *messageWriter) writeScriptData(w io.Writer, commandName string, metadata map[string]any) error {
+func (mw *msgWriter) writeScriptData(w io.Writer, commandName string, metadata map[string]any) error {
 	// AMF 데이터 인코딩
 	payload, err := amf.EncodeAMF0Sequence(commandName, metadata)
 	if err != nil {

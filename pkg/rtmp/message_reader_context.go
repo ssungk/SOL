@@ -6,7 +6,7 @@ import (
 	"sol/pkg/media"
 )
 
-type messageReaderContext struct {
+type msgReaderContext struct {
 	messageHeaders map[uint32]msgHeader
 	payloads       map[uint32][]*media.Buffer
 	payloadLengths map[uint32]uint32
@@ -14,8 +14,8 @@ type messageReaderContext struct {
 	chunkSize      uint32
 }
 
-func newMessageReaderContext() *messageReaderContext {
-	return &messageReaderContext{
+func newMsgReaderContext() *msgReaderContext {
+	return &msgReaderContext{
 		messageHeaders: make(map[uint32]msgHeader),
 		payloads:       make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
@@ -24,11 +24,11 @@ func newMessageReaderContext() *messageReaderContext {
 	}
 }
 
-func (mrc *messageReaderContext) setChunkSize(size uint32) {
+func (mrc *msgReaderContext) setChunkSize(size uint32) {
 	mrc.chunkSize = size
 }
 
-func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
+func (mrc *msgReaderContext) abortChunkStream(chunkStreamId uint32) {
 	// 버퍼들 해제
 	if buffers, exists := mrc.payloads[chunkStreamId]; exists {
 		for _, buffer := range buffers {
@@ -42,17 +42,17 @@ func (mrc *messageReaderContext) abortChunkStream(chunkStreamId uint32) {
 	delete(mrc.mediaHeaders, chunkStreamId)
 }
 
-func (ms *messageReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *msgHeader) {
+func (ms *msgReaderContext) updateMsgHeader(chunkStreamId uint32, messageHeader *msgHeader) {
 	ms.messageHeaders[chunkStreamId] = *messageHeader
 }
 
 // storeMediaHeader 미디어 헤더 저장
-func (ms *messageReaderContext) storeMediaHeader(chunkStreamId uint32, header []byte) {
+func (ms *msgReaderContext) storeMediaHeader(chunkStreamId uint32, header []byte) {
 	ms.mediaHeaders[chunkStreamId] = header
 }
 
 // addMediaBuffer 미디어 버퍼를 추가
-func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
+func (ms *msgReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
 	if ms.payloads[chunkStreamId] == nil {
 		ms.payloads[chunkStreamId] = make([]*media.Buffer, 0)
 	}
@@ -61,12 +61,12 @@ func (ms *messageReaderContext) addMediaBuffer(chunkStreamId uint32, buffer *med
 	ms.payloadLengths[chunkStreamId] += uint32(len(buffer.Data()))
 }
 
-func (ms *messageReaderContext) isInitialChunk(chunkStreamId uint32) bool {
+func (ms *msgReaderContext) isInitialChunk(chunkStreamId uint32) bool {
 	_, ok := ms.payloads[chunkStreamId]
 	return !ok
 }
 
-func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
+func (ms *msgReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 	header, ok := ms.messageHeaders[chunkStreamId]
 	if !ok {
 		slog.Error("message header not found", "chunkStreamId", chunkStreamId)
@@ -92,7 +92,7 @@ func (ms *messageReaderContext) nextChunkSize(chunkStreamId uint32) uint32 {
 	return remain
 }
 
-func (ms *messageReaderContext) getMsgHeader(chunkStreamId uint32) *msgHeader {
+func (ms *msgReaderContext) getMsgHeader(chunkStreamId uint32) *msgHeader {
 	header, ok := ms.messageHeaders[chunkStreamId]
 	if !ok {
 		return nil
@@ -100,7 +100,7 @@ func (ms *messageReaderContext) getMsgHeader(chunkStreamId uint32) *msgHeader {
 	return &header
 }
 
-func (ms *messageReaderContext) popMessageIfPossible() (*Message, error) {
+func (ms *msgReaderContext) popMessageIfPossible() (*Message, error) {
 	for chunkStreamId, messageHeader := range ms.messageHeaders {
 		payloadLength, ok := ms.payloadLengths[chunkStreamId]
 		if !ok {

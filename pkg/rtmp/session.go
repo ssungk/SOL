@@ -16,8 +16,8 @@ import (
 
 // session RTMP에서 사용하는 세션 구조체 (이벤트 루프 기반)
 type session struct {
-	reader        *messageReader
-	writer        *messageWriter
+	reader        *msgReader
+	writer        *msgWriter
 	conn          net.Conn
 	bufReadWriter *bufio.ReadWriter
 
@@ -55,8 +55,8 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 	bufReadWriter := bufio.NewReadWriter(reader, writer)
 	
 	s := &session{
-		reader:             newMessageReader(),
-		writer:             newMessageWriter(),
+		reader:             newMsgReader(),
+		writer:             newMsgWriter(),
 		conn:               conn,
 		bufReadWriter:      bufReadWriter,
 		mediaServerChannel: mediaServerChannel,

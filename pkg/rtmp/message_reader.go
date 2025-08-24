@@ -16,22 +16,22 @@ const (
 	FMT2_HEADER_SIZE = 3
 )
 
-type messageReader struct {
-	readerContext *messageReaderContext
+type msgReader struct {
+	readerContext *msgReaderContext
 }
 
-func newMessageReader() *messageReader {
-	ms := &messageReader{
-		readerContext: newMessageReaderContext(),
+func newMsgReader() *msgReader {
+	ms := &msgReader{
+		readerContext: newMsgReaderContext(),
 	}
 	return ms
 }
 
-func (ms *messageReader) setChunkSize(size uint32) {
+func (ms *msgReader) setChunkSize(size uint32) {
 	ms.readerContext.setChunkSize(size)
 }
 
-func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
+func (ms *msgReader) readNextMessage(r io.Reader) (*Message, error) {
 	for {
 		err := ms.readChunk(r)
 		if err != nil {
@@ -47,7 +47,7 @@ func (ms *messageReader) readNextMessage(r io.Reader) (*Message, error) {
 	}
 }
 
-func (ms *messageReader) readChunk(r io.Reader) error {
+func (ms *msgReader) readChunk(r io.Reader) error {
 	basicHeader, err := readBasicHeader(r)
 	if err != nil {
 		slog.Error("Failed to read basic header", "err", err)
@@ -103,7 +103,7 @@ func (ms *messageReader) readChunk(r io.Reader) error {
 }
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
-func (ms *messageReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
+func (ms *msgReader) readAndSeparateMediaHeader(r io.Reader, chunkStreamId uint32, messageType uint8, chunkSize *uint32) error {
 	// 최소한 첫 바이트는 읽어서 코덱을 판단해야 함
 	if *chunkSize == 0 {
 		return fmt.Errorf("chunk size is 0, cannot read media header")
@@ -289,7 +289,7 @@ func calculateNewTimestamp(baseTimestamp, timestampDelta uint32) uint32 {
 }
 
 // abortChunkStream aborts a specific chunk stream
-func (mr *messageReader) abortChunkStream(chunkStreamId uint32) {
+func (mr *msgReader) abortChunkStream(chunkStreamId uint32) {
 	mr.readerContext.abortChunkStream(chunkStreamId)
 }
 
