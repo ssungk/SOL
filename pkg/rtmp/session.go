@@ -2,7 +2,6 @@ package rtmp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -460,8 +459,8 @@ func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.Pack
 // handleAMF0ScriptData 스크립트 데이터 처리 (메타데이터 등)
 func (s *session) handleAMF0ScriptData(message *Message) {
 
-	// AMF 데이터 디코딩
-	reader := bytes.NewReader(message.Payload())
+	// AMF 데이터 디코딩 (zero-copy 최적화)
+	reader := message.Reader()
 	values, err := amf.DecodeAMF0Sequence(reader)
 	if err != nil {
 		slog.Error("failed to decode script data", "err", err)
@@ -655,7 +654,7 @@ func (s *session) handleAbort(message *Message) {
 // handleAMF0Command AMF0 명령어 처리
 func (s *session) handleAMF0Command(message *Message) {
 	slog.Debug("handleAMFCommand", "sessionId", s.ID())
-	reader := bytes.NewReader(message.Payload())
+	reader := message.Reader()
 	values, err := amf.DecodeAMF0Sequence(reader)
 	if err != nil {
 		slog.Error("Failed to decode AMF sequence", "sessionId", s.ID(), "err", err)
@@ -1009,8 +1008,8 @@ func (s *session) stopSubscribing() {
 
 // handleAMF3ScriptData AMF3 스크립트 데이터 처리
 func (s *session) handleAMF3ScriptData(message *Message) {
-	// AMF3 데이터 디코딩
-	reader := bytes.NewReader(message.Payload())
+	// AMF3 데이터 디코딩 (zero-copy 최적화)
+	reader := message.Reader()
 
 	// AMF3 컨텍스트를 사용하여 디코딩
 	values, err := amf.DecodeAMF3Sequence(reader)
@@ -1048,7 +1047,7 @@ func (s *session) handleAMF3ScriptData(message *Message) {
 func (s *session) handleAMF3Command(message *Message) {
 	slog.Debug("handleAMF3Command", "sessionId", s.ID())
 
-	reader := bytes.NewReader(message.Payload())
+	reader := message.Reader()
 
 	// AMF3 컨텍스트를 사용하여 디코딩
 	values, err := amf.DecodeAMF3Sequence(reader)

@@ -1,7 +1,9 @@
 package rtmp
 
 import (
+	"bytes"
 	"encoding/binary"
+	"io"
 	"sol/pkg/media"
 )
 
@@ -112,4 +114,18 @@ func (m *Message) GetUint32FromPayload() (uint32, bool) {
 		return binary.BigEndian.Uint32(data), true
 	}
 	return 0, false
+}
+
+// Reader 메시지 페이로드를 io.Reader로 반환 (zero-copy 최적화)
+func (m *Message) Reader() io.Reader {
+	if len(m.payloads) == 0 {
+		return bytes.NewReader(nil)
+	}
+	
+	// MultiReader 사용하여 연결된 reader 제공 (단일/다중 버퍼 통합 처리)
+	readers := make([]io.Reader, len(m.payloads))
+	for i, buffer := range m.payloads {
+		readers[i] = bytes.NewReader(buffer.Data())
+	}
+	return io.MultiReader(readers...)
 }
