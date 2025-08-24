@@ -120,7 +120,7 @@ func (s *session) readLoop() {
 	defer s.wg.Done()
 	defer s.cancel()
 
-	if err := ServerHandshake(s.conn); err != nil {
+	if err := ServerHandshake(s.bufReadWriter); err != nil {
 		slog.Error("Handshake failed", "err", err)
 		return
 	}
