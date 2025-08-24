@@ -193,7 +193,6 @@ func (s *Session) handleRequests() {
 		s.reader = NewMessageReader(s.conn)
 
 		s.lastActivity = time.Now()
-		slog.Debug("RTSP request received", "sessionId", s.ID(), "method", request.Method, "uri", request.URI, "cseq", request.CSeq)
 
 		if err := s.handleRequest(request); err != nil {
 			slog.Error("Failed to handle RTSP request", "sessionId", s.ID(), "method", request.Method, "err", err)
@@ -224,7 +223,6 @@ func (s *Session) handleInterleavedData() error {
 	// Process the data based on channel
 	if int(channel) == s.rtpChannel {
 		// RTP data from client - convert to media frame and send to stream
-		slog.Debug("Received interleaved RTP data from client", "sessionId", s.ID(), "dataSize", len(data))
 		
 		// RTP 패킷을 media.Packet으로 변환
 		packet, err := s.convertRTPToPacket(data, s.streamPath)
@@ -241,17 +239,6 @@ func (s *Session) handleInterleavedData() error {
 			}
 			
 			s.Stream.SendPacket(packet)
-			slog.Debug("RTP packet sent to stream", 
-				"sessionId", s.ID(), 
-				"streamPath", s.streamPath, 
-				"packetType", packet.Type,
-				"codec", packet.Codec)
-		} else {
-			slog.Debug("RTP packet converted but not sent (no stream or not recording)", 
-				"sessionId", s.ID(), 
-				"streamPath", s.streamPath, 
-				"state", s.state.String(),
-				"hasStream", s.Stream != nil)
 		}
 	} else {
 		slog.Warn("Received interleaved data on unknown channel", "sessionId", s.ID(), "channel", channel)
@@ -451,7 +438,6 @@ func (s *Session) handlePlay(req *Request) error {
 	// Parse Range header if present
 	rangeHeader := req.GetHeader(HeaderRange)
 	if rangeHeader != "" {
-		slog.Debug("Range header received", "sessionId", s.ID(), "range", rangeHeader)
 		// Range 헤더는 현재 로그로만 기록 (시간대별 재생 지원은 향후 구현)
 	}
 
@@ -471,8 +457,7 @@ func (s *Session) handlePlay(req *Request) error {
 					slog.Error("Subscribe failed", "sessionId", s.ID(), "streamPath", s.streamPath, "error", response.Error)
 					return fmt.Errorf("subscribe failed: %s", response.Error)
 				}
-				slog.Info("Subscribe successful", "sessionId", s.ID(), "streamPath", s.streamPath)
-			case <-s.ctx.Done():
+				case <-s.ctx.Done():
 				slog.Error("Subscribe cancelled", "sessionId", s.ID(), "streamPath", s.streamPath)
 				return fmt.Errorf("subscribe cancelled")
 			}
@@ -695,7 +680,6 @@ func (s *Session) SendInterleavedRTPPacket(data []byte) error {
 		return fmt.Errorf("failed to send interleaved RTP packet: %v", err)
 	}
 
-	slog.Debug("Interleaved RTP packet sent", "sessionId", s.ID(), "channel", s.rtpChannel, "dataSize", len(data))
 	return nil
 }
 
@@ -764,7 +748,6 @@ func (s *Session) SendPacket(streamID string, packet media.Packet) error {
 // SendMetadata MediaSink 인터페이스 구현 - 메타데이터를 세션으로 전송
 func (s *Session) SendMetadata(streamID string, metadata map[string]string) error {
 	// RTSP에서는 SDP를 통해 메타데이터가 전송되므로 현재는 처리하지 않음
-	slog.Debug("Metadata received for RTSP session", "sessionId", s.ID(), "streamID", streamID)
 	return nil
 }
 
@@ -871,13 +854,6 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 		[]*media.Buffer{payloadBuffer},
 	)
 
-	slog.Debug("Converted RTP to Packet", 
-		"sessionId", s.ID(), 
-		"streamID", streamID,
-		"payloadType", payloadType,
-		"codec", codec,
-		"timestamp", timestamp,
-		"payloadSize", len(payload))
 
 	return packet, nil
 }
@@ -925,7 +901,7 @@ func (s *Session) attemptStreamPublish(streamPath string, stream *media.Stream) 
 		select {
 		case response := <-responseChan:
 			if response.Error != "" {
-				slog.Debug("Stream publish attempt failed", "sessionId", s.ID(), "streamPath", streamPath, "error", response.Error)
+				slog.Error("Stream publish attempt failed", "sessionId", s.ID(), "streamPath", streamPath, "error", response.Error)
 			}
 			return response.Success
 		case <-time.After(5 * time.Second):

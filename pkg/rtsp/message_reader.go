@@ -16,7 +16,7 @@ type MessageReader struct {
 // NewMessageReader creates a new RTSP message reader
 func NewMessageReader(r io.Reader) *MessageReader {
 	return &MessageReader{
-		reader: bufio.NewReader(r),
+		reader: bufio.NewReaderSize(r, 8192), // 8KB 버퍼 크기 (RTMP와 동일)
 	}
 }
 

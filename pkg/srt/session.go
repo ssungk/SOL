@@ -127,10 +127,6 @@ func (s *Session) SendPacket(streamID string, packet media.Packet) error {
 
 	// TODO: SRT 패킷으로 변환하여 전송
 	// 현재는 간단히 로그만 출력
-	slog.Debug("Sending packet to SRT subscriber", 
-		"sessionId", s.id, 
-		"streamID", streamID, 
-		"packetType", packet.Type)
 
 	return nil
 }
@@ -142,9 +138,6 @@ func (s *Session) SendMetadata(streamID string, metadata map[string]string) erro
 	}
 
 	// TODO: SRT 메타데이터 전송
-	slog.Debug("Sending metadata to SRT subscriber",
-		"sessionId", s.id,
-		"streamID", streamID)
 
 	return nil
 }
@@ -216,7 +209,6 @@ func (s *Session) processMPEGTSData(data []byte) error {
 	// 첫 번째 데이터를 받으면 발행 모드로 설정
 	if s.mode != ModePublish {
 		s.mode = ModePublish
-		slog.Info("SRT session set to publish mode", "sessionId", s.id)
 	}
 	
 	// MPEGTS 파서를 사용하여 데이터 처리

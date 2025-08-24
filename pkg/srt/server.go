@@ -161,7 +161,6 @@ func (s *Server) handleConnectionRequest(req gosrt.ConnRequest) {
 	s.sessions[sessionID] = session
 	s.sessionsMutex.Unlock()
 
-	slog.Info("New SRT session created", "sessionId", sessionID, "streamId", req.StreamId())
 
 	// 세션 시작
 	go func() {

@@ -13,7 +13,7 @@ type MessageWriter struct {
 // NewMessageWriter creates a new RTSP message writer
 func NewMessageWriter(w io.Writer) *MessageWriter {
 	return &MessageWriter{
-		writer: bufio.NewWriter(w),
+		writer: bufio.NewWriterSize(w, 8192), // 8KB 버퍼 크기 (RTMP와 동일)
 	}
 }
 

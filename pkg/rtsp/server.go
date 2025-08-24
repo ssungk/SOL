@@ -143,8 +143,7 @@ func (s *Server) acceptConnections() {
 		go session.handleRequests()
 		go session.handleTimeout()
 
-		slog.Info("New RTSP session created", "sessionId", session.ID(), "remoteAddr", conn.RemoteAddr())
-	}
+		}
 }
 
 // ensureRTPTransport starts RTP transport if not already started
@@ -161,6 +160,5 @@ func (s *Server) ensureRTPTransport() error {
 	}
 
 	s.rtpStarted = true
-	slog.Info("RTP transport started on demand", "rtpPort", rtpPort)
 	return nil
 }

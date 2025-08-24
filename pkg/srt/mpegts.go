@@ -45,7 +45,7 @@ func (p *MPEGTSParser) ParseMPEGTSData(data []byte) error {
 	for i := 0; i+MPEGTS_PACKET_SIZE <= len(data); i += MPEGTS_PACKET_SIZE {
 		packet := data[i : i+MPEGTS_PACKET_SIZE]
 		if err := p.parsePacket(packet); err != nil {
-			slog.Debug("Failed to parse MPEGTS packet", "err", err)
+			// 패킷 파싱 실패는 무시 (잘못된 데이터일 수 있음)
 		}
 	}
 	return nil
@@ -148,7 +148,6 @@ func (p *MPEGTSParser) parsePAT(payload []byte, pusi bool) error {
 	if sectionLength >= 9 {
 		// 첫 번째 프로그램의 PMT PID 추출
 		p.pmtPID = (uint16(patData[10]&0x1F) << 8) | uint16(patData[11])
-		slog.Debug("Found PMT PID in PAT", "pmtPID", p.pmtPID)
 	}
 
 	return nil
@@ -193,10 +192,8 @@ func (p *MPEGTSParser) parsePMT(payload []byte, pusi bool) error {
 		switch streamType {
 		case STREAM_TYPE_VIDEO_H264:
 			p.videoPID = elementaryPID
-			slog.Debug("Found H264 video stream", "pid", elementaryPID)
 		case STREAM_TYPE_AUDIO_AAC:
 			p.audioPID = elementaryPID
-			slog.Debug("Found AAC audio stream", "pid", elementaryPID)
 		}
 
 		i += 5 + int(esInfoLength)
@@ -224,13 +221,11 @@ func (p *MPEGTSParser) setupStream() {
 	// 비디오 트랙 추가
 	if p.videoPID != 0 {
 		p.session.stream.AddTrack(media.H264, media.TimeScaleSRT)
-		slog.Info("Added H264 video track", "streamId", streamID)
 	}
 
 	// 오디오 트랙 추가
 	if p.audioPID != 0 {
 		p.session.stream.AddTrack(media.AAC, media.TimeScaleSRT)
-		slog.Info("Added AAC audio track", "streamId", streamID)
 	}
 
 	// MediaServer에 발행 시작 이벤트 전송
@@ -245,7 +240,6 @@ func (p *MPEGTSParser) setupStream() {
 			// 응답 대기
 			response := <-responseChan
 			if response.Success {
-				slog.Info("SRT stream publishing started", "streamId", streamID)
 			} else {
 				slog.Error("Failed to start SRT stream publishing", "err", response.Error)
 			}
