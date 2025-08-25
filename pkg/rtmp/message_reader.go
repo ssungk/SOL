@@ -38,12 +38,12 @@ func (mr *msgReader) setChunkSize(size uint32) {
 	mr.chunkSize = size
 }
 
-func (mr *msgReader) readNextMessage(r io.Reader) (*Message, error) {
+func (mr *msgReader) readNextMessage(r io.Reader) (Message, error) {
 	for {
 		err := mr.readChunk(r)
 		if err != nil {
 			slog.Error("readChunk failed", "err", err)
-			return nil, err
+			return Message{}, err
 		}
 
 		message, err := mr.popMessageIfPossible()
@@ -520,7 +520,7 @@ func (mr *msgReader) getMsgHeader(chunkStreamId uint32) *msgHeader {
 	return &header
 }
 
-func (mr *msgReader) popMessageIfPossible() (*Message, error) {
+func (mr *msgReader) popMessageIfPossible() (Message, error) {
 	for chunkStreamId, messageHeader := range mr.messageHeaders {
 		payloadLength, ok := mr.payloadLengths[chunkStreamId]
 		if !ok {
@@ -571,5 +571,5 @@ func (mr *msgReader) popMessageIfPossible() (*Message, error) {
 		return msg, nil
 	}
 
-	return nil, fmt.Errorf("no complete message available")
+	return Message{}, fmt.Errorf("no complete message available")
 }

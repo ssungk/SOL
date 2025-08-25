@@ -16,5 +16,5 @@ type sendMetadataEvent struct {
 
 // commandEvent handleRead 고루틴에서 디코딩된 RTMP 메시지를 받았을 때 발생하는 이벤트
 type commandEvent struct {
-	message *Message
+	message Message
 }

@@ -17,8 +17,8 @@ type Message struct {
 	payloads []*core.Buffer
 }
 
-func NewMessage(msgHeader msgHeader) *Message {
-	return &Message{
+func NewMessage(msgHeader msgHeader) Message {
+	return Message{
 		msgHeader: msgHeader,
 	}
 }

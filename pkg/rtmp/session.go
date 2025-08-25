@@ -97,12 +97,12 @@ func (s *session) eventLoop() {
 }
 
 // handleMessageOrRoute 메시지를 즉시 처리하거나 이벤트 루프로 라우팅 (레이스 컨디션 방지)
-func (s *session) handleMessageOrRoute(message *Message) {
+func (s *session) handleMessageOrRoute(message Message) {
 	switch message.msgHeader.typeId {
 	case MsgTypeSetChunkSize:
-		s.handleSetChunkSize(message)
+		s.handleSetChunkSize(&message)
 	case MsgTypeAbort:
-		s.handleAbort(message)
+		s.handleAbort(&message)
 	default:
 		select {
 		case s.channel <- commandEvent{message: message}:
@@ -142,7 +142,7 @@ func (s *session) handleChannel(data any) {
 	case sendMetadataEvent:
 		s.handleSendMetadata(e)
 	case commandEvent:
-		s.handleCommand(e.message)
+		s.handleCommand(&e.message)
 	default:
 		slog.Error("Unknown session data type", "type", utils.TypeName(data))
 	}
@@ -239,7 +239,7 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 			message.payloads[i] = buffer.AddRef() // 참조 카운트 증가
 		}
 	}
-	if err := s.writer.writeMessage(s.bufReadWriter, message); err != nil {
+	if err := s.writer.writeMessage(s.bufReadWriter, &message); err != nil {
 		slog.Error("Failed to send packet to RTMP session", "sessionId", s.ID(), "err", err)
 		message.Release() // 오류 시에도 메모리 해제
 		return
@@ -563,7 +563,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 	}
 
 	// script data 메시지로 전송
-	message := &Message{
+	message := Message{
 		msgHeader: msgHeader{
 			timestamp: 0,
 			length:    uint32(len(encodedData)),
@@ -577,7 +577,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 		}(),
 	}
 
-	err = s.writer.writeMessage(s.bufReadWriter, message)
+	err = s.writer.writeMessage(s.bufReadWriter, &message)
 	if err == nil {
 		s.bufReadWriter.Flush()
 	}

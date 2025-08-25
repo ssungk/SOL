@@ -27,7 +27,7 @@ func (mw *msgWriter) writeMessage(w io.Writer, msg *Message) error {
 
 	// 모든 청크를 순차적으로 전송 (zero-copy)
 	for _, chunk := range chunks {
-		if err := mw.writeChunk(w, chunk); err != nil {
+		if err := mw.writeChunk(w, &chunk); err != nil {
 			// 오류 시 남은 청크들 해제
 			for _, remainingChunk := range chunks {
 				remainingChunk.Release()
@@ -41,7 +41,7 @@ func (mw *msgWriter) writeMessage(w io.Writer, msg *Message) error {
 }
 
 // 메시지를 청크 배열로 구성 (zero-copy)
-func (mw *msgWriter) buildChunks(msg *Message) ([]*Chunk, error) {
+func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 	// Reader와 전체 길이 결정
 	var totalPayloadLength int
 	var payloadReader io.Reader
@@ -55,10 +55,10 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]*Chunk, error) {
 
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
-		return []*Chunk{mw.buildFirstChunk(msg, nil, 0, totalPayloadLength)}, nil
+		return []Chunk{mw.buildFirstChunk(msg, nil, 0, totalPayloadLength)}, nil
 	}
 
-	var chunks []*Chunk
+	var chunks []Chunk
 	bytesRead := 0
 	isFirstChunk := true
 
@@ -120,7 +120,7 @@ func getChunkStreamIDForMessageType(messageType byte) byte {
 }
 
 // 첫 번째 청크 생성 (fmt=0 - full header)
-func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, totalPayloadLength int) *Chunk {
+func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, totalPayloadLength int) Chunk {
 	// 확장 타임스탬프 처리
 	headerTimestamp := msg.msgHeader.timestamp
 	if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
@@ -150,7 +150,7 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, 
 }
 
 // 연속 청크 생성 (fmt=3 - no header)
-func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chunkSize int) *Chunk {
+func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chunkSize int) Chunk {
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
 	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
@@ -255,7 +255,7 @@ func (mw *msgWriter) writeCommand(w io.Writer, payload []byte) error {
 	buffer := core.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
 	msg.payloads = []*core.Buffer{buffer}
-	return mw.writeMessage(w, msg)
+	return mw.writeMessage(w, &msg)
 }
 
 func (mw *msgWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
@@ -269,7 +269,7 @@ func (mw *msgWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
 	copy(buffer.Data(), payload)
 	msg.payloads = []*core.Buffer{buffer}
 
-	if err := mw.writeMessage(w, msg); err != nil {
+	if err := mw.writeMessage(w, &msg); err != nil {
 		return err
 	}
 
@@ -291,7 +291,7 @@ func (mw *msgWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uin
 	audioBuffer := core.NewBuffer(len(audioData))
 	copy(audioBuffer.Data(), audioData)
 	msg.payloads = []*core.Buffer{audioBuffer}
-	return mw.writeMessage(w, msg)
+	return mw.writeMessage(w, &msg)
 }
 
 // 비디오 데이터 전송 (zero-copy)
@@ -301,7 +301,7 @@ func (mw *msgWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uin
 	videoBuffer := core.NewBuffer(len(videoData))
 	copy(videoBuffer.Data(), videoData)
 	msg.payloads = []*core.Buffer{videoBuffer}
-	return mw.writeMessage(w, msg)
+	return mw.writeMessage(w, &msg)
 }
 
 // 메타데이터 전송
@@ -317,5 +317,5 @@ func (mw *msgWriter) writeScriptData(w io.Writer, commandName string, metadata m
 	buffer := core.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
 	msg.payloads = []*core.Buffer{buffer}
-	return mw.writeMessage(w, msg)
+	return mw.writeMessage(w, &msg)
 }
