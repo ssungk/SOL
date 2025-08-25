@@ -61,8 +61,12 @@ func (mr *msgReader) readChunk(r io.Reader) error {
 		return err
 	}
 
-	previousHeader := mr.getMsgHeader(basicHeader.chunkStreamID)
-	messageHeader, err := readMessageHeader(r, basicHeader.fmt, previousHeader)
+	previousHeader, hasPrevious := mr.getMsgHeader(basicHeader.chunkStreamID)
+	var previousPtr *msgHeader
+	if hasPrevious {
+		previousPtr = &previousHeader
+	}
+	messageHeader, err := readMessageHeader(r, basicHeader.fmt, previousPtr)
 	if err != nil {
 		return err
 	}
@@ -509,12 +513,9 @@ func (mr *msgReader) nextChunkSize(chunkStreamId uint32) uint32 {
 	return remain
 }
 
-func (mr *msgReader) getMsgHeader(chunkStreamId uint32) *msgHeader {
+func (mr *msgReader) getMsgHeader(chunkStreamId uint32) (msgHeader, bool) {
 	header, ok := mr.msgHeaders[chunkStreamId]
-	if !ok {
-		return nil
-	}
-	return &header
+	return header, ok
 }
 
 func (mr *msgReader) popMessageIfPossible() (Message, error) {

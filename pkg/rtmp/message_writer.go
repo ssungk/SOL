@@ -202,7 +202,7 @@ func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize i
 			msg.msgHeader.typeId,
 			msg.msgHeader.streamID,
 		)
-		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
+		return NewChunk(basicHdr, msgHdr, payloadBuffer)
 
 	case FmtType1:
 		// Format 1: streamID 제외 (7바이트)
@@ -222,7 +222,7 @@ func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize i
 			msg.msgHeader.typeId,
 			lastHeader.streamID, // 이전 streamID 유지
 		)
-		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
+		return NewChunk(basicHdr, msgHdr, payloadBuffer)
 
 	case FmtType2:
 		// Format 2: timestamp delta만 (3바이트)
@@ -242,11 +242,11 @@ func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize i
 			lastHeader.typeId,  // 이전 typeId 유지
 			lastHeader.streamID, // 이전 streamID 유지
 		)
-		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
+		return NewChunk(basicHdr, msgHdr, payloadBuffer)
 
 	case FmtType3:
 		// Format 3: 헤더 없음 (0바이트)
-		return NewChunk(basicHdr, nil, payloadBuffer)
+		return NewChunk(basicHdr, msgHeader{}, payloadBuffer)
 
 	default:
 		// 기본값은 Format 0
@@ -260,7 +260,7 @@ func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize i
 			msg.msgHeader.typeId,
 			msg.msgHeader.streamID,
 		)
-		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
+		return NewChunk(basicHdr, msgHdr, payloadBuffer)
 	}
 }
 
@@ -271,11 +271,11 @@ func (mw *msgWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 		return err
 	}
 
-	// Message Header 전송 (fmt=3인 경우 nil)
+	// Message Header 전송 (fmt=3인 경우 없음)
 	var needsExtendedTimestamp bool
 	var extendedTimestamp uint32
-	if chunk.msgHeader != nil {
-		if err := mw.writeMessageHeaderByFormat(w, chunk.msgHeader, chunk.basicHeader.fmt); err != nil {
+	if chunk.basicHeader.fmt != FmtType3 {
+		if err := mw.writeMessageHeaderByFormat(w, &chunk.msgHeader, chunk.basicHeader.fmt); err != nil {
 			return err
 		}
 		// 확장 타임스탬프가 필요한지 확인
