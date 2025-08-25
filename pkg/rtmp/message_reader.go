@@ -48,7 +48,7 @@ func (mr *msgReader) readNextMessage(r io.Reader) (*Message, error) {
 
 		message, err := mr.popMessageIfPossible()
 		if err == nil {
-			// slog.Info("Message ready", "typeId", message.messageHeader.typeId) // 너무 빈번하거나 주석 처리
+			// slog.Info("Message ready", "typeId", message.msgHeader.typeId) // 너무 빈번하거나 주석 처리
 			return message, err
 		}
 	}

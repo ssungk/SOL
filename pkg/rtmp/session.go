@@ -98,7 +98,7 @@ func (s *session) eventLoop() {
 
 // handleMessageOrRoute 메시지를 즉시 처리하거나 이벤트 루프로 라우팅 (레이스 컨디션 방지)
 func (s *session) handleMessageOrRoute(message *Message) {
-	switch message.messageHeader.typeId {
+	switch message.msgHeader.typeId {
 	case MsgTypeSetChunkSize:
 		s.handleSetChunkSize(message)
 	case MsgTypeAbort:
@@ -264,7 +264,7 @@ func (s *session) handleSendMetadata(e sendMetadataEvent) {
 
 // handleCommand 클라이언트로부터 받은 RTMP 메시지 처리
 func (s *session) handleCommand(message *Message) {
-	switch message.messageHeader.typeId {
+	switch message.msgHeader.typeId {
 	case MsgTypeSetChunkSize:
 		// SetChunkSize는 readLoop에서 직접 처리됨 (레이스 컨디션 방지)
 		// 이 케이스는 도달하지 않음
@@ -288,7 +288,7 @@ func (s *session) handleCommand(message *Message) {
 	case MsgTypeAMF3Command:
 		s.handleAMF3Command(message)
 	default:
-		slog.Warn("unhandled RTMP message type", "sessionId", s.ID(), "type", message.messageHeader.typeId)
+		slog.Warn("unhandled RTMP message type", "sessionId", s.ID(), "type", message.msgHeader.typeId)
 	}
 	
 	// 메시지 처리 완료 후 메모리 해제
@@ -345,10 +345,10 @@ func (s *session) handleAudio(message *Message) {
 	
 	// Packet 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	packet := core.NewPacket(trackIndex, codecType, core.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, frameData)
+	packet := core.NewPacket(trackIndex, codecType, core.FormatRawStream, frameType, uint64(message.msgHeader.timestamp), 0, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
-	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
+	if stream, exists := s.publishedStreams[message.msgHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
 			stream.AddTrack(packet.Codec, core.TimeScaleRTMP)
@@ -388,10 +388,10 @@ func (s *session) handleVideo(message *Message) {
 
 	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	packet := core.NewPacket(trackIndex, codecType, core.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
+	packet := core.NewPacket(trackIndex, codecType, core.FormatH26xAVCC, frameType, uint64(message.msgHeader.timestamp), compositionTime, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
-	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
+	if stream, exists := s.publishedStreams[message.msgHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
 			stream.AddTrack(packet.Codec, core.TimeScaleRTMP)
@@ -403,7 +403,7 @@ func (s *session) handleVideo(message *Message) {
 		}
 		stream.SendPacket(packet)
 	} else {
-		slog.Warn("Stream not found", "streamID", message.messageHeader.streamID)
+		slog.Warn("Stream not found", "streamID", message.msgHeader.streamID)
 	}
 }
 
@@ -564,7 +564,7 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 
 	// script data 메시지로 전송
 	message := &Message{
-		messageHeader: msgHeader{
+		msgHeader: msgHeader{
 			timestamp: 0,
 			length:    uint32(len(encodedData)),
 			typeId:    MsgTypeAMF0Data,
@@ -831,7 +831,7 @@ func (s *session) handlePublish(message *Message, values []any) {
 
 
 	// 1단계: message의 streamID 사용 및 스트림 준비
-	streamID := message.messageHeader.streamID
+	streamID := message.msgHeader.streamID
 	stream := core.NewStream(fullStreamPath)
 	s.addPublishedStream(streamID, fullStreamPath, stream)
 
@@ -860,7 +860,7 @@ func (s *session) handleReleaseStream(_ []any) {
 
 // handlePlay play 명령어 처리 (싱크 모드 활성화)
 func (s *session) handlePlay(message *Message, values []any) {
-	streamID := message.messageHeader.streamID
+	streamID := message.msgHeader.streamID
 
 
 	if len(values) < 3 {
@@ -1275,7 +1275,7 @@ func (s *session) sendPublishSuccessResponse(_ float64, streamPath string) {
 
 // handleFCUnpublish FCUnpublish 명령어 처리
 func (s *session) handleFCUnpublish(message *Message, _ []any) {
-	streamID := message.messageHeader.streamID
+	streamID := message.msgHeader.streamID
 
 	// 특정 streamID의 발행 스트림만 정리
 	if _, exists := s.publishedStreams[streamID]; exists {
@@ -1288,7 +1288,7 @@ func (s *session) handleFCUnpublish(message *Message, _ []any) {
 
 // handleCloseStream closeStream 명령어 처리
 func (s *session) handleCloseStream(message *Message, _ []any) {
-	streamID := message.messageHeader.streamID
+	streamID := message.msgHeader.streamID
 
 	// 특정 streamID의 발행 스트림 정리
 	if _, exists := s.publishedStreams[streamID]; exists {
@@ -1307,7 +1307,7 @@ func (s *session) handleCloseStream(message *Message, _ []any) {
 
 // handleDeleteStream deleteStream 명령어 처리
 func (s *session) handleDeleteStream(message *Message, _ []any) {
-	streamID := message.messageHeader.streamID
+	streamID := message.msgHeader.streamID
 
 	// 특정 streamID의 발행 스트림 정리
 	if _, exists := s.publishedStreams[streamID]; exists {

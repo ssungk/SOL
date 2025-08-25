@@ -8,7 +8,7 @@ import (
 )
 
 type Message struct {
-	messageHeader msgHeader
+	msgHeader msgHeader
 
 	// 미디어 메시지 전용 (비디오/오디오)
 	avTagHeader *core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
@@ -19,7 +19,7 @@ type Message struct {
 
 func NewMessage(msgHeader msgHeader) *Message {
 	return &Message{
-		messageHeader: msgHeader,
+		msgHeader: msgHeader,
 	}
 }
 

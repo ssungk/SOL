@@ -45,7 +45,7 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]*Chunk, error) {
 	// Reader와 전체 길이 결정
 	var totalPayloadLength int
 	var payloadReader io.Reader
-	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
+	if msg.msgHeader.typeId == MsgTypeVideo || msg.msgHeader.typeId == MsgTypeAudio {
 		totalPayloadLength = msg.TotalFullPayloadLen()
 		payloadReader = msg.FullReader()
 	} else {
@@ -122,19 +122,19 @@ func getChunkStreamIDForMessageType(messageType byte) byte {
 // 첫 번째 청크 생성 (fmt=0 - full header)
 func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, totalPayloadLength int) *Chunk {
 	// 확장 타임스탬프 처리
-	headerTimestamp := msg.messageHeader.timestamp
-	if msg.messageHeader.timestamp >= ExtendedTimestampThreshold {
+	headerTimestamp := msg.msgHeader.timestamp
+	if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
 		headerTimestamp = ExtendedTimestampThreshold
 	}
 
 	// 메시지 타입에 따라 청크 스트림 ID 결정
-	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
+	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
 	basicHdr := newBasicHeader(FmtType0, uint32(chunkStreamID))
 	msgHdr := newMsgHeader(
 		headerTimestamp,
 		uint32(totalPayloadLength),
-		msg.messageHeader.typeId,
-		msg.messageHeader.streamID,
+		msg.msgHeader.typeId,
+		msg.msgHeader.streamID,
 	)
 
 	// payload 버퍼 생성
@@ -152,7 +152,7 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, 
 // 연속 청크 생성 (fmt=3 - no header)
 func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chunkSize int) *Chunk {
 	// 메시지 타입에 따라 청크 스트림 ID 결정
-	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
+	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
 	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
 
 	// Type 3는 message header가 없음
@@ -175,14 +175,14 @@ func (mw *msgWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 	// Message Header 전송 (fmt=3인 경우 nil)
 	var needsExtendedTimestamp bool
 	var extendedTimestamp uint32
-	if chunk.messageHeader != nil {
-		if err := mw.writeMessageHeader(w, chunk.messageHeader); err != nil {
+	if chunk.msgHeader != nil {
+		if err := mw.writeMessageHeader(w, chunk.msgHeader); err != nil {
 			return err
 		}
 		// 확장 타임스탬프가 필요한지 확인
-		if chunk.messageHeader.timestamp >= ExtendedTimestampThreshold {
+		if chunk.msgHeader.timestamp >= ExtendedTimestampThreshold {
 			needsExtendedTimestamp = true
-			extendedTimestamp = chunk.messageHeader.timestamp
+			extendedTimestamp = chunk.msgHeader.timestamp
 		}
 	}
 
