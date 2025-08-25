@@ -12,7 +12,7 @@ type Message struct {
 
 	// 미디어 메시지 전용 (비디오/오디오)
 	mediaHeader []byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
-	
+
 	// 청크 배열 (zero-copy 처리용)
 	payloads []*media.Buffer
 }
@@ -22,56 +22,6 @@ func NewMessage(messageHeader msgHeader) *Message {
 		messageHeader: messageHeader,
 	}
 }
-
-// Payload 버퍼들을 연결하여 단일 바이트 슬라이스로 반환 (순수 데이터만)
-func (m *Message) Payload() []byte {
-	if len(m.payloads) == 0 {
-		return nil
-	}
-	
-	if len(m.payloads) == 1 {
-		return m.payloads[0].Data()
-	}
-	
-	// 여러 버퍼를 연결
-	totalLen := 0
-	for _, buffer := range m.payloads {
-		totalLen += len(buffer.Data())
-	}
-	
-	result := make([]byte, totalLen)
-	offset := 0
-	for _, buffer := range m.payloads {
-		data := buffer.Data()
-		copy(result[offset:], data)
-		offset += len(data)
-	}
-	
-	return result
-}
-
-// FullPayload 미디어 헤더 + 버퍼들을 연결하여 완전한 RTMP 페이로드 반환
-func (m *Message) FullPayload() []byte {
-	payloadData := m.Payload()
-	headerLen := len(m.mediaHeader)
-	payloadLen := len(payloadData)
-	
-	if headerLen == 0 && payloadLen == 0 {
-		return nil
-	}
-	
-	// 헤더 + 데이터 결합
-	result := make([]byte, headerLen+payloadLen)
-	if headerLen > 0 {
-		copy(result, m.mediaHeader)
-	}
-	if payloadLen > 0 {
-		copy(result[headerLen:], payloadData)
-	}
-	
-	return result
-}
-
 
 // Release 모든 버퍼의 참조 카운트를 감소시킴
 func (m *Message) Release() {
@@ -99,7 +49,7 @@ func (m *Message) GetFixedSizePayload(expectedSize int) ([]byte, bool) {
 			return data, true // zero-copy 성공
 		}
 	}
-	
+
 	// 다중 버퍼이거나 크기가 다른 경우
 	return nil, false
 }
@@ -117,11 +67,26 @@ func (m *Message) Reader() io.Reader {
 	if len(m.payloads) == 0 {
 		return bytes.NewReader(nil)
 	}
-	
+
 	// MultiReader 사용하여 연결된 reader 제공 (단일/다중 버퍼 통합 처리)
 	readers := make([]io.Reader, len(m.payloads))
 	for i, buffer := range m.payloads {
 		readers[i] = bytes.NewReader(buffer.Data())
 	}
 	return io.MultiReader(readers...)
+}
+
+// FullReader 미디어 헤더 + 페이로드 데이터를 하나의 Reader로 제공 (zero-copy)
+func (m *Message) FullReader() io.Reader {
+	if len(m.mediaHeader) == 0 {
+		return m.Reader()
+	}
+	// 미디어 헤더 + 페이로드 데이터 결합된 Reader
+	headerReader := bytes.NewReader(m.mediaHeader)
+	return io.MultiReader(headerReader, m.Reader())
+}
+
+// TotalFullPayloadLen 미디어 헤더 포함 전체 페이로드 길이
+func (m *Message) TotalFullPayloadLen() int {
+	return len(m.mediaHeader) + m.TotalPayloadLen()
 }

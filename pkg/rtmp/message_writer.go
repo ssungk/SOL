@@ -42,58 +42,63 @@ func (mw *msgWriter) writeMessage(w io.Writer, msg *Message) error {
 
 // 메시지를 청크 배열로 구성 (zero-copy)
 func (mw *msgWriter) buildChunks(msg *Message) ([]*Chunk, error) {
-	// 실제 전송될 페이로드 길이 계산 (미디어 메시지는 헤더 포함)
+	// Reader와 전체 길이 결정
 	var totalPayloadLength int
+	var payloadReader io.Reader
 	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
-		totalPayloadLength = len(msg.FullPayload())
+		totalPayloadLength = msg.TotalFullPayloadLen()
+		payloadReader = msg.FullReader()
 	} else {
-		for _, buffer := range msg.payloads {
-			totalPayloadLength += len(buffer.Data())
-		}
+		totalPayloadLength = msg.TotalPayloadLen()
+		payloadReader = msg.Reader()
 	}
 
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
-		return []*Chunk{mw.buildFirstChunk(msg, 0, 0, totalPayloadLength)}, nil
+		return []*Chunk{mw.buildFirstChunk(msg, nil, 0, totalPayloadLength)}, nil
 	}
 
 	var chunks []*Chunk
-	offset := 0
+	bytesRead := 0
+	isFirstChunk := true
 
-	for offset < totalPayloadLength {
+	for bytesRead < totalPayloadLength {
 		chunkSize := int(mw.chunkSize)
-		remaining := totalPayloadLength - offset
+		remaining := totalPayloadLength - bytesRead
 		if remaining < chunkSize {
 			chunkSize = remaining
 		}
 
-		if offset == 0 {
-			// 첫 번째 청크: Full header (fmt=0)
-			chunks = append(chunks, mw.buildFirstChunk(msg, offset, chunkSize, totalPayloadLength))
-		} else {
-			// 나머지 청크: Type 3 header (fmt=3)
-			chunks = append(chunks, mw.buildContinuationChunk(msg, offset, chunkSize))
+		// Reader에서 청크 크기만큼 읽기
+		chunkData := make([]byte, chunkSize)
+		n, err := io.ReadFull(payloadReader, chunkData)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return nil, fmt.Errorf("failed to read chunk data: %w", err)
+		}
+		
+		// 실제 읽은 크기로 조정
+		if n < chunkSize {
+			chunkData = chunkData[:n]
 		}
 
-		offset += chunkSize
+		if isFirstChunk {
+			// 첫 번째 청크: Full header (fmt=0)
+			chunks = append(chunks, mw.buildFirstChunk(msg, chunkData, n, totalPayloadLength))
+			isFirstChunk = false
+		} else {
+			// 나머지 청크: Type 3 header (fmt=3)
+			chunks = append(chunks, mw.buildContinuationChunk(msg, chunkData, n))
+		}
+
+		bytesRead += n
+		if n == 0 {
+			break // 더 이상 읽을 데이터가 없음
+		}
 	}
 
 	return chunks, nil
 }
 
-// []byte payload에서 지정된 오프셋과 크기만큼 데이터를 추출 (zero-copy)
-func extractPayloadSlice(payload []byte, offset, size int) []byte {
-	if size == 0 || offset >= len(payload) {
-		return nil
-	}
-
-	end := offset + size
-	if end > len(payload) {
-		end = len(payload)
-	}
-
-	return payload[offset:end]
-}
 
 // 메시지 타입에 따라 적절한 청크 스트림 ID를 결정
 func getChunkStreamIDForMessageType(messageType byte) byte {
@@ -115,7 +120,7 @@ func getChunkStreamIDForMessageType(messageType byte) byte {
 }
 
 // 첫 번째 청크 생성 (fmt=0 - full header)
-func (mw *msgWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalPayloadLength int) *Chunk {
+func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, totalPayloadLength int) *Chunk {
 	// 확장 타임스탬프 처리
 	headerTimestamp := msg.messageHeader.timestamp
 	if msg.messageHeader.timestamp >= ExtendedTimestampThreshold {
@@ -132,17 +137,11 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalPaylo
 		msg.messageHeader.streamID,
 	)
 
-	// payload 버퍼 생성 - 미디어 메시지는 FullPayload 사용
+	// payload 버퍼 생성
 	var payloadBuffer *media.Buffer
-	if chunkSize > 0 {
-		var payloadSlice []byte
-		if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
-			payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
-		} else {
-			payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
-		}
-		payloadBuffer = media.NewBuffer(len(payloadSlice))
-		copy(payloadBuffer.Data(), payloadSlice)
+	if chunkSize > 0 && chunkData != nil {
+		payloadBuffer = media.NewBuffer(len(chunkData))
+		copy(payloadBuffer.Data(), chunkData)
 	} else {
 		payloadBuffer = media.NewBuffer(0)
 	}
@@ -151,7 +150,7 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, offset, chunkSize, totalPaylo
 }
 
 // 연속 청크 생성 (fmt=3 - no header)
-func (mw *msgWriter) buildContinuationChunk(msg *Message, offset, chunkSize int) *Chunk {
+func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chunkSize int) *Chunk {
 	// 메시지 타입에 따라 청크 스트림 ID 결정
 	chunkStreamID := getChunkStreamIDForMessageType(msg.messageHeader.typeId)
 	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
@@ -159,16 +158,9 @@ func (mw *msgWriter) buildContinuationChunk(msg *Message, offset, chunkSize int)
 	// Type 3는 message header가 없음
 	var msgHdr *msgHeader = nil
 
-	// payload 버퍼 생성 - 미디어 메시지는 FullPayload 사용
-	var payloadBuffer *media.Buffer
-	var payloadSlice []byte
-	if msg.messageHeader.typeId == MsgTypeVideo || msg.messageHeader.typeId == MsgTypeAudio {
-		payloadSlice = extractPayloadSlice(msg.FullPayload(), offset, chunkSize)
-	} else {
-		payloadSlice = extractPayloadSlice(msg.Payload(), offset, chunkSize)
-	}
-	payloadBuffer = media.NewBuffer(len(payloadSlice))
-	copy(payloadBuffer.Data(), payloadSlice)
+	// payload 버퍼 생성
+	payloadBuffer := media.NewBuffer(len(chunkData))
+	copy(payloadBuffer.Data(), chunkData)
 
 	return NewChunk(basicHdr, msgHdr, payloadBuffer)
 }
