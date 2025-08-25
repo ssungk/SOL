@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"sol/pkg/media"
+	"sol/pkg/core"
 )
 
 // MPEGTS 상수
@@ -215,24 +215,24 @@ func (p *MPEGTSParser) setupStream() {
 	}
 
 	streamID := fmt.Sprintf("srt_%d", p.session.ID())
-	p.session.stream = media.NewStream(streamID)
+	p.session.stream = core.NewStream(streamID)
 	p.session.streamID = streamID
 
 	// 비디오 트랙 추가
 	if p.videoPID != 0 {
-		p.session.stream.AddTrack(media.H264, media.TimeScaleSRT)
+		p.session.stream.AddTrack(core.H264, core.TimeScaleSRT)
 	}
 
 	// 오디오 트랙 추가
 	if p.audioPID != 0 {
-		p.session.stream.AddTrack(media.AAC, media.TimeScaleSRT)
+		p.session.stream.AddTrack(core.AAC, core.TimeScaleSRT)
 	}
 
 	// MediaServer에 발행 시작 이벤트 전송
 	if p.session.mediaServerChannel != nil {
-		responseChan := make(chan media.Response, 1)
+		responseChan := make(chan core.Response, 1)
 		select {
-		case p.session.mediaServerChannel <- media.PublishStarted{
+		case p.session.mediaServerChannel <- core.PublishStarted{
 			ID:           p.session.ID(),
 			Stream:       p.session.stream,
 			ResponseChan: responseChan,
@@ -285,23 +285,23 @@ func (p *MPEGTSParser) parseVideoES(payload []byte, pusi bool) error {
 	}
 
 	// H.264 패킷 생성 및 전송
-	packetType := media.TypeData
+	packetType := core.TypeData
 	if p.isKeyFrame(esData) {
-		packetType = media.TypeKey
+		packetType = core.TypeKey
 	}
 	
 	// ES 데이터를 Buffer로 변환
-	esBuffer := media.NewBuffer(len(esData))
+	esBuffer := core.NewBuffer(len(esData))
 	copy(esBuffer.Data(), esData)
 	
-	packet := media.NewPacket(
+	packet := core.NewPacket(
 		0, // 비디오 트랙 인덱스
-		media.H264,
-		media.FormatH26xAnnexB,
+		core.H264,
+		core.FormatH26xAnnexB,
 		packetType,
 		pts,
 		0, // CTS (단순화)
-		[]*media.Buffer{esBuffer},
+		[]*core.Buffer{esBuffer},
 	)
 
 	if p.session.stream != nil {
@@ -345,18 +345,18 @@ func (p *MPEGTSParser) parseAudioES(payload []byte, pusi bool) error {
 	}
 
 	// ES 데이터를 Buffer로 변환
-	esBuffer := media.NewBuffer(len(esData))
+	esBuffer := core.NewBuffer(len(esData))
 	copy(esBuffer.Data(), esData)
 	
 	// AAC 패킷 생성 및 전송
-	packet := media.NewPacket(
+	packet := core.NewPacket(
 		1, // 오디오 트랙 인덱스
-		media.AAC,
-		media.FormatAACRaw,
-		media.TypeData, // 오디오는 모두 일반 데이터로 처리
+		core.AAC,
+		core.FormatAACRaw,
+		core.TypeData, // 오디오는 모두 일반 데이터로 처리
 		pts,
 		0, // CTS (단순화)
-		[]*media.Buffer{esBuffer},
+		[]*core.Buffer{esBuffer},
 	)
 
 	if p.session.stream != nil {

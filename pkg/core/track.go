@@ -1,4 +1,4 @@
-package media
+package core
 
 // TimeScale 상수들 (1초당 tick 수)
 const (

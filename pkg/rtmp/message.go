@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"sol/pkg/media"
+	"sol/pkg/core"
 )
 
 type Message struct {
 	messageHeader msgHeader
 
 	// 미디어 메시지 전용 (비디오/오디오)
-	avTagHeader *media.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	avTagHeader *core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 
 	// 청크 배열 (zero-copy 처리용)
-	payloads []*media.Buffer
+	payloads []*core.Buffer
 }
 
 func NewMessage(msgHeader msgHeader) *Message {

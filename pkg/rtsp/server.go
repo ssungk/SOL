@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sol/pkg/rtp"
 	"sol/pkg/utils"
 	"sync"
@@ -131,7 +131,7 @@ func (s *Server) acceptConnections() {
 		// Send NodeCreated event to MediaServer
 		if s.mediaServerChannel != nil {
 			select {
-			case s.mediaServerChannel <- media.NodeCreated{
+			case s.mediaServerChannel <- core.NodeCreated{
 				ID:   session.ID(),
 				Node: session,
 			}:

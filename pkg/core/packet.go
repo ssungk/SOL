@@ -1,4 +1,4 @@
-package media
+package core
 
 
 // Codec 비디오/오디오/데이터를 포함하는 통합 코덱 타입

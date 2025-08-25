@@ -1,4 +1,4 @@
-package media
+package core
 
 // 모든 미디어 노드의 공통 인터페이스
 type MediaNode interface {

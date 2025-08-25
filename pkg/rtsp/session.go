@@ -6,7 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sol/pkg/rtp"
 	"strconv"
 	"strings"
@@ -37,7 +37,7 @@ type Session struct {
 	cancel          context.CancelFunc
 	
 	// Stream integration (MediaServer에서 설정)
-	Stream *media.Stream // 연결된 스트림
+	Stream *core.Stream // 연결된 스트림
 }
 
 // SessionState represents the current state of an RTSP session
@@ -131,7 +131,7 @@ func (s *Session) Close() error {
 	// Send node termination event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.NodeTerminated{
+		case s.externalChannel <- core.NodeTerminated{
 			ID: s.ID(),
 		}:
 		default:
@@ -224,7 +224,7 @@ func (s *Session) handleInterleavedData() error {
 	if int(channel) == s.rtpChannel {
 		// RTP data from client - convert to media frame and send to stream
 		
-		// RTP 패킷을 media.Packet으로 변환
+		// RTP 패킷을 core.Packet으로 변환
 		packet, err := s.convertRTPToPacket(data, s.streamPath)
 		if err != nil {
 			slog.Error("Failed to convert RTP to packet", "sessionId", s.ID(), "err", err)
@@ -235,7 +235,7 @@ func (s *Session) handleInterleavedData() error {
 		if s.state == StateRecording && s.Stream != nil {
 			// 트랙이 없으면 추가
 			if s.Stream.TrackCount() <= packet.TrackIndex {
-				s.Stream.AddTrack(packet.Codec, media.TimeScaleRTP_Video)
+				s.Stream.AddTrack(packet.Codec, core.TimeScaleRTP_Video)
 			}
 			
 			s.Stream.SendPacket(packet)
@@ -412,7 +412,7 @@ func (s *Session) handleRecord(req *Request) error {
 	streamPath := s.streamPath
 
 	// 1단계: 스트림 준비 (MediaServer에서 처리하므로 nil로 전달)
-	stream := (*media.Stream)(nil) // RTSP는 MediaServer에서 스트림 생성
+	stream := (*core.Stream)(nil) // RTSP는 MediaServer에서 스트림 생성
 
 	// 2단계: MediaServer에 실제 record 시도 (collision detection + 원자적 점유)
 	if !s.attemptStreamPublish(streamPath, stream) {
@@ -443,13 +443,13 @@ func (s *Session) handlePlay(req *Request) error {
 
 	// Send play started event to MediaServer
 	if s.externalChannel != nil {
-		responseChan := make(chan media.Response, 1)
+		responseChan := make(chan core.Response, 1)
 		
 		// RTSP가 지원하는 코덱 목록 (더 다양한 코덱 지원)
-		supportedCodecs := []media.Codec{media.H264, media.H265, media.AAC, media.Opus}
+		supportedCodecs := []core.Codec{core.H264, core.H265, core.AAC, core.Opus}
 		
 		select {
-		case s.externalChannel <- media.NewSubscribeStarted(s.ID(), s.streamPath, supportedCodecs, responseChan):
+		case s.externalChannel <- core.NewSubscribeStarted(s.ID(), s.streamPath, supportedCodecs, responseChan):
 			// 응답 대기
 			select {
 			case response := <-responseChan:
@@ -486,7 +486,7 @@ func (s *Session) handlePause(req *Request) error {
 	// Send play stopped event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.SubscribeStopped{
+		case s.externalChannel <- core.SubscribeStopped{
 			ID:       s.ID(),
 			StreamID: s.streamPath,
 		}:
@@ -508,7 +508,7 @@ func (s *Session) handleTeardown(req *Request) error {
 	// Send play stopped event to MediaServer
 	if s.externalChannel != nil {
 		select {
-		case s.externalChannel <- media.SubscribeStopped{
+		case s.externalChannel <- core.SubscribeStopped{
 			ID:       s.ID(),
 			StreamID: s.streamPath,
 		}:
@@ -706,8 +706,8 @@ func (s *Session) ID() uintptr {
 }
 
 // NodeType MediaNode 인터페이스 구현 - 노드 타입 반환
-func (s *Session) NodeType() media.NodeType {
-	return media.NodeTypeRTSP
+func (s *Session) NodeType() core.NodeType {
+	return core.NodeTypeRTSP
 }
 
 // Address MediaNode 인터페이스 구현 - 주소 반환
@@ -721,7 +721,7 @@ func (s *Session) Address() string {
 // MediaSink 인터페이스 구현 (RTSP 플레이어 세션용)
 
 // SendPacket MediaSink 인터페이스 구현 - 패킷을 세션으로 전송
-func (s *Session) SendPacket(streamID string, packet media.Packet) error {
+func (s *Session) SendPacket(streamID string, packet core.Packet) error {
 	// RTSP 세션이 플레이 중이고 스트림 ID가 일치하는 경우에만 전송
 	if s.state != StatePlaying || s.streamPath != streamID {
 		return fmt.Errorf("session not ready for packet: state=%v, streamPath=%s", s.state, s.streamPath)
@@ -752,7 +752,7 @@ func (s *Session) SendMetadata(streamID string, metadata map[string]string) erro
 }
 
 // convertPacketToRTP Packet을 RTP 패킷으로 변환
-func (s *Session) convertPacketToRTP(packet media.Packet) ([]byte, error) {
+func (s *Session) convertPacketToRTP(packet core.Packet) ([]byte, error) {
 	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
 	// RTP 헤더 (12바이트) + 페이로드
 	
@@ -799,15 +799,15 @@ func (s *Session) GetStreamPath() string {
 // RTSP Session은 RECORD 모드에서는 MediaSource로, PLAY 모드에서는 MediaSink로 동작
 
 // convertRTPToPacket RTP 패킷을 Packet으로 변환 (RECORD 시 사용)
-func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Packet, error) {
+func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (core.Packet, error) {
 	if len(rtpData) < 12 {
-		return media.Packet{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
+		return core.Packet{}, fmt.Errorf("RTP packet too short: %d bytes", len(rtpData))
 	}
 
 	// RTP 헤더 파싱
 	version := (rtpData[0] & 0xC0) >> 6
 	if version != 2 {
-		return media.Packet{}, fmt.Errorf("unsupported RTP version: %d", version)
+		return core.Packet{}, fmt.Errorf("unsupported RTP version: %d", version)
 	}
 
 	payloadType := rtpData[1] & 0x7F
@@ -817,41 +817,41 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 	payload := rtpData[12:]
 
 	// 페이로드 타입에 따른 Codec, BitstreamFormat, PacketType 결정
-	var codec media.Codec
-	var format media.BitstreamFormat
-	var packetType media.PacketType
+	var codec core.Codec
+	var format core.BitstreamFormat
+	var packetType core.PacketType
 	var trackIndex int
 
 	switch payloadType {
 	case 96: // H.264
-		codec = media.H264
-		format = media.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
-		packetType = media.TypeData    // 기본값으로 Data
+		codec = core.H264
+		format = core.FormatH26xAnnexB // RTSP는 Annex-B 포맷 사용
+		packetType = core.TypeData    // 기본값으로 Data
 		trackIndex = 0 // 비디오는 트랙 0
 	case 97: // AAC
-		codec = media.AAC
-		format = media.FormatRawStream // 오디오는 raw 데이터
-		packetType = media.TypeData // 기본값으로 Data
+		codec = core.AAC
+		format = core.FormatRawStream // 오디오는 raw 데이터
+		packetType = core.TypeData // 기본값으로 Data
 		trackIndex = 1 // 오디오는 트랙 1
 	default:
-		codec = media.H264
-		format = media.FormatH26xAnnexB
-		packetType = media.TypeData
+		codec = core.H264
+		format = core.FormatH26xAnnexB
+		packetType = core.TypeData
 		trackIndex = 0 // 기본값은 비디오
 	}
 	
 	// 페이로드를 Buffer로 변환
-	payloadBuffer := media.NewBuffer(len(payload))
+	payloadBuffer := core.NewBuffer(len(payload))
 	copy(payloadBuffer.Data(), payload)
 	
-	packet := media.NewPacket(
+	packet := core.NewPacket(
 		trackIndex,
 		codec,
 		format,
 		packetType,
 		uint64(timestamp),
 		0, // CTS = 0 (RTSP는 일반적으로 CTS 사용 안함)
-		[]*media.Buffer{payloadBuffer},
+		[]*core.Buffer{payloadBuffer},
 	)
 
 
@@ -861,9 +861,9 @@ func (s *Session) convertRTPToPacket(rtpData []byte, streamID string) (media.Pac
 // --- MediaSource 인터페이스 구현 (RECORD 모드) ---
 
 // PublishingStreams MediaSource 인터페이스 구현 - 발행 중인 스트림 목록 반환 (RECORD 모드)
-func (s *Session) PublishingStreams() []*media.Stream {
+func (s *Session) PublishingStreams() []*core.Stream {
 	if s.state == StateRecording && s.Stream != nil {
-		return []*media.Stream{s.Stream}
+		return []*core.Stream{s.Stream}
 	}
 	return nil
 }
@@ -881,14 +881,14 @@ func (s *Session) SubscribedStreams() []string {
 // StreamPath collision detection 헬퍼 메서드
 
 // attemptStreamPublish 실제 publish 시도 (collision detection + 원자적 점유)
-func (s *Session) attemptStreamPublish(streamPath string, stream *media.Stream) bool {
+func (s *Session) attemptStreamPublish(streamPath string, stream *core.Stream) bool {
 	if s.externalChannel == nil {
 		return true
 	}
 
-	responseChan := make(chan media.Response, 1)
+	responseChan := make(chan core.Response, 1)
 	
-	request := media.NewPublishStarted(
+	request := core.NewPublishStarted(
 		s.ID(),
 		stream,
 		responseChan,

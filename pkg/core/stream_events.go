@@ -1,4 +1,4 @@
-package media
+package core
 
 // Stream 내부 이벤트 타입들 (MediaServer 패턴과 동일)
 

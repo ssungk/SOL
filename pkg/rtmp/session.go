@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sol/pkg/rtmp/amf"
 	"sol/pkg/utils"
 	"sync"
@@ -24,7 +24,7 @@ type session struct {
 	appName string
 
 	// 발행용 (MediaSource) - RTMP streamID 기반
-	publishedStreams map[uint32]*media.Stream // streamID(uint32) -> Stream
+	publishedStreams map[uint32]*core.Stream // streamID(uint32) -> Stream
 
 	// 상호 참조 테이블
 	streamIDToPath map[uint32]string // streamID -> streamPath
@@ -59,11 +59,11 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 		conn:               conn,
 		bufReadWriter:      bufReadWriter,
 		mediaServerChannel: mediaServerChannel,
-		channel:            make(chan any, media.DefaultChannelBufferSize),
+		channel:            make(chan any, core.DefaultChannelBufferSize),
 		ctx:                ctx,
 		cancel:             cancel,
 		wg:                 wg,
-		publishedStreams:   make(map[uint32]*media.Stream), // 발행용 스트림 맵 초기화
+		publishedStreams:   make(map[uint32]*core.Stream), // 발행용 스트림 맵 초기화
 		streamIDToPath:     make(map[uint32]string),        // streamID -> streamPath 매핑
 		streamPathToId:     make(map[string]uint32),        // streamPath -> streamID 매핑
 		nextStreamId:       1,                              // 1부터 시작
@@ -71,7 +71,7 @@ func newSession(conn net.Conn, mediaServerChannel chan<- any, wg *sync.WaitGroup
 	}
 
 	// NodeCreated 이벤트를 MediaServer로 전송
-	s.mediaServerChannel <- media.NewNodeCreated(s.ID(), s)
+	s.mediaServerChannel <- core.NewNodeCreated(s.ID(), s)
 
 	// 세션의 두 주요 고루틴 시작
 	go s.eventLoop()
@@ -157,7 +157,7 @@ func (s *session) cleanup() {
 	s.stopSubscribing()
 
 	// MediaServer에 최종 종료 알림
-	s.mediaServerChannel <- media.NewNodeTerminated(s.ID())
+	s.mediaServerChannel <- core.NewNodeTerminated(s.ID())
 
 }
 
@@ -173,7 +173,7 @@ func (s *session) sendChannelEvent(event any, eventType string) error {
 	}
 }
 
-func (s *session) SendPacket(streamID string, packet media.Packet) error {
+func (s *session) SendPacket(streamID string, packet core.Packet) error {
 	// RTMP는 현재 비디오(트랙0), 오디오(트랙1)만 지원
 	if packet.TrackIndex > 1 {
 		return nil // 추가 트랙은 무시
@@ -228,13 +228,13 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	message := NewMessage(messageHeader)
 	
 	// 미디어 헤더 저장
-	tagHeaderBuffer := media.NewBuffer(len(header))
+	tagHeaderBuffer := core.NewBuffer(len(header))
 	copy(tagHeaderBuffer.Data(), header)
 	message.avTagHeader = tagHeaderBuffer
 	
 	// 순수 데이터 버퍼들을 직접 참조 (zero-copy)
 	if len(e.packet.Data) > 0 {
-		message.payloads = make([]*media.Buffer, len(e.packet.Data))
+		message.payloads = make([]*core.Buffer, len(e.packet.Data))
 		for i, buffer := range e.packet.Data {
 			message.payloads[i] = buffer.AddRef() // 참조 카운트 증가
 		}
@@ -301,8 +301,8 @@ func (s *session) ID() uintptr {
 	return uintptr(unsafe.Pointer(s))
 }
 
-func (s *session) NodeType() media.NodeType {
-	return media.NodeTypeRTMP
+func (s *session) NodeType() core.NodeType {
+	return core.NodeTypeRTMP
 }
 
 func (s *session) Address() string {
@@ -338,20 +338,20 @@ func (s *session) handleAudio(message *Message) {
 	frameType := s.parseAudioFrameType(firstByte, message.avTagHeader.Data())
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
-	frameData := make([]*media.Buffer, len(message.payloads))
+	frameData := make([]*core.Buffer, len(message.payloads))
 	for i, buffer := range message.payloads {
 		frameData[i] = buffer.AddRef() // 참조 카운트 증가
 	}
 	
 	// Packet 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	packet := media.NewPacket(trackIndex, codecType, media.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, frameData)
+	packet := core.NewPacket(trackIndex, codecType, core.FormatRawStream, frameType, uint64(message.messageHeader.timestamp), 0, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
-			stream.AddTrack(packet.Codec, media.TimeScaleRTMP)
+			stream.AddTrack(packet.Codec, core.TimeScaleRTMP)
 		}
 
 		stream.SendPacket(packet)
@@ -380,7 +380,7 @@ func (s *session) handleVideo(message *Message) {
 	_, _, _, compositionTime := ParseVideoHeader(message.avTagHeader.Data())
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
-	frameData := make([]*media.Buffer, len(message.payloads))
+	frameData := make([]*core.Buffer, len(message.payloads))
 	for i, buffer := range message.payloads {
 		frameData[i] = buffer.AddRef() // 참조 카운트 증가
 	}
@@ -388,13 +388,13 @@ func (s *session) handleVideo(message *Message) {
 
 	// Packet 생성 (비디오는 트랙 0)
 	trackIndex := 0
-	packet := media.NewPacket(trackIndex, codecType, media.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
+	packet := core.NewPacket(trackIndex, codecType, core.FormatH26xAVCC, frameType, uint64(message.messageHeader.timestamp), compositionTime, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.messageHeader.streamID]; exists {
 		// 트랙이 없으면 추가
 		if stream.TrackCount() <= trackIndex {
-			stream.AddTrack(packet.Codec, media.TimeScaleRTMP)
+			stream.AddTrack(packet.Codec, core.TimeScaleRTMP)
 		}
 
 		var totalLen int
@@ -408,23 +408,23 @@ func (s *session) handleVideo(message *Message) {
 }
 
 // parseAudioFrameType 오디오 프레임 타입 파싱
-func (s *session) parseAudioFrameType(firstByte byte, payload []byte) media.PacketType {
+func (s *session) parseAudioFrameType(firstByte byte, payload []byte) core.PacketType {
 	// AAC 특수 처리
 	if ((firstByte>>4)&0x0F) == 10 && len(payload) > 1 {
 		switch payload[1] {
 		case 0:
-			return media.TypeConfig
+			return core.TypeConfig
 		case 1:
-			return media.TypeData
+			return core.TypeData
 		}
 	}
 
 	// 기본적으로는 raw 오디오로 처리
-	return media.TypeData
+	return core.TypeData
 }
 
 // parseVideoFrameType 비디오 프레임 타입 파싱
-func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.PacketType {
+func (s *session) parseVideoFrameType(firstByte byte, payload []byte) core.PacketType {
 	// 프레임 타입 (4비트)
 	frameTypeFlag := (firstByte >> 4) & 0x0F
 	codecId := firstByte & 0x0F
@@ -434,33 +434,33 @@ func (s *session) parseVideoFrameType(firstByte byte, payload []byte) media.Pack
 		avcPacketType := payload[1]
 		switch avcPacketType {
 		case 0:
-			return media.TypeConfig
+			return core.TypeConfig
 		case 1:
 			if frameTypeFlag == 1 {
-				return media.TypeKey
+				return core.TypeKey
 			}
-			return media.TypeData
+			return core.TypeData
 		case 2:
 			// RTMP 전용 EndOfSequence는 키프레임으로 처리
-			return media.TypeKey
+			return core.TypeKey
 		}
 	}
 
 	// 일반적인 프레임 타입
 	switch frameTypeFlag {
 	case 1:
-		return media.TypeKey
+		return core.TypeKey
 	case 2:
-		return media.TypeData
+		return core.TypeData
 	case 3:
-		return media.TypeData
+		return core.TypeData
 	case 4:
-		return media.TypeKey
+		return core.TypeKey
 	case 5:
 		// RTMP 전용 InfoFrame은 인터프레임으로 처리
-		return media.TypeData
+		return core.TypeData
 	default:
-		return media.TypeData
+		return core.TypeData
 	}
 }
 
@@ -570,10 +570,10 @@ func (s *session) sendMetadataToClient(metadata map[string]string, streamID uint
 			typeId:    MsgTypeAMF0Data,
 			streamID:  streamID,
 		},
-		payloads: func() []*media.Buffer {
-			buffer := media.NewBuffer(len(encodedData))
+		payloads: func() []*core.Buffer {
+			buffer := core.NewBuffer(len(encodedData))
 			copy(buffer.Data(), encodedData)
-			return []*media.Buffer{buffer}
+			return []*core.Buffer{buffer}
 		}(),
 	}
 
@@ -832,7 +832,7 @@ func (s *session) handlePublish(message *Message, values []any) {
 
 	// 1단계: message의 streamID 사용 및 스트림 준비
 	streamID := message.messageHeader.streamID
-	stream := media.NewStream(fullStreamPath)
+	stream := core.NewStream(fullStreamPath)
 	s.addPublishedStream(streamID, fullStreamPath, stream)
 
 	// 2단계: MediaServer에 실제 publish 시도 (collision detection + 원자적 점유)
@@ -899,13 +899,13 @@ func (s *session) handlePlay(message *Message, values []any) {
 	s.addSubscribedStream(streamID, fullStreamPath)
 
 	// MediaServer에 subscribe 시작 알림 및 응답 대기
-	responseChan := make(chan media.Response, 1)
+	responseChan := make(chan core.Response, 1)
 
 	// RTMP가 지원하는 코덱 목록
-	supportedCodecs := []media.Codec{media.H264, media.AAC}
+	supportedCodecs := []core.Codec{core.H264, core.AAC}
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
-	s.mediaServerChannel <- media.NewSubscribeStarted(s.ID(), fullStreamPath, supportedCodecs, responseChan)
+	s.mediaServerChannel <- core.NewSubscribeStarted(s.ID(), fullStreamPath, supportedCodecs, responseChan)
 
 	// 응답 대기
 	select {
@@ -982,11 +982,11 @@ func (s *session) handlePlay(message *Message, values []any) {
 func (s *session) stopPublishing() {
 	// 스트림 발행 중단 처리
 	for _, stream := range s.publishedStreams {
-		s.mediaServerChannel <- media.NewPublishStopped(s.ID(), stream.ID())
+		s.mediaServerChannel <- core.NewPublishStopped(s.ID(), stream.ID())
 	}
 
 	// 스트림 정리
-	s.publishedStreams = make(map[uint32]*media.Stream)
+	s.publishedStreams = make(map[uint32]*core.Stream)
 	s.streamIDToPath = make(map[uint32]string)
 	s.streamPathToId = make(map[string]uint32)
 }
@@ -995,7 +995,7 @@ func (s *session) stopPublishing() {
 func (s *session) stopSubscribing() {
 	// 구독 중인 스트림에 대해 재생 중단 이벤트 전송
 	for _, streamPath := range s.subscribedStreams {
-		s.mediaServerChannel <- media.NewSubscribeStopped(s.ID(), streamPath)
+		s.mediaServerChannel <- core.NewSubscribeStopped(s.ID(), streamPath)
 	}
 
 	// 구독 스트림 정리
@@ -1100,14 +1100,14 @@ func (s *session) handleAMF3Command(message *Message) {
 // --- 다중 스트림 관리 메서드들 ---
 
 // addPublishedStream 발행 스트림 추가 (streamID 기반)
-func (s *session) addPublishedStream(streamID uint32, streamPath string, stream *media.Stream) {
+func (s *session) addPublishedStream(streamID uint32, streamPath string, stream *core.Stream) {
 	s.publishedStreams[streamID] = stream
 	s.addStreamMapping(streamID, streamPath)
 	slog.Debug("Published stream added", "sessionId", s.ID(), "streamID", streamID, "streamPath", streamPath, "mediaStreamId", stream.ID())
 }
 
 // removePublishedStream 발행 스트림 제거 (streamID 기반)
-func (s *session) removePublishedStream(streamID uint32) *media.Stream {
+func (s *session) removePublishedStream(streamID uint32) *core.Stream {
 	stream, exists := s.publishedStreams[streamID]
 	if exists {
 		delete(s.publishedStreams, streamID)
@@ -1118,14 +1118,14 @@ func (s *session) removePublishedStream(streamID uint32) *media.Stream {
 }
 
 // getPublishedStream 발행 스트림 가져오기 (streamID 기반)
-func (s *session) getPublishedStream(streamID uint32) (*media.Stream, bool) {
+func (s *session) getPublishedStream(streamID uint32) (*core.Stream, bool) {
 	stream, exists := s.publishedStreams[streamID]
 	return stream, exists
 }
 
 // getAllPublishedStreams 모든 발행 스트림 가져오기
-func (s *session) getAllPublishedStreams() []*media.Stream {
-	streams := make([]*media.Stream, 0, len(s.publishedStreams))
+func (s *session) getAllPublishedStreams() []*core.Stream {
+	streams := make([]*core.Stream, 0, len(s.publishedStreams))
 	for _, stream := range s.publishedStreams {
 		streams = append(streams, stream)
 	}
@@ -1163,7 +1163,7 @@ func (s *session) isPublishingMode() bool {
 // --- MediaSource 인터페이스 구현 (발행자 모드) ---
 
 // PublishingStreams MediaSource 인터페이스 구현 - 발행 중인 스트림 목록 반환
-func (s *session) PublishingStreams() []*media.Stream {
+func (s *session) PublishingStreams() []*core.Stream {
 	return s.getAllPublishedStreams()
 }
 
@@ -1205,10 +1205,10 @@ func (s *session) removeStreamMapping(streamID uint32) {
 // --- StreamKey collision detection 메서드 ---
 
 // attemptStreamPublish MediaServer에 publish 시도 (collision detection + 원자적 점유)
-func (s *session) attemptStreamPublish(streamKey string, stream *media.Stream) bool {
+func (s *session) attemptStreamPublish(streamKey string, stream *core.Stream) bool {
 	// MediaServer에 publish 시도 요청
-	responseChan := make(chan media.Response, 1)
-	publishAttempt := media.NewPublishStarted(s.ID(), stream, responseChan)
+	responseChan := make(chan core.Response, 1)
+	publishAttempt := core.NewPublishStarted(s.ID(), stream, responseChan)
 
 	// MediaServer에 이벤트 전송 (버퍼가 있어서 거의 항상 성공)
 	s.mediaServerChannel <- publishAttempt

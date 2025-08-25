@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,7 +29,7 @@ type Session struct {
 	wg                 *sync.WaitGroup
 
 	// 스트리밍 관련
-	stream      *media.Stream
+	stream      *core.Stream
 	streamID    string
 	streamPath  string
 	mpegtsParser *MPEGTSParser
@@ -74,8 +74,8 @@ func (s *Session) ID() uintptr {
 }
 
 // NodeType 노드 타입 반환
-func (s *Session) NodeType() media.NodeType {
-	return media.NodeTypeSRT
+func (s *Session) NodeType() core.NodeType {
+	return core.NodeTypeSRT
 }
 
 // Address 클라이언트 주소 반환
@@ -110,9 +110,9 @@ func (s *Session) isActive() bool {
 // MediaSource 인터페이스 구현 (발행 모드)
 
 // PublishingStreams 발행 중인 스트림 목록 반환
-func (s *Session) PublishingStreams() []*media.Stream {
+func (s *Session) PublishingStreams() []*core.Stream {
 	if s.mode == ModePublish && s.stream != nil {
-		return []*media.Stream{s.stream}
+		return []*core.Stream{s.stream}
 	}
 	return nil
 }
@@ -120,7 +120,7 @@ func (s *Session) PublishingStreams() []*media.Stream {
 // MediaSink 인터페이스 구현 (구독 모드)
 
 // SendPacket 패킷 전송 (구독자에게)
-func (s *Session) SendPacket(streamID string, packet media.Packet) error {
+func (s *Session) SendPacket(streamID string, packet core.Packet) error {
 	if !s.isActive() || s.mode != ModeSubscribe {
 		return nil
 	}
@@ -158,7 +158,7 @@ func (s *Session) Run() error {
 	// MediaServer에 노드 생성 이벤트 전송
 	if s.mediaServerChannel != nil {
 		select {
-		case s.mediaServerChannel <- media.NodeCreated{
+		case s.mediaServerChannel <- core.NodeCreated{
 			ID:   s.ID(),
 			Node: s,
 		}:

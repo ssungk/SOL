@@ -1,4 +1,4 @@
-package media
+package core
 
 // NodeType represents different media node types (protocols and processors)
 type NodeType uint8

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sol/pkg/rtmp"
 	"sol/pkg/rtsp"
 	"sol/pkg/srt"
@@ -13,27 +13,27 @@ import (
 )
 
 type MediaServer struct {
-	servers map[string]media.Server
+	servers map[string]core.Server
 	channel chan any
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup // 송신자들을 추적하기 위한 WaitGroup
 
 	// 통합 스트림 및 노드 관리
-	streams map[string]*media.Stream    // streamID -> Stream
-	nodes   map[uintptr]media.MediaNode // nodeID -> MediaNode (Source|Sink)
+	streams map[string]*core.Stream    // streamID -> Stream
+	nodes   map[uintptr]core.MediaNode // nodeID -> MediaNode (Source|Sink)
 }
 
 func NewMediaServer(rtmpPort, rtspPort, rtspTimeout, srtPort, srtTimeout int) *MediaServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mediaServer := &MediaServer{
-		servers: make(map[string]media.Server),
-		channel: make(chan any, media.DefaultChannelBufferSize),
+		servers: make(map[string]core.Server),
+		channel: make(chan any, core.DefaultChannelBufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
-		streams: make(map[string]*media.Stream),
-		nodes:   make(map[uintptr]media.MediaNode),
+		streams: make(map[string]*core.Stream),
+		nodes:   make(map[uintptr]core.MediaNode),
 	}
 
 	// 각 서버를 생성하고 맵에 등록
@@ -87,17 +87,17 @@ func (s *MediaServer) eventLoop() {
 
 func (s *MediaServer) handleChannel(data any) {
 	switch v := data.(type) {
-	case media.NodeCreated:
+	case core.NodeCreated:
 		s.handleNodeCreated(v)
-	case media.NodeTerminated:
+	case core.NodeTerminated:
 		s.handleNodeTerminated(v)
-	case media.PublishStarted:
+	case core.PublishStarted:
 		s.handlePublishStarted(v)
-	case media.PublishStopped:
+	case core.PublishStopped:
 		s.handlePublishStopped(v)
-	case media.SubscribeStarted:
+	case core.SubscribeStarted:
 		s.handleSubscribeStarted(v)
-	case media.SubscribeStopped:
+	case core.SubscribeStopped:
 		s.handleSubscribeStopped(v)
 	default:
 		slog.Warn("Unknown event type", "eventType", utils.TypeName(v))
@@ -119,7 +119,7 @@ func (s *MediaServer) shutdown() {
 }
 
 // addNode 노드 추가 (이벤트 루프 내에서만 호출)
-func (s *MediaServer) addNode(nodeID uintptr, node media.MediaNode) {
+func (s *MediaServer) addNode(nodeID uintptr, node core.MediaNode) {
 	s.nodes[nodeID] = node
 	slog.Info("Node added", "nodeID", nodeID, "nodeType", node.NodeType(), "totalNodes", len(s.nodes))
 }
@@ -141,34 +141,34 @@ func (s *MediaServer) removeNode(nodeID uintptr) {
 }
 
 // handleNodeCreated 노드 생성 이벤트 처리
-func (s *MediaServer) handleNodeCreated(event media.NodeCreated) {
+func (s *MediaServer) handleNodeCreated(event core.NodeCreated) {
 	slog.Info("Node created", "nodeID", event.ID, "nodeType", event.Node.NodeType().String())
 	s.addNode(event.ID, event.Node)
 }
 
 // handleNodeTerminated 노드 종료 이벤트 처리
-func (s *MediaServer) handleNodeTerminated(event media.NodeTerminated) {
+func (s *MediaServer) handleNodeTerminated(event core.NodeTerminated) {
 	slog.Info("Node terminated", "nodeID", event.ID)
 	s.removeNode(event.ID)
 }
 
 // handlePublishStarted 실제 publish 시도 처리
-func (s *MediaServer) handlePublishStarted(event media.PublishStarted) {
+func (s *MediaServer) handlePublishStarted(event core.PublishStarted) {
 	streamID := event.Stream.ID()
 	slog.Debug("Stream publish attempt requested", "streamID", streamID, "nodeID", event.ID)
 
 	if _, exists := s.streams[streamID]; exists {
-		event.ResponseChan <- media.NewErrorResponse("Stream ID was taken by another node")
+		event.ResponseChan <- core.NewErrorResponse("Stream ID was taken by another node")
 		return
 	}
 
 	s.streams[streamID] = event.Stream
-	event.ResponseChan <- media.NewSuccessResponse()
+	event.ResponseChan <- core.NewSuccessResponse()
 	slog.Info("Stream publish successful", "streamID", streamID, "nodeID", event.ID)
 }
 
 // handlePublishStopped 발행 중지 이벤트 처리
-func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
+func (s *MediaServer) handlePublishStopped(event core.PublishStopped) {
 	slog.Info("Publish stopped", "nodeID", event.ID, "streamID", event.StreamID)
 
 	if stream, exists := s.streams[event.StreamID]; exists {
@@ -179,35 +179,35 @@ func (s *MediaServer) handlePublishStopped(event media.PublishStopped) {
 }
 
 // handleSubscribeStarted 재생 시작 이벤트 처리
-func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
+func (s *MediaServer) handleSubscribeStarted(event core.SubscribeStarted) {
 	slog.Debug("Subscribe attempt requested", "streamID", event.StreamID, "nodeID", event.ID)
 
 	// 노드 ID를 통해 노드 찾기
 	node, exists := s.nodes[event.ID]
 	if !exists {
-		event.ResponseChan <- media.NewErrorResponse("Node not found")
+		event.ResponseChan <- core.NewErrorResponse("Node not found")
 		return
 	}
 
-	sink := node.(media.MediaSink)
+	sink := node.(core.MediaSink)
 
 	// 스트림 존재 확인 (Subscribe는 기존 스트림에만 가능)
 	stream, exists := s.streams[event.StreamID]
 	if !exists {
-		event.ResponseChan <- media.NewErrorResponse("Stream not found")
+		event.ResponseChan <- core.NewErrorResponse("Stream not found")
 		return
 	}
 
 	// 코덱 검증: 스트림의 모든 트랙 코덱이 Sink에서 지원되는지 확인
 	for _, trackCodec := range stream.TrackCodecs() {
-		if !media.ContainsCodec(event.SupportedCodecs, trackCodec) {
-			event.ResponseChan <- media.NewErrorResponse(fmt.Sprintf("Unsupported codec: %d", trackCodec))
+		if !core.ContainsCodec(event.SupportedCodecs, trackCodec) {
+			event.ResponseChan <- core.NewErrorResponse(fmt.Sprintf("Unsupported codec: %d", trackCodec))
 			return
 		}
 	}
 
 	// 성공 응답 먼저 전송 (AddSink에서 캐시 데이터 전송 시 데드락 방지)
-	event.ResponseChan <- media.NewSuccessResponse()
+	event.ResponseChan <- core.NewSuccessResponse()
 
 	// Sink를 스트림에 추가 (캐시된 데이터 자동 전송 포함)
 	stream.AddSink(sink)
@@ -217,7 +217,7 @@ func (s *MediaServer) handleSubscribeStarted(event media.SubscribeStarted) {
 }
 
 // handleSubscribeStopped 재생 중지 이벤트 처리
-func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
+func (s *MediaServer) handleSubscribeStopped(event core.SubscribeStopped) {
 	slog.Info("Subscribe stopped", "nodeID", event.ID, "streamID", event.StreamID)
 
 	// 노드 찾기
@@ -227,7 +227,7 @@ func (s *MediaServer) handleSubscribeStopped(event media.SubscribeStopped) {
 		return
 	}
 
-	sink := node.(media.MediaSink)
+	sink := node.(core.MediaSink)
 	if stream, streamExists := s.streams[event.StreamID]; streamExists {
 		stream.RemoveSink(sink)
 		slog.Info("Sink removed from stream due to subscribe stop", "nodeID", event.ID, "streamID", event.StreamID)

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sol/pkg/media"
+	"sol/pkg/core"
 	"sol/pkg/rtmp/amf"
 )
 
@@ -138,12 +138,12 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, 
 	)
 
 	// payload 버퍼 생성
-	var payloadBuffer *media.Buffer
+	var payloadBuffer *core.Buffer
 	if chunkSize > 0 && chunkData != nil {
-		payloadBuffer = media.NewBuffer(len(chunkData))
+		payloadBuffer = core.NewBuffer(len(chunkData))
 		copy(payloadBuffer.Data(), chunkData)
 	} else {
-		payloadBuffer = media.NewBuffer(0)
+		payloadBuffer = core.NewBuffer(0)
 	}
 
 	return NewChunk(basicHdr, &msgHdr, payloadBuffer)
@@ -159,7 +159,7 @@ func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chun
 	var msgHdr *msgHeader = nil
 
 	// payload 버퍼 생성
-	payloadBuffer := media.NewBuffer(len(chunkData))
+	payloadBuffer := core.NewBuffer(len(chunkData))
 	copy(payloadBuffer.Data(), chunkData)
 
 	return NewChunk(basicHdr, msgHdr, payloadBuffer)
@@ -252,9 +252,9 @@ func (mw *msgWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
 func (mw *msgWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
 	msg := NewMessage(header)
-	buffer := media.NewBuffer(len(payload))
+	buffer := core.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
-	msg.payloads = []*media.Buffer{buffer}
+	msg.payloads = []*core.Buffer{buffer}
 	return mw.writeMessage(w, msg)
 }
 
@@ -265,9 +265,9 @@ func (mw *msgWriter) writeSetChunkSize(w io.Writer, chunkSize uint32) error {
 
 	header := newMsgHeader(0, 4, MsgTypeSetChunkSize, 0)
 	msg := NewMessage(header)
-	buffer := media.NewBuffer(len(payload))
+	buffer := core.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
-	msg.payloads = []*media.Buffer{buffer}
+	msg.payloads = []*core.Buffer{buffer}
 
 	if err := mw.writeMessage(w, msg); err != nil {
 		return err
@@ -288,9 +288,9 @@ func PutUint24(b []byte, v uint32) {
 func (mw *msgWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
 	header := newMsgHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
 	msg := NewMessage(header)
-	audioBuffer := media.NewBuffer(len(audioData))
+	audioBuffer := core.NewBuffer(len(audioData))
 	copy(audioBuffer.Data(), audioData)
-	msg.payloads = []*media.Buffer{audioBuffer}
+	msg.payloads = []*core.Buffer{audioBuffer}
 	return mw.writeMessage(w, msg)
 }
 
@@ -298,9 +298,9 @@ func (mw *msgWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uin
 func (mw *msgWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
 	header := newMsgHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
 	msg := NewMessage(header)
-	videoBuffer := media.NewBuffer(len(videoData))
+	videoBuffer := core.NewBuffer(len(videoData))
 	copy(videoBuffer.Data(), videoData)
-	msg.payloads = []*media.Buffer{videoBuffer}
+	msg.payloads = []*core.Buffer{videoBuffer}
 	return mw.writeMessage(w, msg)
 }
 
@@ -314,8 +314,8 @@ func (mw *msgWriter) writeScriptData(w io.Writer, commandName string, metadata m
 
 	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
 	msg := NewMessage(header)
-	buffer := media.NewBuffer(len(payload))
+	buffer := core.NewBuffer(len(payload))
 	copy(buffer.Data(), payload)
-	msg.payloads = []*media.Buffer{buffer}
+	msg.payloads = []*core.Buffer{buffer}
 	return mw.writeMessage(w, msg)
 }

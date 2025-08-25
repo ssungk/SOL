@@ -1,22 +1,22 @@
 package rtmp
 
 import (
-	"sol/pkg/media"
+	"sol/pkg/core"
 )
 
 // GenerateVideoHeader 비디오 패킷을 위한 RTMP 헤더 생성 (5바이트)
-func GenerateVideoHeader(packet media.Packet, cts int) []byte {
+func GenerateVideoHeader(packet core.Packet, cts int) []byte {
 	header := make([]byte, 5)
 
 	// Frame Type + Codec ID (1바이트)
-	if packet.IsKeyPacket() || packet.Type == media.TypeConfig {
+	if packet.IsKeyPacket() || packet.Type == core.TypeConfig {
 		header[0] = 0x17 // Key frame + AVC
 	} else {
 		header[0] = 0x27 // Inter frame + AVC
 	}
 
 	// AVC Packet Type (1바이트)
-	if packet.Type == media.TypeConfig {
+	if packet.Type == core.TypeConfig {
 		header[1] = 0x00 // AVC sequence header
 	} else {
 		header[1] = 0x01 // AVC NALU
@@ -32,7 +32,7 @@ func GenerateVideoHeader(packet media.Packet, cts int) []byte {
 }
 
 // GenerateAudioHeader 오디오 패킷을 위한 RTMP 헤더 생성 (2바이트)
-func GenerateAudioHeader(packet media.Packet) []byte {
+func GenerateAudioHeader(packet core.Packet) []byte {
 	header := make([]byte, 2)
 
 	// Audio Info (1바이트): Sound Format(4bit) + Sound Rate(2bit) + Sound Size(1bit) + Sound Type(1bit)
@@ -40,7 +40,7 @@ func GenerateAudioHeader(packet media.Packet) []byte {
 	header[0] = 0xAF
 
 	// AAC Packet Type (1바이트)
-	if packet.Type == media.TypeConfig {
+	if packet.Type == core.TypeConfig {
 		header[1] = 0x00 // AAC sequence header
 	} else {
 		header[1] = 0x01 // AAC raw data

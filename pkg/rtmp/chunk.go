@@ -1,15 +1,15 @@
 package rtmp
 
-import "sol/pkg/media"
+import "sol/pkg/core"
 
 type Chunk struct {
 	basicHeader   basicHeader
 	messageHeader *msgHeader
-	payload       *media.Buffer
+	payload       *core.Buffer
 	hasPayload    bool // payload 유효성 플래그
 }
 
-func NewChunk(basicHeader basicHeader, msgHeader *msgHeader, payload *media.Buffer) *Chunk {
+func NewChunk(basicHeader basicHeader, msgHeader *msgHeader, payload *core.Buffer) *Chunk {
 	hasPayload := payload != nil // nil 체크로 유효성 확인
 	c := &Chunk{
 		basicHeader:   basicHeader,

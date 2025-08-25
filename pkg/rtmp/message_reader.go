@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sol/pkg/media"
+	"sol/pkg/core"
 )
 
 // 메시지 헤더 크기 상수
@@ -18,18 +18,18 @@ const (
 
 type msgReader struct {
 	messageHeaders map[uint32]msgHeader
-	payloads       map[uint32][]*media.Buffer
+	payloads       map[uint32][]*core.Buffer
 	payloadLengths map[uint32]uint32
-	avTagHeaders   map[uint32]*media.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	avTagHeaders   map[uint32]*core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
 }
 
 func newMsgReader() *msgReader {
 	return &msgReader{
 		messageHeaders: make(map[uint32]msgHeader),
-		payloads:       make(map[uint32][]*media.Buffer),
+		payloads:       make(map[uint32][]*core.Buffer),
 		payloadLengths: make(map[uint32]uint32),
-		avTagHeaders:   make(map[uint32]*media.Buffer),
+		avTagHeaders:   make(map[uint32]*core.Buffer),
 		chunkSize:      DefaultChunkSize,
 	}
 }
@@ -88,15 +88,15 @@ func (mr *msgReader) readChunk(r io.Reader) error {
 
 	// 청크 데이터 읽기
 	if chunkSize > 0 {
-		// media.Buffer를 사용한 풀링된 버퍼 할당
-		buffer := media.NewBuffer(int(chunkSize))
+		// core.Buffer를 사용한 풀링된 버퍼 할당
+		buffer := core.NewBuffer(int(chunkSize))
 		if _, err := io.ReadFull(r, buffer.Data()); err != nil {
 			buffer.Release() // 실패시 버퍼 해제
 			mr.abortChunkStream(basicHeader.chunkStreamID)
 			return err
 		}
 
-		// media.Buffer를 직접 사용하여 컨텍스트에 추가
+		// core.Buffer를 직접 사용하여 컨텍스트에 추가
 		mr.addMediaBuffer(basicHeader.chunkStreamID, buffer)
 		// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", len(buffer.Data())) // 너무 빈번함
 
@@ -104,7 +104,7 @@ func (mr *msgReader) readChunk(r io.Reader) error {
 	}
 
 	// 빈 청크인 경우
-	emptyBuffer := media.NewBuffer(0)
+	emptyBuffer := core.NewBuffer(0)
 	mr.addMediaBuffer(basicHeader.chunkStreamID, emptyBuffer)
 	// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", 0) // 너무 빈번함
 	return nil
@@ -379,58 +379,58 @@ func getAudioHeaderSize(firstByte byte) (int, error) {
 }
 
 // detectVideoCodec 비디오 첫 바이트에서 코덱 감지
-func detectVideoCodec(firstByte byte) (media.Codec, error) {
+func detectVideoCodec(firstByte byte) (core.Codec, error) {
 	codecId := firstByte & 0x0F
 
 	switch codecId {
 	case 2: // Sorenson H.263
-		return media.Unknown, fmt.Errorf("sorenson H.263 codec not supported")
+		return core.Unknown, fmt.Errorf("sorenson H.263 codec not supported")
 	case 3: // Screen Video v1
-		return media.Unknown, fmt.Errorf("screen video v1 codec not supported")
+		return core.Unknown, fmt.Errorf("screen video v1 codec not supported")
 	case 4: // VP6
-		return media.Unknown, fmt.Errorf("VP6 codec not supported")
+		return core.Unknown, fmt.Errorf("VP6 codec not supported")
 	case 5: // VP6 with alpha
-		return media.Unknown, fmt.Errorf("VP6 with alpha codec not supported")
+		return core.Unknown, fmt.Errorf("VP6 with alpha codec not supported")
 	case 6: // Screen Video
-		return media.Unknown, fmt.Errorf("screen video codec not supported")
+		return core.Unknown, fmt.Errorf("screen video codec not supported")
 	case 7: // AVC (H.264)
-		return media.H264, nil
+		return core.H264, nil
 	case 12: // HEVC (H.265)
-		return media.H265, nil
+		return core.H265, nil
 	case 13: // AV1
-		return media.Unknown, fmt.Errorf("AV1 codec not supported")
+		return core.Unknown, fmt.Errorf("AV1 codec not supported")
 	default:
-		return media.Unknown, fmt.Errorf("unknown video codec: %d", codecId)
+		return core.Unknown, fmt.Errorf("unknown video codec: %d", codecId)
 	}
 }
 
 // detectAudioCodec 오디오 첫 바이트에서 코덱 감지
-func detectAudioCodec(firstByte byte) (media.Codec, error) {
+func detectAudioCodec(firstByte byte) (core.Codec, error) {
 	soundFormat := (firstByte & 0xF0) >> 4
 
 	switch soundFormat {
 	case 2: // MP3
-		return media.Unknown, fmt.Errorf("MP3 codec not supported")
+		return core.Unknown, fmt.Errorf("MP3 codec not supported")
 	case 5: // Nellymoser 8kHz mono
-		return media.Unknown, fmt.Errorf("Nellymoser codec not supported")
+		return core.Unknown, fmt.Errorf("Nellymoser codec not supported")
 	case 6: // Nellymoser
-		return media.Unknown, fmt.Errorf("Nellymoser codec not supported")
+		return core.Unknown, fmt.Errorf("Nellymoser codec not supported")
 	case 7: // G.711 A-law
-		return media.Unknown, fmt.Errorf("G.711 A-law codec not supported")
+		return core.Unknown, fmt.Errorf("G.711 A-law codec not supported")
 	case 8: // G.711 μ-law
-		return media.Unknown, fmt.Errorf("G.711 μ-law codec not supported")
+		return core.Unknown, fmt.Errorf("G.711 μ-law codec not supported")
 	case 10: // AAC
-		return media.AAC, nil
+		return core.AAC, nil
 	case 11: // Speex
-		return media.Unknown, fmt.Errorf("Speex codec not supported")
+		return core.Unknown, fmt.Errorf("Speex codec not supported")
 	case 13: // Opus
-		return media.Unknown, fmt.Errorf("Opus codec not supported")
+		return core.Unknown, fmt.Errorf("Opus codec not supported")
 	case 14: // MP3 8kHz
-		return media.Unknown, fmt.Errorf("MP3 8kHz codec not supported")
+		return core.Unknown, fmt.Errorf("MP3 8kHz codec not supported")
 	case 15: // Device-specific
-		return media.Unknown, fmt.Errorf("device-specific codec not supported")
+		return core.Unknown, fmt.Errorf("device-specific codec not supported")
 	default:
-		return media.Unknown, fmt.Errorf("unknown audio format: %d", soundFormat)
+		return core.Unknown, fmt.Errorf("unknown audio format: %d", soundFormat)
 	}
 }
 
@@ -466,15 +466,15 @@ func (mr *msgReader) storeAVTagHeader(chunkStreamId uint32, header []byte) {
 	}
 	
 	// 새 버퍼 생성 및 데이터 복사
-	buffer := media.NewBuffer(len(header))
+	buffer := core.NewBuffer(len(header))
 	copy(buffer.Data(), header)
 	mr.avTagHeaders[chunkStreamId] = buffer
 }
 
 // addMediaBuffer 미디어 버퍼를 추가
-func (mr *msgReader) addMediaBuffer(chunkStreamId uint32, buffer *media.Buffer) {
+func (mr *msgReader) addMediaBuffer(chunkStreamId uint32, buffer *core.Buffer) {
 	if mr.payloads[chunkStreamId] == nil {
-		mr.payloads[chunkStreamId] = make([]*media.Buffer, 0)
+		mr.payloads[chunkStreamId] = make([]*core.Buffer, 0)
 	}
 
 	mr.payloads[chunkStreamId] = append(mr.payloads[chunkStreamId], buffer)
@@ -553,7 +553,7 @@ func (mr *msgReader) popMessageIfPossible() (*Message, error) {
 		}
 
 		// 버퍼들을 직접 전달 (zero-copy)
-		msg.payloads = make([]*media.Buffer, len(buffers))
+		msg.payloads = make([]*core.Buffer, len(buffers))
 		for i, buffer := range buffers {
 			msg.payloads[i] = buffer.AddRef() // 참조 카운트 증가
 		}
