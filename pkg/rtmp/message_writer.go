@@ -9,12 +9,14 @@ import (
 )
 
 type msgWriter struct {
-	chunkSize uint32
+	chunkSize   uint32
+	msgHeaders  map[uint32]msgHeader // 청크 스트림별 마지막 전송 헤더
 }
 
 func newMsgWriter() *msgWriter {
 	return &msgWriter{
-		chunkSize: DefaultChunkSize,
+		chunkSize:  DefaultChunkSize,
+		msgHeaders: make(map[uint32]msgHeader),
 	}
 }
 
@@ -40,7 +42,7 @@ func (mw *msgWriter) writeMessage(w io.Writer, msg *Message) error {
 	return nil
 }
 
-// 메시지를 청크 배열로 구성 (zero-copy)
+// 메시지를 청크 배열로 구성 (zero-copy) - 스마트 Format 선택
 func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 	// Reader와 전체 길이 결정
 	var totalPayloadLength int
@@ -53,9 +55,26 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 		payloadReader = msg.Reader()
 	}
 
+	// 청크 스트림 ID 결정
+	chunkStreamID := uint32(getChunkStreamIDForMessageType(msg.msgHeader.typeId))
+
+	// 메시지 헤더 설정 (전체 길이로)
+	messageHeader := newMsgHeader(
+		msg.msgHeader.timestamp,
+		uint32(totalPayloadLength),
+		msg.msgHeader.typeId,
+		msg.msgHeader.streamID,
+	)
+
+	// 첫 번째 청크의 Format 결정
+	chunkFormat := mw.determineChunkFormat(messageHeader, chunkStreamID)
+
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
-		return []Chunk{mw.buildFirstChunk(msg, nil, 0, totalPayloadLength)}, nil
+		chunk := mw.buildTypedChunk(msg, nil, 0, chunkFormat, true)
+		// 헤더 업데이트
+		mw.updateLastMessageHeader(chunkStreamID, messageHeader)
+		return []Chunk{chunk}, nil
 	}
 
 	var chunks []Chunk
@@ -82,12 +101,14 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 		}
 
 		if isFirstChunk {
-			// 첫 번째 청크: Full header (fmt=0)
-			chunks = append(chunks, mw.buildFirstChunk(msg, chunkData, n, totalPayloadLength))
+			// 첫 번째 청크: 결정된 Format 사용
+			chunk := mw.buildTypedChunk(msg, chunkData, n, chunkFormat, true)
+			chunks = append(chunks, chunk)
 			isFirstChunk = false
 		} else {
-			// 나머지 청크: Type 3 header (fmt=3)
-			chunks = append(chunks, mw.buildContinuationChunk(msg, chunkData, n))
+			// 연속 청크: Format 3 (헤더 없음)
+			chunk := mw.buildTypedChunk(msg, chunkData, n, FmtType3, false)
+			chunks = append(chunks, chunk)
 		}
 
 		bytesRead += n
@@ -95,6 +116,9 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 			break // 더 이상 읽을 데이터가 없음
 		}
 	}
+
+	// 메시지 전송 완료 후 헤더 업데이트
+	mw.updateLastMessageHeader(chunkStreamID, messageHeader)
 
 	return chunks, nil
 }
@@ -119,24 +143,44 @@ func getChunkStreamIDForMessageType(messageType byte) byte {
 	}
 }
 
-// 첫 번째 청크 생성 (fmt=0 - full header)
-func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, totalPayloadLength int) Chunk {
-	// 확장 타임스탬프 처리
-	headerTimestamp := msg.msgHeader.timestamp
-	if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
-		headerTimestamp = ExtendedTimestampThreshold
+
+// determineChunkFormat 이전 헤더와 비교하여 최적 청크 Format 결정
+func (mw *msgWriter) determineChunkFormat(currentHeader msgHeader, chunkStreamID uint32) byte {
+	lastHeader, exists := mw.msgHeaders[chunkStreamID]
+	if !exists {
+		// 첫 메시지는 항상 Format 0 (전체 헤더)
+		return FmtType0
 	}
 
-	// 메시지 타입에 따라 청크 스트림 ID 결정
-	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
-	basicHdr := newBasicHeader(FmtType0, uint32(chunkStreamID))
-	msgHdr := newMsgHeader(
-		headerTimestamp,
-		uint32(totalPayloadLength),
-		msg.msgHeader.typeId,
-		msg.msgHeader.streamID,
-	)
+	// streamID가 다르면 Format 0
+	if currentHeader.streamID != lastHeader.streamID {
+		return FmtType0
+	}
 
+	// length나 typeId가 다르면 Format 1
+	if currentHeader.length != lastHeader.length || currentHeader.typeId != lastHeader.typeId {
+		return FmtType1
+	}
+
+	// timestamp가 다르면 Format 2
+	if currentHeader.timestamp != lastHeader.timestamp {
+		return FmtType2
+	}
+
+	// 모든 필드가 동일하면 Format 3
+	return FmtType3
+}
+
+// updateLastMessageHeader 전송 완료 후 마지막 헤더 업데이트
+func (mw *msgWriter) updateLastMessageHeader(chunkStreamID uint32, header msgHeader) {
+	mw.msgHeaders[chunkStreamID] = header
+}
+
+// buildTypedChunk Format에 따라 적절한 청크 생성
+func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize int, chunkFormat byte, isFirstChunk bool) Chunk {
+	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
+	basicHdr := newBasicHeader(chunkFormat, uint32(chunkStreamID))
+	
 	// payload 버퍼 생성
 	var payloadBuffer *core.Buffer
 	if chunkSize > 0 && chunkData != nil {
@@ -146,23 +190,79 @@ func (mw *msgWriter) buildFirstChunk(msg *Message, chunkData []byte, chunkSize, 
 		payloadBuffer = core.NewBuffer(0)
 	}
 
-	return NewChunk(basicHdr, &msgHdr, payloadBuffer)
-}
+	switch chunkFormat {
+	case FmtType0:
+		// Format 0: 전체 헤더 (11바이트)
+		headerTimestamp := msg.msgHeader.timestamp
+		if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
+			headerTimestamp = ExtendedTimestampThreshold
+		}
+		msgHdr := newMsgHeader(
+			headerTimestamp,
+			msg.msgHeader.length,
+			msg.msgHeader.typeId,
+			msg.msgHeader.streamID,
+		)
+		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
 
-// 연속 청크 생성 (fmt=3 - no header)
-func (mw *msgWriter) buildContinuationChunk(msg *Message, chunkData []byte, chunkSize int) Chunk {
-	// 메시지 타입에 따라 청크 스트림 ID 결정
-	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
-	basicHdr := newBasicHeader(FmtType3, uint32(chunkStreamID))
+	case FmtType1:
+		// Format 1: streamID 제외 (7바이트)
+		lastHeader := mw.msgHeaders[uint32(chunkStreamID)]
+		headerTimestamp := msg.msgHeader.timestamp
+		if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
+			headerTimestamp = ExtendedTimestampThreshold
+		}
+		// timestamp를 delta로 계산
+		timestampDelta := headerTimestamp
+		if headerTimestamp != ExtendedTimestampThreshold {
+			timestampDelta = headerTimestamp - lastHeader.timestamp
+		}
+		msgHdr := newMsgHeader(
+			timestampDelta,
+			msg.msgHeader.length,
+			msg.msgHeader.typeId,
+			lastHeader.streamID, // 이전 streamID 유지
+		)
+		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
 
-	// Type 3는 message header가 없음
-	var msgHdr *msgHeader = nil
+	case FmtType2:
+		// Format 2: timestamp delta만 (3바이트)
+		lastHeader := mw.msgHeaders[uint32(chunkStreamID)]
+		headerTimestamp := msg.msgHeader.timestamp
+		if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
+			headerTimestamp = ExtendedTimestampThreshold
+		}
+		// timestamp를 delta로 계산
+		timestampDelta := headerTimestamp
+		if headerTimestamp != ExtendedTimestampThreshold {
+			timestampDelta = headerTimestamp - lastHeader.timestamp
+		}
+		msgHdr := newMsgHeader(
+			timestampDelta,
+			lastHeader.length,  // 이전 length 유지
+			lastHeader.typeId,  // 이전 typeId 유지
+			lastHeader.streamID, // 이전 streamID 유지
+		)
+		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
 
-	// payload 버퍼 생성
-	payloadBuffer := core.NewBuffer(len(chunkData))
-	copy(payloadBuffer.Data(), chunkData)
+	case FmtType3:
+		// Format 3: 헤더 없음 (0바이트)
+		return NewChunk(basicHdr, nil, payloadBuffer)
 
-	return NewChunk(basicHdr, msgHdr, payloadBuffer)
+	default:
+		// 기본값은 Format 0
+		headerTimestamp := msg.msgHeader.timestamp
+		if msg.msgHeader.timestamp >= ExtendedTimestampThreshold {
+			headerTimestamp = ExtendedTimestampThreshold
+		}
+		msgHdr := newMsgHeader(
+			headerTimestamp,
+			msg.msgHeader.length,
+			msg.msgHeader.typeId,
+			msg.msgHeader.streamID,
+		)
+		return NewChunk(basicHdr, &msgHdr, payloadBuffer)
+	}
 }
 
 // 단일 청크 전송
@@ -176,7 +276,7 @@ func (mw *msgWriter) writeChunk(w io.Writer, chunk *Chunk) error {
 	var needsExtendedTimestamp bool
 	var extendedTimestamp uint32
 	if chunk.msgHeader != nil {
-		if err := mw.writeMessageHeader(w, chunk.msgHeader); err != nil {
+		if err := mw.writeMessageHeaderByFormat(w, chunk.msgHeader, chunk.basicHeader.fmt); err != nil {
 			return err
 		}
 		// 확장 타임스탬프가 필요한지 확인
@@ -238,15 +338,47 @@ func (mw *msgWriter) writeBasicHeader(w io.Writer, bh basicHeader) error {
 	return err
 }
 
-// Message Header 인코딩 및 전송
+// Message Header 인코딩 및 전송 (Format에 따라 크기 조절)
+func (mw *msgWriter) writeMessageHeaderByFormat(w io.Writer, mh *msgHeader, format byte) error {
+	switch format {
+	case FmtType0:
+		// Format 0: 11바이트 - 전체 헤더
+		header := make([]byte, 11)
+		PutUint24(header[0:], mh.timestamp)                    // 3 bytes timestamp
+		PutUint24(header[3:], mh.length)                       // 3 bytes message length  
+		header[6] = mh.typeId                                  // 1 byte type ID
+		binary.LittleEndian.PutUint32(header[7:], mh.streamID) // 4 bytes stream ID
+		_, err := w.Write(header)
+		return err
+		
+	case FmtType1:
+		// Format 1: 7바이트 - streamID 제외
+		header := make([]byte, 7)
+		PutUint24(header[0:], mh.timestamp) // 3 bytes timestamp (delta)
+		PutUint24(header[3:], mh.length)    // 3 bytes message length
+		header[6] = mh.typeId               // 1 byte type ID
+		_, err := w.Write(header)
+		return err
+		
+	case FmtType2:
+		// Format 2: 3바이트 - timestamp만
+		header := make([]byte, 3)
+		PutUint24(header[0:], mh.timestamp) // 3 bytes timestamp (delta)
+		_, err := w.Write(header)
+		return err
+		
+	case FmtType3:
+		// Format 3: 0바이트 - 헤더 없음 (이 케이스는 실행되지 않아야 함)
+		return nil
+		
+	default:
+		return fmt.Errorf("invalid chunk format: %d", format)
+	}
+}
+
+// Message Header 인코딩 및 전송 (레거시 - Format 0만 지원)
 func (mw *msgWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
-	header := make([]byte, 11)
-	PutUint24(header[0:], mh.timestamp)                    // 3 bytes timestamp
-	PutUint24(header[3:], mh.length)                       // 3 bytes message length
-	header[6] = mh.typeId                                  // 1 byte type ID
-	binary.LittleEndian.PutUint32(header[7:], mh.streamID) // 4 bytes stream ID
-	_, err := w.Write(header)
-	return err
+	return mw.writeMessageHeaderByFormat(w, mh, FmtType0)
 }
 
 func (mw *msgWriter) writeCommand(w io.Writer, payload []byte) error {

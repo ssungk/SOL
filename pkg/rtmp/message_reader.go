@@ -17,7 +17,7 @@ const (
 )
 
 type msgReader struct {
-	messageHeaders map[uint32]msgHeader
+	msgHeaders map[uint32]msgHeader
 	payloads       map[uint32][]*core.Buffer
 	payloadLengths map[uint32]uint32
 	avTagHeaders   map[uint32]*core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
@@ -26,7 +26,7 @@ type msgReader struct {
 
 func newMsgReader() *msgReader {
 	return &msgReader{
-		messageHeaders: make(map[uint32]msgHeader),
+		msgHeaders: make(map[uint32]msgHeader),
 		payloads:       make(map[uint32][]*core.Buffer),
 		payloadLengths: make(map[uint32]uint32),
 		avTagHeaders:   make(map[uint32]*core.Buffer),
@@ -448,14 +448,14 @@ func (mr *msgReader) abortChunkStream(chunkStreamId uint32) {
 		avTagHeader.Release()
 	}
 	// 해당 청크 스트림의 모든 상태 제거
-	delete(mr.messageHeaders, chunkStreamId)
+	delete(mr.msgHeaders, chunkStreamId)
 	delete(mr.payloads, chunkStreamId)
 	delete(mr.payloadLengths, chunkStreamId)
 	delete(mr.avTagHeaders, chunkStreamId)
 }
 
 func (mr *msgReader) updateMsgHeader(chunkStreamId uint32, msgHeader *msgHeader) {
-	mr.messageHeaders[chunkStreamId] = *msgHeader
+	mr.msgHeaders[chunkStreamId] = *msgHeader
 }
 
 // storeAVTagHeader AV 태그 헤더 저장
@@ -487,7 +487,7 @@ func (mr *msgReader) isInitialChunk(chunkStreamId uint32) bool {
 }
 
 func (mr *msgReader) nextChunkSize(chunkStreamId uint32) uint32 {
-	header, ok := mr.messageHeaders[chunkStreamId]
+	header, ok := mr.msgHeaders[chunkStreamId]
 	if !ok {
 		slog.Error("message header not found", "chunkStreamId", chunkStreamId)
 		return 0
@@ -513,7 +513,7 @@ func (mr *msgReader) nextChunkSize(chunkStreamId uint32) uint32 {
 }
 
 func (mr *msgReader) getMsgHeader(chunkStreamId uint32) *msgHeader {
-	header, ok := mr.messageHeaders[chunkStreamId]
+	header, ok := mr.msgHeaders[chunkStreamId]
 	if !ok {
 		return nil
 	}
@@ -521,7 +521,7 @@ func (mr *msgReader) getMsgHeader(chunkStreamId uint32) *msgHeader {
 }
 
 func (mr *msgReader) popMessageIfPossible() (Message, error) {
-	for chunkStreamId, messageHeader := range mr.messageHeaders {
+	for chunkStreamId, messageHeader := range mr.msgHeaders {
 		payloadLength, ok := mr.payloadLengths[chunkStreamId]
 		if !ok {
 			continue
