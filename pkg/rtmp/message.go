@@ -11,7 +11,7 @@ type Message struct {
 	messageHeader msgHeader
 
 	// 미디어 메시지 전용 (비디오/오디오)
-	mediaHeader []byte // 미디어 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	avTagHeader []byte // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 
 	// 청크 배열 (zero-copy 처리용)
 	payloads []*media.Buffer
@@ -74,17 +74,17 @@ func (m *Message) Reader() io.Reader {
 	return io.MultiReader(readers...)
 }
 
-// FullReader 미디어 헤더 + 페이로드 데이터를 하나의 Reader로 제공 (zero-copy)
+// FullReader AV 태그 헤더 + 페이로드 데이터를 하나의 Reader로 제공 (zero-copy)
 func (m *Message) FullReader() io.Reader {
-	if len(m.mediaHeader) == 0 {
+	if len(m.avTagHeader) == 0 {
 		return m.Reader()
 	}
-	// 미디어 헤더 + 페이로드 데이터 결합된 Reader
-	headerReader := bytes.NewReader(m.mediaHeader)
+	// AV 태그 헤더 + 페이로드 데이터 결합된 Reader
+	headerReader := bytes.NewReader(m.avTagHeader)
 	return io.MultiReader(headerReader, m.Reader())
 }
 
-// TotalFullPayloadLen 미디어 헤더 포함 전체 페이로드 길이
+// TotalFullPayloadLen AV 태그 헤더 포함 전체 페이로드 길이
 func (m *Message) TotalFullPayloadLen() int {
-	return len(m.mediaHeader) + m.TotalPayloadLen()
+	return len(m.avTagHeader) + m.TotalPayloadLen()
 }

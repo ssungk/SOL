@@ -228,8 +228,8 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	message := NewMessage(messageHeader)
 	
 	// 미디어 헤더 저장
-	message.mediaHeader = make([]byte, len(header))
-	copy(message.mediaHeader, header)
+	message.avTagHeader = make([]byte, len(header))
+	copy(message.avTagHeader, header)
 	
 	// 순수 데이터 버퍼들을 직접 참조 (zero-copy)
 	if len(e.packet.Data) > 0 {
@@ -321,7 +321,7 @@ func (s *session) IsPublisher() bool {
 // 오디오 데이터 처리
 func (s *session) handleAudio(message *Message) {
 	// mediaHeader에서 직접 정보 추출 (제로카피)
-	firstByte := message.mediaHeader[0] // Audio Info
+	firstByte := message.avTagHeader[0] // Audio Info
 
 	// 코덱 동적 감지
 	codecType, err := detectAudioCodec(firstByte)
@@ -330,7 +330,7 @@ func (s *session) handleAudio(message *Message) {
 		return
 	}
 
-	frameType := s.parseAudioFrameType(firstByte, message.mediaHeader)
+	frameType := s.parseAudioFrameType(firstByte, message.avTagHeader)
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
 	frameData := make([]*media.Buffer, len(message.payloads))
@@ -356,7 +356,7 @@ func (s *session) handleAudio(message *Message) {
 // 비디오 데이터 처리
 func (s *session) handleVideo(message *Message) {
 	// mediaHeader에서 직접 정보 추출 (제로카피)
-	firstByte := message.mediaHeader[0] // Frame Type + Codec ID
+	firstByte := message.avTagHeader[0] // Frame Type + Codec ID
 
 	// 코덱 동적 감지
 	codecType, err := detectVideoCodec(firstByte)
@@ -365,10 +365,10 @@ func (s *session) handleVideo(message *Message) {
 		return
 	}
 
-	frameType := s.parseVideoFrameType(firstByte, message.mediaHeader)
+	frameType := s.parseVideoFrameType(firstByte, message.avTagHeader)
 
 	// 비디오 헤더에서 CompositionTime 추출
-	_, _, _, compositionTime := ParseVideoHeader(message.mediaHeader)
+	_, _, _, compositionTime := ParseVideoHeader(message.avTagHeader)
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
 	frameData := make([]*media.Buffer, len(message.payloads))
