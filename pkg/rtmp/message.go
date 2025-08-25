@@ -11,20 +11,23 @@ type Message struct {
 	messageHeader msgHeader
 
 	// 미디어 메시지 전용 (비디오/오디오)
-	avTagHeader []byte // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	avTagHeader *media.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 
 	// 청크 배열 (zero-copy 처리용)
 	payloads []*media.Buffer
 }
 
-func NewMessage(messageHeader msgHeader) *Message {
+func NewMessage(msgHeader msgHeader) *Message {
 	return &Message{
-		messageHeader: messageHeader,
+		messageHeader: msgHeader,
 	}
 }
 
 // Release 모든 버퍼의 참조 카운트를 감소시킴
 func (m *Message) Release() {
+	if m.avTagHeader != nil {
+		m.avTagHeader.Release()
+	}
 	for _, buffer := range m.payloads {
 		buffer.Release()
 	}
@@ -76,15 +79,19 @@ func (m *Message) Reader() io.Reader {
 
 // FullReader AV 태그 헤더 + 페이로드 데이터를 하나의 Reader로 제공 (zero-copy)
 func (m *Message) FullReader() io.Reader {
-	if len(m.avTagHeader) == 0 {
+	if m.avTagHeader == nil || m.avTagHeader.Len() == 0 {
 		return m.Reader()
 	}
 	// AV 태그 헤더 + 페이로드 데이터 결합된 Reader
-	headerReader := bytes.NewReader(m.avTagHeader)
+	headerReader := bytes.NewReader(m.avTagHeader.Data())
 	return io.MultiReader(headerReader, m.Reader())
 }
 
 // TotalFullPayloadLen AV 태그 헤더 포함 전체 페이로드 길이
 func (m *Message) TotalFullPayloadLen() int {
-	return len(m.avTagHeader) + m.TotalPayloadLen()
+	tagHeaderLen := 0
+	if m.avTagHeader != nil {
+		tagHeaderLen = m.avTagHeader.Len()
+	}
+	return tagHeaderLen + m.TotalPayloadLen()
 }

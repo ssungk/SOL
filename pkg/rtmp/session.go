@@ -228,8 +228,9 @@ func (s *session) handleSendPacket(e sendPacketEvent) {
 	message := NewMessage(messageHeader)
 	
 	// 미디어 헤더 저장
-	message.avTagHeader = make([]byte, len(header))
-	copy(message.avTagHeader, header)
+	tagHeaderBuffer := media.NewBuffer(len(header))
+	copy(tagHeaderBuffer.Data(), header)
+	message.avTagHeader = tagHeaderBuffer
 	
 	// 순수 데이터 버퍼들을 직접 참조 (zero-copy)
 	if len(e.packet.Data) > 0 {
@@ -320,8 +321,12 @@ func (s *session) IsPublisher() bool {
 
 // 오디오 데이터 처리
 func (s *session) handleAudio(message *Message) {
-	// mediaHeader에서 직접 정보 추출 (제로카피)
-	firstByte := message.avTagHeader[0] // Audio Info
+	// avTagHeader에서 직접 정보 추출 (제로카피)
+	if message.avTagHeader == nil || message.avTagHeader.Len() == 0 {
+		slog.Error("Audio message without AV tag header", "sessionId", s.ID())
+		return
+	}
+	firstByte := message.avTagHeader.Data()[0] // Audio Info
 
 	// 코덱 동적 감지
 	codecType, err := detectAudioCodec(firstByte)
@@ -330,7 +335,7 @@ func (s *session) handleAudio(message *Message) {
 		return
 	}
 
-	frameType := s.parseAudioFrameType(firstByte, message.avTagHeader)
+	frameType := s.parseAudioFrameType(firstByte, message.avTagHeader.Data())
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
 	frameData := make([]*media.Buffer, len(message.payloads))
@@ -355,8 +360,12 @@ func (s *session) handleAudio(message *Message) {
 
 // 비디오 데이터 처리
 func (s *session) handleVideo(message *Message) {
-	// mediaHeader에서 직접 정보 추출 (제로카피)
-	firstByte := message.avTagHeader[0] // Frame Type + Codec ID
+	// avTagHeader에서 직접 정보 추출 (제로카피)
+	if message.avTagHeader == nil || message.avTagHeader.Len() == 0 {
+		slog.Error("Video message without AV tag header", "sessionId", s.ID())
+		return
+	}
+	firstByte := message.avTagHeader.Data()[0] // Frame Type + Codec ID
 
 	// 코덱 동적 감지
 	codecType, err := detectVideoCodec(firstByte)
@@ -365,10 +374,10 @@ func (s *session) handleVideo(message *Message) {
 		return
 	}
 
-	frameType := s.parseVideoFrameType(firstByte, message.avTagHeader)
+	frameType := s.parseVideoFrameType(firstByte, message.avTagHeader.Data())
 
 	// 비디오 헤더에서 CompositionTime 추출
-	_, _, _, compositionTime := ParseVideoHeader(message.avTagHeader)
+	_, _, _, compositionTime := ParseVideoHeader(message.avTagHeader.Data())
 
 	// 순수 데이터를 버퍼 배열로 변환 (zero-copy)
 	frameData := make([]*media.Buffer, len(message.payloads))

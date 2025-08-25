@@ -20,7 +20,7 @@ type msgReader struct {
 	messageHeaders map[uint32]msgHeader
 	payloads       map[uint32][]*media.Buffer
 	payloadLengths map[uint32]uint32
-	avTagHeaders   map[uint32][]byte // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
+	avTagHeaders   map[uint32]*media.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
 }
 
@@ -29,7 +29,7 @@ func newMsgReader() *msgReader {
 		messageHeaders: make(map[uint32]msgHeader),
 		payloads:       make(map[uint32][]*media.Buffer),
 		payloadLengths: make(map[uint32]uint32),
-		avTagHeaders:   make(map[uint32][]byte),
+		avTagHeaders:   make(map[uint32]*media.Buffer),
 		chunkSize:      DefaultChunkSize,
 	}
 }
@@ -443,6 +443,10 @@ func (mr *msgReader) abortChunkStream(chunkStreamId uint32) {
 			buffer.Release()
 		}
 	}
+	// AV 태그 헤더 해제
+	if avTagHeader, exists := mr.avTagHeaders[chunkStreamId]; exists && avTagHeader != nil {
+		avTagHeader.Release()
+	}
 	// 해당 청크 스트림의 모든 상태 제거
 	delete(mr.messageHeaders, chunkStreamId)
 	delete(mr.payloads, chunkStreamId)
@@ -450,13 +454,21 @@ func (mr *msgReader) abortChunkStream(chunkStreamId uint32) {
 	delete(mr.avTagHeaders, chunkStreamId)
 }
 
-func (mr *msgReader) updateMsgHeader(chunkStreamId uint32, messageHeader *msgHeader) {
-	mr.messageHeaders[chunkStreamId] = *messageHeader
+func (mr *msgReader) updateMsgHeader(chunkStreamId uint32, msgHeader *msgHeader) {
+	mr.messageHeaders[chunkStreamId] = *msgHeader
 }
 
 // storeAVTagHeader AV 태그 헤더 저장
 func (mr *msgReader) storeAVTagHeader(chunkStreamId uint32, header []byte) {
-	mr.avTagHeaders[chunkStreamId] = header
+	// 기존 헤더가 있으면 해제
+	if existingHeader := mr.avTagHeaders[chunkStreamId]; existingHeader != nil {
+		existingHeader.Release()
+	}
+	
+	// 새 버퍼 생성 및 데이터 복사
+	buffer := media.NewBuffer(len(header))
+	copy(buffer.Data(), header)
+	mr.avTagHeaders[chunkStreamId] = buffer
 }
 
 // addMediaBuffer 미디어 버퍼를 추가
@@ -486,8 +498,8 @@ func (mr *msgReader) nextChunkSize(chunkStreamId uint32) uint32 {
 
 	// 헤더 크기 계산
 	headerSize := uint32(0)
-	if avTagHeader, exists := mr.avTagHeaders[chunkStreamId]; exists {
-		headerSize = uint32(len(avTagHeader))
+	if avTagHeader, exists := mr.avTagHeaders[chunkStreamId]; exists && avTagHeader != nil {
+		headerSize = uint32(avTagHeader.Len())
 	}
 
 	// 전체 메시지에서 헤더와 현재까지 읽은 데이터를 제외한 남은 크기
@@ -522,8 +534,8 @@ func (mr *msgReader) popMessageIfPossible() (*Message, error) {
 
 		// 헤더 크기 계산
 		headerSize := uint32(0)
-		if avTagHeader, exists := mr.avTagHeaders[chunkStreamId]; exists {
-			headerSize = uint32(len(avTagHeader))
+		if avTagHeader, exists := mr.avTagHeaders[chunkStreamId]; exists && avTagHeader != nil {
+			headerSize = uint32(avTagHeader.Len())
 		}
 
 		// 전체 메시지 길이와 비교 (헤더 + 순수 데이터)
@@ -536,9 +548,8 @@ func (mr *msgReader) popMessageIfPossible() (*Message, error) {
 		msg := NewMessage(messageHeader)
 
 		// 비디오/오디오 메시지의 경우 AV 태그 헤더 정보 설정 (별도 저장)
-		if avTagHeader, hasHeader := mr.avTagHeaders[chunkStreamId]; hasHeader {
-			msg.avTagHeader = make([]byte, len(avTagHeader))
-			copy(msg.avTagHeader, avTagHeader)
+		if avTagHeader, hasHeader := mr.avTagHeaders[chunkStreamId]; hasHeader && avTagHeader != nil {
+			msg.avTagHeader = avTagHeader.AddRef() // 참조 카운트 증가
 		}
 
 		// 버퍼들을 직접 전달 (zero-copy)

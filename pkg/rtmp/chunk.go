@@ -9,11 +9,11 @@ type Chunk struct {
 	hasPayload    bool // payload 유효성 플래그
 }
 
-func NewChunk(basicHeader basicHeader, messageHeader *msgHeader, payload *media.Buffer) *Chunk {
+func NewChunk(basicHeader basicHeader, msgHeader *msgHeader, payload *media.Buffer) *Chunk {
 	hasPayload := payload != nil // nil 체크로 유효성 확인
 	c := &Chunk{
 		basicHeader:   basicHeader,
-		messageHeader: messageHeader,
+		messageHeader: msgHeader,
 		payload:       payload,
 		hasPayload:    hasPayload,
 	}
