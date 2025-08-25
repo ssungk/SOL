@@ -158,9 +158,9 @@ func readBasicHeader(r io.Reader) (header basicHeader, err error) {
 }
 
 func (mr *msgReader) readMessageHeader(r io.Reader, format byte, chunkStreamID uint32) (msgHeader, error) {
-	var previousPtr *msgHeader
+	var prevMsgHeader *msgHeader
 	if previousHeader, hasPrevious := mr.getMsgHeader(chunkStreamID); hasPrevious {
-		previousPtr = &previousHeader
+		prevMsgHeader = &previousHeader
 	}
 
 	var messageHeader msgHeader
@@ -168,13 +168,13 @@ func (mr *msgReader) readMessageHeader(r io.Reader, format byte, chunkStreamID u
 
 	switch format {
 	case FmtType0:
-		messageHeader, err = readFmt0MessageHeader(r, previousPtr)
+		messageHeader, err = readFmt0MessageHeader(r, prevMsgHeader)
 	case FmtType1:
-		messageHeader, err = readFmt1MessageHeader(r, previousPtr)
+		messageHeader, err = readFmt1MessageHeader(r, prevMsgHeader)
 	case FmtType2:
-		messageHeader, err = readFmt2MessageHeader(r, previousPtr)
+		messageHeader, err = readFmt2MessageHeader(r, prevMsgHeader)
 	case FmtType3:
-		messageHeader, err = readFmt3MessageHeader(r, previousPtr)
+		messageHeader, err = readFmt3MessageHeader(r, prevMsgHeader)
 	default:
 		return msgHeader{}, errors.New("format must be 0-3")
 	}
