@@ -88,9 +88,7 @@ func (p *Packet) DTS32() uint32 {
 // Release 패킷의 모든 버퍼 해제
 func (p *Packet) Release() {
 	for _, buffer := range p.Data {
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 }
 

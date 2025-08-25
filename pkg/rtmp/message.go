@@ -26,9 +26,7 @@ func NewMessage(messageHeader msgHeader) *Message {
 // Release 모든 버퍼의 참조 카운트를 감소시킴
 func (m *Message) Release() {
 	for _, buffer := range m.payloads {
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 }
 

@@ -13,6 +13,11 @@ type Buffer struct {
 	refCnt int32 // atomic 참조 카운트
 }
 
+// Buffer 객체 풀
+var bufferPool = sync.Pool{
+	New: func() any { return new(Buffer) },
+}
+
 // 7단계 크기별 메모리 풀들
 var (
 	pool8B   = &sync.Pool{New: func() any { return make([]byte, 8) }}
@@ -24,45 +29,40 @@ var (
 	pool64KB = &sync.Pool{New: func() any { return make([]byte, 65536) }}
 )
 
-// NewBuffer 지정된 크기에 맞는 풀에서 버퍼 할당
-func NewBuffer(size int) *Buffer {
-	var pool *sync.Pool
-	var data []byte
-
+// pickDataPool 크기에 맞는 풀과 데이터를 선택
+func pickDataPool(size int) (*sync.Pool, []byte) {
 	switch {
 	case size <= 8:
-		pool = pool8B
-		data = pool8B.Get().([]byte)[:size]
+		return pool8B, pool8B.Get().([]byte)[:size]
 	case size <= 16:
-		pool = pool16B
-		data = pool16B.Get().([]byte)[:size]
+		return pool16B, pool16B.Get().([]byte)[:size]
 	case size <= 32:
-		pool = pool32B
-		data = pool32B.Get().([]byte)[:size]
+		return pool32B, pool32B.Get().([]byte)[:size]
 	case size <= 128:
-		pool = pool128B
-		data = pool128B.Get().([]byte)[:size]
+		return pool128B, pool128B.Get().([]byte)[:size]
 	case size <= 1024:
-		pool = pool1KB
-		data = pool1KB.Get().([]byte)[:size]
+		return pool1KB, pool1KB.Get().([]byte)[:size]
 	case size <= 4096:
-		pool = pool4KB
-		data = pool4KB.Get().([]byte)[:size]
+		return pool4KB, pool4KB.Get().([]byte)[:size]
 	case size <= 65536:
-		pool = pool64KB
-		data = pool64KB.Get().([]byte)[:size]
+		return pool64KB, pool64KB.Get().([]byte)[:size]
 	default:
 		// 큰 사이즈는 풀링하지 않고 직접 할당
 		slog.Warn("Large buffer allocation without pooling", "size", size)
-		data = make([]byte, size)
-		pool = nil
+		return nil, make([]byte, size)
 	}
+}
 
-	return &Buffer{
-		data:   data,
-		pool:   pool,
-		refCnt: 1, // 초기 참조 카운트
-	}
+// NewBuffer 지정된 크기에 맞는 풀에서 버퍼 할당 (객체 풀링 적용)
+func NewBuffer(size int) *Buffer {
+	// 객체 풀에서 Buffer 가져오기
+	b := bufferPool.Get().(*Buffer)
+	
+	// 데이터 풀에서 적절한 크기 할당
+	b.pool, b.data = pickDataPool(size)
+	b.refCnt = 1 // 초기 참조 카운트
+	
+	return b
 }
 
 // Data 버퍼의 바이트 슬라이스 반환
@@ -88,13 +88,16 @@ func (b *Buffer) Release() {
 	}
 }
 
-// returnToPool 버퍼를 풀에 반납
+// returnToPool 버퍼를 풀에 반납 (데이터 풀 + 객체 풀)
 func (b *Buffer) returnToPool() {
-	// 풀에 반납 (pool이 nil이면 GC가 처리)
+	// 데이터를 데이터 풀에 반납
 	if b.pool != nil {
 		original := b.data[:cap(b.data)]
 		b.pool.Put(original)
 	}
+	
+	// Buffer 객체를 객체 풀에 반납
+	bufferPool.Put(b)
 }
 
 // RefCount 현재 참조 카운트 반환 (디버깅용)
