@@ -46,9 +46,9 @@ func (mr *msgReader) readNextMessage(r io.Reader) (Message, error) {
 			return Message{}, err
 		}
 
-		message, err := mr.popMessageIfPossible()
+		message, err := mr.tryPopMessage()
 		if err == nil {
-			// slog.Info("Message ready", "typeId", message.msgHeader.typeId) // 너무 빈번하거나 주석 처리
+			// slog.Info("Message ready", "typeId", message.msgHeader.typeId)
 			return message, err
 		}
 	}
@@ -61,57 +61,14 @@ func (mr *msgReader) readChunk(r io.Reader) error {
 		return err
 	}
 
-	previousHeader, hasPrevious := mr.getMsgHeader(basicHeader.chunkStreamID)
-	var previousPtr *msgHeader
-	if hasPrevious {
-		previousPtr = &previousHeader
-	}
-	messageHeader, err := readMessageHeader(r, basicHeader.fmt, previousPtr)
+	messageHeader, err := mr.readMessageHeader(r, basicHeader.fmt, basicHeader.chunkStreamID)
 	if err != nil {
+		slog.Error("Failed to read message header", "err", err, "format", basicHeader.fmt)
 		return err
 	}
 
-	// 모든 경우에 헤더를 업데이트
-	mr.updateMsgHeader(basicHeader.chunkStreamID, &messageHeader)
-
-	chunkSize := mr.nextChunkSize(basicHeader.chunkStreamID)
-
-	// 첫 번째 청크인 경우 특별 처리
-	if mr.isInitialChunk(basicHeader.chunkStreamID) {
-		// 비디오/오디오 메시지인 경우 헤더 먼저 읽고 분리
-		if messageHeader.typeId == MsgTypeVideo || messageHeader.typeId == MsgTypeAudio {
-			err := mr.readAndSeparateMediaHeader(r, basicHeader.chunkStreamID, messageHeader.typeId, &chunkSize)
-			if err != nil {
-				mr.abortChunkStream(basicHeader.chunkStreamID)
-				return err
-			}
-		}
-
-		// 청크 배열은 addNewChunk에서 자동 초기화
-	}
-
-	// 청크 데이터 읽기
-	if chunkSize > 0 {
-		// core.Buffer를 사용한 풀링된 버퍼 할당
-		buffer := core.NewBuffer(int(chunkSize))
-		if _, err := io.ReadFull(r, buffer.Data()); err != nil {
-			buffer.Release() // 실패시 버퍼 해제
-			mr.abortChunkStream(basicHeader.chunkStreamID)
-			return err
-		}
-
-		// core.Buffer를 직접 사용하여 컨텍스트에 추가
-		mr.addMediaBuffer(basicHeader.chunkStreamID, buffer)
-		// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", len(buffer.Data())) // 너무 빈번함
-
-		return nil
-	}
-
-	// 빈 청크인 경우
-	emptyBuffer := core.NewBuffer(0)
-	mr.addMediaBuffer(basicHeader.chunkStreamID, emptyBuffer)
-	// slog.Debug("Chunk read", "chunkStreamID", basicHeader.chunkStreamID, "payload_len", 0) // 너무 빈번함
-	return nil
+	// 청크 페이로드 읽기 (avTagHeader 처리 포함)
+	return mr.readPayload(r, basicHeader.chunkStreamID, messageHeader.typeId)
 }
 
 // readAndSeparateMediaHeader 비디오/오디오 메시지의 첫 번째 청크에서 RTMP 헤더를 읽어서 분리
@@ -200,18 +157,35 @@ func readBasicHeader(r io.Reader) (header basicHeader, err error) {
 	return
 }
 
-func readMessageHeader(r io.Reader, format byte, header *msgHeader) (msgHeader, error) {
+func (mr *msgReader) readMessageHeader(r io.Reader, format byte, chunkStreamID uint32) (msgHeader, error) {
+	var previousPtr *msgHeader
+	if previousHeader, hasPrevious := mr.getMsgHeader(chunkStreamID); hasPrevious {
+		previousPtr = &previousHeader
+	}
+
+	var messageHeader msgHeader
+	var err error
+
 	switch format {
 	case FmtType0:
-		return readFmt0MessageHeader(r, header)
+		messageHeader, err = readFmt0MessageHeader(r, previousPtr)
 	case FmtType1:
-		return readFmt1MessageHeader(r, header)
+		messageHeader, err = readFmt1MessageHeader(r, previousPtr)
 	case FmtType2:
-		return readFmt2MessageHeader(r, header)
+		messageHeader, err = readFmt2MessageHeader(r, previousPtr)
 	case FmtType3:
-		return readFmt3MessageHeader(r, header)
+		messageHeader, err = readFmt3MessageHeader(r, previousPtr)
+	default:
+		return msgHeader{}, errors.New("format must be 0-3")
 	}
-	return msgHeader{}, errors.New("format must be 0-3")
+
+	if err != nil {
+		return msgHeader{}, err
+	}
+
+	// 헤더 읽기 성공 후 업데이트
+	mr.updateMsgHeader(chunkStreamID, &messageHeader)
+	return messageHeader, nil
 }
 
 func readFmt0MessageHeader(r io.Reader, _ *msgHeader) (msgHeader, error) {
@@ -313,7 +287,7 @@ func calculateNewTimestamp(baseTimestamp, timestampDelta uint32) uint32 {
 
 // --- 코덱 감지 및 헤더 크기 계산 함수들 ---
 
-// getMediaHeaderSize 메시지 타입과 첫 바이트를 기준으로 미디어 헤더 크기 계산
+// getMediaHeaderSize 메시지 타입과 첫 바이트를 기준으로 avTagHeader 크기 계산
 func getMediaHeaderSize(msgTypeId uint8, firstByte byte) (int, error) {
 	switch msgTypeId {
 	case MsgTypeVideo:
@@ -518,7 +492,46 @@ func (mr *msgReader) getMsgHeader(chunkStreamId uint32) (msgHeader, bool) {
 	return header, ok
 }
 
-func (mr *msgReader) popMessageIfPossible() (Message, error) {
+// readPayload 청크 페이로드를 읽어서 버퍼에 저장 (avTagHeader 처리 포함)
+func (mr *msgReader) readPayload(r io.Reader, chunkStreamID uint32, messageType uint8) error {
+	chunkSize := mr.nextChunkSize(chunkStreamID)
+
+	// 첫 번째 청크이고 비디오/오디오 메시지인 경우 avTagHeader 처리
+	if mr.isInitialChunk(chunkStreamID) && (messageType == MsgTypeVideo || messageType == MsgTypeAudio) {
+		err := mr.readAndSeparateMediaHeader(r, chunkStreamID, messageType, &chunkSize)
+		if err != nil {
+			mr.abortChunkStream(chunkStreamID)
+			return err
+		}
+	}
+
+	// 실제 페이로드 데이터 읽기 (수정된 chunkSize 사용)
+	return mr.readPayloadData(r, chunkStreamID, chunkSize)
+}
+
+// readPayloadData 지정된 chunkSize로 실제 페이로드 데이터를 읽어서 버퍼에 저장
+func (mr *msgReader) readPayloadData(r io.Reader, chunkStreamID uint32, chunkSize uint32) error {
+	if chunkSize > 0 {
+		// core.Buffer를 사용한 풀링된 버퍼 할당
+		buffer := core.NewBuffer(int(chunkSize))
+		if _, err := io.ReadFull(r, buffer.Data()); err != nil {
+			buffer.Release() // 실패시 버퍼 해제
+			mr.abortChunkStream(chunkStreamID)
+			return err
+		}
+
+		// core.Buffer를 직접 사용하여 컨텍스트에 추가
+		mr.addMediaBuffer(chunkStreamID, buffer)
+		return nil
+	}
+
+	// 빈 청크인 경우
+	emptyBuffer := core.NewBuffer(0)
+	mr.addMediaBuffer(chunkStreamID, emptyBuffer)
+	return nil
+}
+
+func (mr *msgReader) tryPopMessage() (Message, error) {
 	for chunkStreamId, messageHeader := range mr.msgHeaders {
 		payloadLength, ok := mr.payloadLengths[chunkStreamId]
 		if !ok {
