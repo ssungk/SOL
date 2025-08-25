@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"sol/pkg/core"
-	"sol/pkg/rtmp/amf"
 )
 
 type msgWriter struct {
@@ -71,7 +70,7 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 
 	if totalPayloadLength == 0 {
 		// 페이로드가 없는 메시지 (예: Set Chunk Size)
-		chunk := mw.buildTypedChunk(msg, nil, 0, chunkFormat, true)
+		chunk := mw.buildTypedChunk(msg, nil, 0, chunkFormat)
 		// 헤더 업데이트
 		mw.updateLastMessageHeader(chunkStreamID, messageHeader)
 		return []Chunk{chunk}, nil
@@ -102,12 +101,12 @@ func (mw *msgWriter) buildChunks(msg *Message) ([]Chunk, error) {
 
 		if isFirstChunk {
 			// 첫 번째 청크: 결정된 Format 사용
-			chunk := mw.buildTypedChunk(msg, chunkData, n, chunkFormat, true)
+			chunk := mw.buildTypedChunk(msg, chunkData, n, chunkFormat)
 			chunks = append(chunks, chunk)
 			isFirstChunk = false
 		} else {
 			// 연속 청크: Format 3 (헤더 없음)
-			chunk := mw.buildTypedChunk(msg, chunkData, n, FmtType3, false)
+			chunk := mw.buildTypedChunk(msg, chunkData, n, FmtType3)
 			chunks = append(chunks, chunk)
 		}
 
@@ -177,7 +176,7 @@ func (mw *msgWriter) updateLastMessageHeader(chunkStreamID uint32, header msgHea
 }
 
 // buildTypedChunk Format에 따라 적절한 청크 생성
-func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize int, chunkFormat byte, isFirstChunk bool) Chunk {
+func (mw *msgWriter) buildTypedChunk(msg *Message, chunkData []byte, chunkSize int, chunkFormat byte) Chunk {
 	chunkStreamID := getChunkStreamIDForMessageType(msg.msgHeader.typeId)
 	basicHdr := newBasicHeader(chunkFormat, uint32(chunkStreamID))
 	
@@ -376,11 +375,6 @@ func (mw *msgWriter) writeMessageHeaderByFormat(w io.Writer, mh *msgHeader, form
 	}
 }
 
-// Message Header 인코딩 및 전송 (레거시 - Format 0만 지원)
-func (mw *msgWriter) writeMessageHeader(w io.Writer, mh *msgHeader) error {
-	return mw.writeMessageHeaderByFormat(w, mh, FmtType0)
-}
-
 func (mw *msgWriter) writeCommand(w io.Writer, payload []byte) error {
 	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Command, 0)
 	msg := NewMessage(header)
@@ -414,40 +408,4 @@ func PutUint24(b []byte, v uint32) {
 	b[0] = byte((v >> 16) & 0xFF)
 	b[1] = byte((v >> 8) & 0xFF)
 	b[2] = byte(v & 0xFF)
-}
-
-// 오디오 데이터 전송 (zero-copy)
-func (mw *msgWriter) writeAudioData(w io.Writer, audioData []byte, timestamp uint32) error {
-	header := newMsgHeader(timestamp, uint32(len(audioData)), MsgTypeAudio, 0)
-	msg := NewMessage(header)
-	audioBuffer := core.NewBuffer(len(audioData))
-	copy(audioBuffer.Data(), audioData)
-	msg.payloads = []*core.Buffer{audioBuffer}
-	return mw.writeMessage(w, &msg)
-}
-
-// 비디오 데이터 전송 (zero-copy)
-func (mw *msgWriter) writeVideoData(w io.Writer, videoData []byte, timestamp uint32) error {
-	header := newMsgHeader(timestamp, uint32(len(videoData)), MsgTypeVideo, 0)
-	msg := NewMessage(header)
-	videoBuffer := core.NewBuffer(len(videoData))
-	copy(videoBuffer.Data(), videoData)
-	msg.payloads = []*core.Buffer{videoBuffer}
-	return mw.writeMessage(w, &msg)
-}
-
-// 메타데이터 전송
-func (mw *msgWriter) writeScriptData(w io.Writer, commandName string, metadata map[string]any) error {
-	// AMF 데이터 인코딩
-	payload, err := amf.EncodeAMF0Sequence(commandName, metadata)
-	if err != nil {
-		return err
-	}
-
-	header := newMsgHeader(0, uint32(len(payload)), MsgTypeAMF0Data, 0) // 메타데이터는 timestamp 0
-	msg := NewMessage(header)
-	buffer := core.NewBuffer(len(payload))
-	copy(buffer.Data(), payload)
-	msg.payloads = []*core.Buffer{buffer}
-	return mw.writeMessage(w, &msg)
 }

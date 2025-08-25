@@ -17,16 +17,16 @@ const (
 )
 
 type msgReader struct {
-	msgHeaders map[uint32]msgHeader
+	msgHeaders     map[uint32]msgHeader
+	avTagHeaders   map[uint32]*core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	payloads       map[uint32][]*core.Buffer
 	payloadLengths map[uint32]uint32
-	avTagHeaders   map[uint32]*core.Buffer // AV 태그 헤더 (비디오: 5바이트, 오디오: 2바이트)
 	chunkSize      uint32
 }
 
 func newMsgReader() *msgReader {
 	return &msgReader{
-		msgHeaders: make(map[uint32]msgHeader),
+		msgHeaders:     make(map[uint32]msgHeader),
 		payloads:       make(map[uint32][]*core.Buffer),
 		payloadLengths: make(map[uint32]uint32),
 		avTagHeaders:   make(map[uint32]*core.Buffer),
@@ -307,7 +307,6 @@ func calculateNewTimestamp(baseTimestamp, timestampDelta uint32) uint32 {
 	return baseTimestamp + timestampDelta
 }
 
-
 // --- 코덱 감지 및 헤더 크기 계산 함수들 ---
 
 // getMediaHeaderSize 메시지 타입과 첫 바이트를 기준으로 미디어 헤더 크기 계산
@@ -434,8 +433,6 @@ func detectAudioCodec(firstByte byte) (core.Codec, error) {
 	}
 }
 
-// 이하 msgReaderContext에서 통합된 메서드들
-
 func (mr *msgReader) abortChunkStream(chunkStreamId uint32) {
 	// 버퍼들 해제
 	if buffers, exists := mr.payloads[chunkStreamId]; exists {
@@ -464,7 +461,7 @@ func (mr *msgReader) storeAVTagHeader(chunkStreamId uint32, header []byte) {
 	if existingHeader := mr.avTagHeaders[chunkStreamId]; existingHeader != nil {
 		existingHeader.Release()
 	}
-	
+
 	// 새 버퍼 생성 및 데이터 복사
 	buffer := core.NewBuffer(len(header))
 	copy(buffer.Data(), header)
@@ -542,7 +539,6 @@ func (mr *msgReader) popMessageIfPossible() (Message, error) {
 		if payloadLength+headerSize != messageHeader.length {
 			continue
 		}
-
 
 		// 메시지 생성
 		msg := NewMessage(messageHeader)
