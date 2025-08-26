@@ -45,8 +45,8 @@ const (
 	FormatH26xAVCC   BitstreamFormat = 1 // H264/H265 AVCC (= FormatPackaged)
 
 	// AAC 명시적 포맷
-	FormatAACRaw  BitstreamFormat = 0 // AAC Raw (= FormatRawStream)
-	FormatAACADTS BitstreamFormat = 1 // AAC ADTS (= FormatPackaged)
+	FormatAACADTS BitstreamFormat = 0 // AAC ADTS (= FormatRawStream)
+	FormatAACRaw  BitstreamFormat = 1 // AAC Raw (= FormatPackaged)
 )
 
 // PacketType 패킷 타입 (개념적 분류 기반)

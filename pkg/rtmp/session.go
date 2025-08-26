@@ -345,7 +345,16 @@ func (s *session) handleAudio(message *Message) {
 	
 	// Packet 생성 (오디오는 트랙 1)
 	trackIndex := 1
-	packet := core.NewPacket(trackIndex, codecType, core.FormatRawStream, frameType, uint64(message.msgHeader.timestamp), 0, frameData)
+	
+	// 코덱별 BitstreamFormat 설정
+	var format core.BitstreamFormat
+	if codecType == core.AAC {
+		format = core.FormatAACRaw // AAC는 Raw 포맷 사용 (FLV 스펙)
+	} else {
+		format = core.FormatRawStream // 기타 오디오 코덱
+	}
+	
+	packet := core.NewPacket(trackIndex, codecType, format, frameType, uint64(message.msgHeader.timestamp), 0, frameData)
 
 	// message의 streamID에 해당하는 스트림에 전송
 	if stream, exists := s.publishedStreams[message.msgHeader.streamID]; exists {
