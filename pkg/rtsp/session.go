@@ -30,11 +30,13 @@ type Session struct {
 	rtpChannel      int               // RTP channel number for TCP
 	rtpSession      *rtp.RTPSession   // RTP session for this RTSP session
 	rtpTransport    *rtp.RTPTransport // Reference to RTP transport
+	rtpSequence     uint16            // RTP sequence number for packet generation
 	timeout         time.Duration
 	lastActivity    time.Time
 	externalChannel chan<- any
 	ctx             context.Context
 	cancel          context.CancelFunc
+	server          *Server // 서버 참조
 	
 	// Stream integration (MediaServer에서 설정)
 	Stream *core.Stream // 연결된 스트림
@@ -96,7 +98,7 @@ func (s SessionState) String() string {
 }
 
 // NewSession creates a new RTSP session
-func NewSession(conn net.Conn, externalChannel chan<- any, rtpTransport *rtp.RTPTransport) *Session {
+func NewSession(conn net.Conn, externalChannel chan<- any, rtpTransport *rtp.RTPTransport, server *Server) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	session := &Session{
@@ -109,6 +111,7 @@ func NewSession(conn net.Conn, externalChannel chan<- any, rtpTransport *rtp.RTP
 		lastActivity:    time.Now(),
 		externalChannel: externalChannel,
 		rtpTransport:    rtpTransport,
+		server:          server,
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -123,9 +126,20 @@ func (s *Session) Close() error {
 	// Cancel context
 	s.cancel()
 
+	// Close RTP session if exists
+	if s.rtpSession != nil && s.rtpTransport != nil {
+		s.rtpTransport.RemoveSession(s.rtpSession.GetSSRC())
+		s.rtpSession = nil
+	}
+
 	// Close connection
 	if s.conn != nil {
 		s.conn.Close()
+	}
+
+	// Remove from server
+	if s.server != nil {
+		s.server.removeSession(s.ID())
 	}
 
 	// Send node termination event to MediaServer
@@ -258,7 +272,7 @@ func (s *Session) handleTimeout() {
 			return
 		case <-ticker.C:
 			if time.Since(s.lastActivity) > s.timeout {
-				slog.Info("RTSP session timed out", "sessionId", s.ID())
+				slog.Info("RTSP session timed out", "sessionId", s.ID(), "lastActivity", s.lastActivity, "timeout", s.timeout)
 				s.Close()
 				return
 			}
@@ -320,7 +334,8 @@ func (s *Session) handleOptions(req *Request) error {
 
 // handleDescribe handles DESCRIBE request
 func (s *Session) handleDescribe(req *Request) error {
-	s.streamPath = req.URI
+	// URI에서 경로 부분만 추출 (rtsp://host:port/path -> path)
+	s.streamPath = s.extractStreamPath(req.URI)
 
 	// DESCRIBE 요청은 단순히 SDP 정보를 반환하므로 별도 이벤트 불필요
 	slog.Info("DESCRIBE request processed", "sessionId", s.ID(), "streamPath", s.streamPath)
@@ -339,7 +354,7 @@ func (s *Session) handleDescribe(req *Request) error {
 
 // handleAnnounce handles ANNOUNCE request
 func (s *Session) handleAnnounce(req *Request) error {
-	s.streamPath = req.URI
+	s.streamPath = s.extractStreamPath(req.URI)
 
 	// ANNOUNCE는 SDP 정보 설정이므로 메타데이터로 처리
 	if s.externalChannel != nil {
@@ -357,39 +372,62 @@ func (s *Session) handleAnnounce(req *Request) error {
 
 // handleSetup handles SETUP request
 func (s *Session) handleSetup(req *Request) error {
+	if s.state != StateInit && s.state != StateReady {
+		slog.Warn("SETUP request in invalid state", "sessionId", s.ID(), "currentState", s.state.String())
+		return s.sendErrorResponse(req.CSeq, StatusMethodNotValidInThisState)
+	}
+	
 	// Parse transport header
 	transportHeader := req.GetHeader(HeaderTransport)
 	if transportHeader == "" {
+		slog.Error("Missing Transport header in SETUP request", "sessionId", s.ID())
 		return s.sendErrorResponse(req.CSeq, StatusBadRequest)
 	}
 
 	s.transport = transportHeader
 	s.parseTransport(transportHeader)
+	
+	// 스트림 경로 설정 (URI에서 track 정보 제거)
+	if s.streamPath == "" {
+		uri := strings.TrimSuffix(req.URI, "/track0")
+		uri = strings.TrimSuffix(uri, "/track1")
+		s.streamPath = s.extractStreamPath(uri)
+		slog.Info("Stream path set from SETUP", "sessionId", s.ID(), "streamPath", s.streamPath)
+	}
 
 	// Create RTP session based on transport mode
 	if s.transportMode == TransportTCP && s.interleavedMode {
 		// TCP interleaved mode - no separate UDP session needed
 		slog.Info("TCP interleaved mode setup", "sessionId", s.ID(), "rtpChannel", s.rtpChannel)
-	} else if len(s.clientPorts) >= 2 && s.rtpTransport != nil {
+	} else if len(s.clientPorts) >= 1 && s.rtpTransport != nil {
 		// UDP mode - create RTP session
-		ssrc := uint32(0x12345678) // 고정 SSRC 사용 (추후 랜덤 생성으로 변경 가능)
+		ssrc := uint32(s.ID()) // 세션 ID를 SSRC로 사용
 
 		// Get client IP from connection
-		clientIP := s.conn.RemoteAddr().(*net.TCPAddr).IP.String()
+		clientAddr := s.conn.RemoteAddr()
+		var clientIP string
+		if tcpAddr, ok := clientAddr.(*net.TCPAddr); ok {
+			clientIP = tcpAddr.IP.String()
+		} else {
+			slog.Error("Failed to get client IP", "sessionId", s.ID(), "addr", clientAddr)
+			return s.sendErrorResponse(req.CSeq, StatusInternalServerError)
+		}
 
 		// Create RTP session
 		rtpSession, err := s.rtpTransport.CreateSession(ssrc, rtp.PayloadTypeH264,
 			s.clientPorts[0], clientIP)
 		if err != nil {
-			slog.Error("Failed to create RTP session", "err", err)
+			slog.Error("Failed to create RTP session", "sessionId", s.ID(), "err", err)
 			return s.sendErrorResponse(req.CSeq, StatusInternalServerError)
 		}
 
 		s.rtpSession = rtpSession
-		s.serverPorts = []int{8000, 8001} // 고정 포트 사용 (RTP transport에서 동적 할당 가능)
-		slog.Info("UDP RTP session created", "sessionId", s.ID(), "ssrc", ssrc)
+		s.serverPorts = []int{8000, 8001} // 고정 포트 사용 (향후 동적 할당 가능)
+		slog.Info("UDP RTP session created", "sessionId", s.ID(), "ssrc", ssrc, "clientIP", clientIP, "clientPort", s.clientPorts[0])
 	} else {
+		// Transport 모드가 명확하지 않은 경우 기본 설정
 		s.serverPorts = []int{8000, 8001}
+		slog.Info("Default server ports set", "sessionId", s.ID(), "ports", s.serverPorts)
 	}
 
 	response := NewResponse(StatusOK)
@@ -398,6 +436,7 @@ func (s *Session) handleSetup(req *Request) error {
 	response.SetHeader(HeaderSession, fmt.Sprintf("%d;timeout=%d", s.ID(), int(s.timeout.Seconds())))
 
 	s.state = StateReady
+	slog.Info("SETUP completed", "sessionId", s.ID(), "transport", s.transportMode, "streamPath", s.streamPath)
 
 	return s.writer.WriteResponse(response)
 }
@@ -432,47 +471,65 @@ func (s *Session) handleRecord(req *Request) error {
 // handlePlay handles PLAY request
 func (s *Session) handlePlay(req *Request) error {
 	if s.state != StateReady {
+		slog.Warn("PLAY request in invalid state", "sessionId", s.ID(), "currentState", s.state.String())
 		return s.sendErrorResponse(req.CSeq, StatusMethodNotValidInThisState)
+	}
+	
+	if s.streamPath == "" {
+		slog.Error("No stream path set for PLAY request", "sessionId", s.ID())
+		return s.sendErrorResponse(req.CSeq, StatusBadRequest)
 	}
 
 	// Parse Range header if present
 	rangeHeader := req.GetHeader(HeaderRange)
 	if rangeHeader != "" {
-		// Range 헤더는 현재 로그로만 기록 (시간대별 재생 지원은 향후 구현)
+		slog.Info("Range header received", "sessionId", s.ID(), "range", rangeHeader)
+		// Range 헤더 파싱 (향후 seek 기능 지원 시 사용)
 	}
 
 	// Send play started event to MediaServer
 	if s.externalChannel != nil {
 		responseChan := make(chan core.Response, 1)
 		
-		// RTSP가 지원하는 코덱 목록 (더 다양한 코덱 지원)
+		// RTSP가 지원하는 코덱 목록
 		supportedCodecs := []core.Codec{core.H264, core.H265, core.AAC, core.Opus}
 		
 		select {
 		case s.externalChannel <- core.NewSubscribeStarted(s.ID(), s.streamPath, supportedCodecs, responseChan):
-			// 응답 대기
+			// 응답 대기 (타임아웃 5초)
 			select {
 			case response := <-responseChan:
 				if !response.Success {
 					slog.Error("Subscribe failed", "sessionId", s.ID(), "streamPath", s.streamPath, "error", response.Error)
-					return fmt.Errorf("subscribe failed: %s", response.Error)
+					if response.Error == "stream not found" {
+						return s.sendErrorResponse(req.CSeq, StatusNotFound)
+					}
+					return s.sendErrorResponse(req.CSeq, StatusInternalServerError)
 				}
-				case <-s.ctx.Done():
+				slog.Info("Subscribe successful", "sessionId", s.ID(), "streamPath", s.streamPath)
+			case <-time.After(5 * time.Second):
+				slog.Error("Subscribe timeout", "sessionId", s.ID(), "streamPath", s.streamPath)
+				return s.sendErrorResponse(req.CSeq, StatusRequestTimeout)
+			case <-s.ctx.Done():
 				slog.Error("Subscribe cancelled", "sessionId", s.ID(), "streamPath", s.streamPath)
-				return fmt.Errorf("subscribe cancelled")
+				return s.sendErrorResponse(req.CSeq, StatusRequestTimeout)
 			}
 		default:
-			slog.Error("Failed to send SubscribeStarted event", "sessionId", s.ID())
-			return fmt.Errorf("failed to send SubscribeStarted event")
+			slog.Error("Failed to send SubscribeStarted event - channel full", "sessionId", s.ID())
+			return s.sendErrorResponse(req.CSeq, StatusServiceUnavailable)
 		}
 	}
 
+	// RTP 시퀀스 넘버 초기화
+	s.rtpSequence = 1
+
 	response := NewResponse(StatusOK)
 	response.SetCSeq(req.CSeq)
-	response.SetHeader(HeaderSession, fmt.Sprintf("%d", s.ID()))
-	response.SetHeader(HeaderRTPInfo, fmt.Sprintf("url=%s;seq=0;rtptime=0", req.URI))
+	response.SetHeader(HeaderSession, fmt.Sprintf("%d;timeout=%d", s.ID(), int(s.timeout.Seconds())))
+	response.SetHeader(HeaderRTPInfo, fmt.Sprintf("url=%s;seq=%d;rtptime=0", req.URI, s.rtpSequence))
 
 	s.state = StatePlaying
+	slog.Info("PLAY started", "sessionId", s.ID(), "streamPath", s.streamPath, "transport", s.transportMode)
 
 	return s.writer.WriteResponse(response)
 }
@@ -635,29 +692,49 @@ func (s *Session) buildTransportResponse() string {
 	return transport
 }
 
-// generateDetailedSDP generates a detailed SDP
+// generateDetailedSDP generates a detailed SDP based on stream information
 func (s *Session) generateDetailedSDP() string {
-	return fmt.Sprintf(`v=0\r
-o=- %d %d IN IP4 127.0.0.1\r
-s=Sol RTSP Stream\r
-i=RTSP Server Stream\r
-c=IN IP4 0.0.0.0\r
-t=0 0\r
-a=tool:Sol RTSP Server\r
-a=range:npt=0-\r
-m=video 0 RTP/AVP 96\r
-c=IN IP4 0.0.0.0\r
-b=AS:500\r
-a=rtpmap:96 H264/90000\r
-a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z0LAHpWgUH5PIAEAAAMAEAAAAwPA8UKZYA==,aMuBcsg=\r
-a=control:track1\r
-m=audio 0 RTP/AVP 97\r
-c=IN IP4 0.0.0.0\r
-b=AS:128\r
-a=rtpmap:97 MPEG4-GENERIC/48000/2\r
-a=fmtp:97 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=119056E500\r
-a=control:track2\r
-`, time.Now().Unix(), time.Now().Unix())
+	sessionID := time.Now().Unix()
+	version := sessionID
+	
+	// Get server IP from connection
+	serverIP := "0.0.0.0" // Any IP
+	if s.conn != nil {
+		if localAddr := s.conn.LocalAddr(); localAddr != nil {
+			if tcpAddr, ok := localAddr.(*net.TCPAddr); ok {
+				serverIP = tcpAddr.IP.String()
+			}
+		}
+	}
+	
+	sdp := fmt.Sprintf("v=0\r\n")
+	sdp += fmt.Sprintf("o=- %d %d IN IP4 %s\r\n", sessionID, version, serverIP)
+	sdp += fmt.Sprintf("s=Sol RTSP Stream\r\n")
+	sdp += fmt.Sprintf("i=Live Stream from Sol Server\r\n")
+	sdp += fmt.Sprintf("c=IN IP4 %s\r\n", serverIP)
+	sdp += fmt.Sprintf("t=0 0\r\n")
+	sdp += fmt.Sprintf("a=tool:Sol RTSP Server v1.0\r\n")
+	sdp += fmt.Sprintf("a=type:broadcast\r\n")
+	sdp += fmt.Sprintf("a=control:*\r\n")
+	sdp += fmt.Sprintf("a=range:npt=0-\r\n")
+	
+	// Video track (H.264) - Default SDP
+	sdp += fmt.Sprintf("m=video 0 RTP/AVP 96\r\n")
+	sdp += fmt.Sprintf("c=IN IP4 %s\r\n", serverIP)
+	sdp += fmt.Sprintf("b=AS:5000\r\n") // 5Mbps bitrate
+	sdp += fmt.Sprintf("a=rtpmap:96 H264/90000\r\n")
+	sdp += fmt.Sprintf("a=fmtp:96 packetization-mode=1;profile-level-id=42e01e;sprop-parameter-sets=Z0LAHtkDxWhAAAADAEAAAAwDxYuS,aMuMsg==\r\n")
+	sdp += fmt.Sprintf("a=control:track0\r\n")
+	
+	// Audio track (AAC) - Default SDP
+	sdp += fmt.Sprintf("m=audio 0 RTP/AVP 97\r\n")
+	sdp += fmt.Sprintf("c=IN IP4 %s\r\n", serverIP)
+	sdp += fmt.Sprintf("b=AS:128\r\n") // 128kbps bitrate
+	sdp += fmt.Sprintf("a=rtpmap:97 MPEG4-GENERIC/48000/2\r\n")
+	sdp += fmt.Sprintf("a=fmtp:97 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=119056E500\r\n")
+	sdp += fmt.Sprintf("a=control:track1\r\n")
+	
+	return sdp
 }
 
 // SendInterleavedRTPPacket sends RTP packet over TCP interleaved
@@ -753,46 +830,186 @@ func (s *Session) SendMetadata(streamID string, metadata map[string]string) erro
 
 // convertPacketToRTP Packet을 RTP 패킷으로 변환
 func (s *Session) convertPacketToRTP(packet core.Packet) ([]byte, error) {
-	// 간단한 RTP 패킷 생성 (실제 구현에서는 더 정교한 변환 필요)
-	// RTP 헤더 (12바이트) + 페이로드
+	if len(packet.Data) == 0 {
+		return nil, fmt.Errorf("empty packet data")
+	}
 	
-	// 패킷 데이터 사용 (이미 []byte)
-	payload := packet.Data[0]
-
-	// 간단한 RTP 헤더 생성
+	// 모든 버퍼를 결합하여 전체 페이로드 구성
+	var totalSize int
+	for _, buffer := range packet.Data {
+		if buffer != nil {
+			totalSize += len(buffer.Data())
+		}
+	}
+	
+	if totalSize == 0 {
+		return nil, fmt.Errorf("empty payload data")
+	}
+	
+	payload := make([]byte, totalSize)
+	offset := 0
+	for _, buffer := range packet.Data {
+		if buffer != nil && len(buffer.Data()) > 0 {
+			copy(payload[offset:], buffer.Data())
+			offset += len(buffer.Data())
+		}
+	}
+	
+	// 시퀀스 넘버 증가
+	s.rtpSequence++
+	
+	// RTP 헤더 생성
 	rtpHeader := make([]byte, 12)
 	rtpHeader[0] = 0x80 // V=2, P=0, X=0, CC=0
 	
-	// 패킷 타입에 따라 페이로드 타입 설정
+	// 마커 비트와 페이로드 타입 설정
+	var payloadType uint8
+	var marker bool
+	
 	if packet.IsVideo() {
-		rtpHeader[1] = 96 // H.264 페이로드 타입
+		payloadType = 96 // H.264
+		// 마지막 NAL 단위에 마커 비트 설정
+		marker = true // 일단 모든 비디오 패킷에 마커 설정 (단일 NAL 가정)
 	} else if packet.IsAudio() {
-		rtpHeader[1] = 97 // AAC 페이로드 타입
+		payloadType = 97 // AAC
+		marker = true    // 오디오 패킷은 항상 마커 비트 설정
+	} else {
+		return nil, fmt.Errorf("unsupported packet type")
 	}
 	
-	// 타임스탬프 설정 (DTS32 사용)
-	timestamp := packet.DTS32()
+	if marker {
+		rtpHeader[1] = 0x80 | payloadType // M=1
+	} else {
+		rtpHeader[1] = payloadType // M=0
+	}
+	
+	// 시퀀스 넘버 (16비트, 빅엔디안)
+	rtpHeader[2] = byte(s.rtpSequence >> 8)
+	rtpHeader[3] = byte(s.rtpSequence & 0xFF)
+	
+	// 타임스탬프 (32비트, 빅엔디안)
+	var timestamp uint32
+	if packet.IsVideo() {
+		timestamp = uint32(packet.DTS * 90) // ms to 90kHz clock
+	} else {
+		timestamp = uint32(packet.DTS * 48) // ms to 48kHz clock
+	}
+	
 	rtpHeader[4] = byte(timestamp >> 24)
 	rtpHeader[5] = byte(timestamp >> 16)
 	rtpHeader[6] = byte(timestamp >> 8)
 	rtpHeader[7] = byte(timestamp)
 	
-	// SSRC 설정 (세션 포인터 주소 사용)
-	ssrc := uint32(uintptr(unsafe.Pointer(s)))
+	// SSRC (세션별 고유 ID)
+	ssrc := uint32(s.ID())
 	rtpHeader[8] = byte(ssrc >> 24)
 	rtpHeader[9] = byte(ssrc >> 16)
 	rtpHeader[10] = byte(ssrc >> 8)
 	rtpHeader[11] = byte(ssrc)
 
-	// RTP 패킷 = 헤더 + 페이로드
-	rtpPacket := append(rtpHeader, payload.Data()...)
+	// H.264 비디오의 경우 NAL Unit 처리
+	if packet.IsVideo() && packet.Codec == core.H264 {
+		return s.createH264RTPPacket(rtpHeader, payload)
+	}
+
+	// RTP 패킷 = 헤더 + 페이로드 (기본값)
+	rtpPacket := make([]byte, len(rtpHeader)+len(payload))
+	copy(rtpPacket, rtpHeader)
+	copy(rtpPacket[len(rtpHeader):], payload)
 	
 	return rtpPacket, nil
+}
+
+// createH264RTPPacket H.264 NAL Unit을 RTP 패킷으로 변환
+func (s *Session) createH264RTPPacket(rtpHeader []byte, payload []byte) ([]byte, error) {
+	// H.264 Annex-B 포맷에서 start code 제거 후 NAL unit 추출
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("H.264 payload too short")
+	}
+	
+	nalUnits := s.extractNALUnits(payload)
+	if len(nalUnits) == 0 {
+		return nil, fmt.Errorf("no NAL units found")
+	}
+	
+	// Single NAL Unit Mode (RFC 6184)
+	if len(nalUnits) == 1 && len(nalUnits[0]) <= 1460 { // MTU 고려
+		rtpPacket := make([]byte, len(rtpHeader)+len(nalUnits[0]))
+		copy(rtpPacket, rtpHeader)
+		copy(rtpPacket[len(rtpHeader):], nalUnits[0])
+		return rtpPacket, nil
+	}
+	
+	// Multiple NAL Units나 Fragmentation이 필요한 경우는 Single NAL로 처리
+	// 첫 번째 NAL Unit 사용
+	rtpPacket := make([]byte, len(rtpHeader)+len(nalUnits[0]))
+	copy(rtpPacket, rtpHeader)
+	copy(rtpPacket[len(rtpHeader):], nalUnits[0])
+	
+	return rtpPacket, nil
+}
+
+// extractNALUnits Annex-B 포맷에서 NAL Unit들을 추출
+func (s *Session) extractNALUnits(data []byte) [][]byte {
+	var nalUnits [][]byte
+	i := 0
+	
+	for i < len(data) {
+		// Start code 찾기 (0x000001 또는 0x00000001)
+		startCodeLen := 0
+		if i+2 < len(data) && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
+			startCodeLen = 3
+		} else if i+3 < len(data) && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01 {
+			startCodeLen = 4
+		} else {
+			i++
+			continue
+		}
+		
+		nalStart := i + startCodeLen
+		nalEnd := len(data) // 기본값: 데이터 끝까지
+		
+		// 다음 start code 찾기
+		for j := nalStart + 1; j < len(data)-2; j++ {
+			if (data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x01) ||
+				(j < len(data)-3 && data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x00 && data[j+3] == 0x01) {
+				nalEnd = j
+				break
+			}
+		}
+		
+		if nalEnd > nalStart {
+			nalUnit := data[nalStart:nalEnd]
+			nalUnits = append(nalUnits, nalUnit)
+		}
+		
+		i = nalEnd
+	}
+	
+	return nalUnits
 }
 
 // GetStreamPath 현재 세션의 스트림 경로 반환
 func (s *Session) GetStreamPath() string {
 	return s.streamPath
+}
+
+// extractStreamPath URI에서 스트림 경로 부분 추출
+func (s *Session) extractStreamPath(uri string) string {
+	// rtsp://host:port/path -> path
+	if strings.HasPrefix(uri, "rtsp://") {
+		// "rtsp://" 부분 제거
+		uri = strings.TrimPrefix(uri, "rtsp://")
+		
+		// host:port 부분 찾아서 제거
+		slashIndex := strings.Index(uri, "/")
+		if slashIndex >= 0 {
+			return uri[slashIndex+1:] // "/" 다음 부분 반환
+		}
+	}
+	
+	// RTSP URI가 아니거나 "/" 없으면 전체 URI 반환
+	return uri
 }
 
 // MediaSource 인터페이스 구현 (RECORD 시 사용)

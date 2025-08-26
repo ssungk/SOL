@@ -22,6 +22,8 @@ type Server struct {
 	listener           net.Listener
 	ctx                context.Context
 	cancel             context.CancelFunc
+	sessions           map[uintptr]*Session // 세션 관리
+	sessionsMutex      sync.RWMutex         // 세션 맵 보호
 }
 
 // NewServer creates a new RTSP server
@@ -36,6 +38,8 @@ func NewServer(config RTSPConfig, externalChannel chan<- any, wg *sync.WaitGroup
 		wg:                 wg,              // 외부 WaitGroup 참조
 		ctx:                ctx,
 		cancel:             cancel,
+		sessions:           make(map[uintptr]*Session),
+		sessionsMutex:      sync.RWMutex{},
 	}
 }
 
@@ -45,12 +49,19 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
+	
+	// RTP transport 시작
+	err = s.ensureRTPTransport()
+	if err != nil {
+		slog.Error("Failed to start RTP transport", "err", err)
+		return err
+	}
 
 	// 연결 수락 시작
 	go s.acceptConnections()
 	go s.eventLoop()
 
-	slog.Info("RTSP server started", "port", s.port)
+	slog.Info("RTSP server started", "port", s.port, "rtpPort", s.port+1000)
 	return nil
 }
 
@@ -60,6 +71,14 @@ func (s *Server) Stop() {
 
 	// Cancel context
 	s.cancel()
+
+	// Close all sessions
+	s.sessionsMutex.Lock()
+	for _, session := range s.sessions {
+		session.Close()
+	}
+	s.sessions = make(map[uintptr]*Session)
+	s.sessionsMutex.Unlock()
 
 	// Stop RTP transport
 	if s.rtpStarted {
@@ -119,14 +138,30 @@ func (s *Server) setupListener() error {
 func (s *Server) acceptConnections() {
 	defer s.cancel()
 	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := s.listener.Accept()
 		if err != nil {
+			if s.ctx.Err() != nil {
+				// 서버가 의도적으로 중지된 경우
+				slog.Info("RTSP server accept stopped")
+				return
+			}
 			slog.Error("RTSP accept failed", "err", err)
 			return
 		}
 
 		// Create new session with MediaServer channel for direct event forwarding
-		session := NewSession(conn, s.mediaServerChannel, s.rtpTransport)
+		session := NewSession(conn, s.mediaServerChannel, s.rtpTransport, s)
+
+		// 세션을 서버에 등록
+		s.sessionsMutex.Lock()
+		s.sessions[session.ID()] = session
+		s.sessionsMutex.Unlock()
 
 		// Send NodeCreated event to MediaServer
 		if s.mediaServerChannel != nil {
@@ -143,7 +178,19 @@ func (s *Server) acceptConnections() {
 		go session.handleRequests()
 		go session.handleTimeout()
 
-		}
+		slog.Info("New RTSP session created", "sessionId", session.ID(), "clientAddr", conn.RemoteAddr())
+	}
+}
+
+// removeSession 세션을 서버에서 제거
+func (s *Server) removeSession(sessionID uintptr) {
+	s.sessionsMutex.Lock()
+	defer s.sessionsMutex.Unlock()
+	
+	if _, exists := s.sessions[sessionID]; exists {
+		delete(s.sessions, sessionID)
+		slog.Info("Session removed from server", "sessionId", sessionID, "totalSessions", len(s.sessions))
+	}
 }
 
 // ensureRTPTransport starts RTP transport if not already started
